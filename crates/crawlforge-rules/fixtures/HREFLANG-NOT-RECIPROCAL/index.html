@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<!-- HREFLANG-NOT-RECIPROCAL: hacen falta dos páginas, así que este fixture es un directorio.
+     Esta declara la pareja completa (es + en); la de /en/ solo se declara a sí misma, así que
+     no confirma la relación y el hallazgo se registra aquí, donde está la línea a corregir. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Versión en español de la portada</title>
+<meta name="description" content="La portada en español declara su alternativa en inglés, pero la página inglesa no la declara de vuelta y Google ignora la relación entera.">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="alternate" hreflang="es" href="https://fixture.local/">
+<link rel="alternate" hreflang="en" href="https://fixture.local/en/">
+<meta property="og:title" content="Versión en español de la portada">
+<meta property="og:description" content="Pareja hreflang sin reciprocidad.">
+<meta property="og:image" content="https://fixture.local/tarjeta.png">
+</head>
+<body>
+<main>
+<h1>Versión en español</h1>
+<p>El conmutador de idiomas enlaza la versión inglesa, y el hreflang de esta página también la
+declara. La relación falla porque el otro lado no la confirma.</p>
+<a href="/en/">English version</a>
+</main>
+</body>
+</html>

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<!-- CANON-TO-REDIRECT: el canonical apunta a /destino/, que en un sitio real responde 301 hacia
+     /destino-final/.
+
+     Este fixture NO puede disparar la regla, y está declarado como tal en
+     SIN_FIXTURE_EN_FILESYSTEM (crawlforge-core/tests/fixtures_de_reglas.rs): el arnés rastrea en
+     modo filesystem, donde el fetcher solo devuelve 200 o 404, así que urls.status_code nunca cae
+     en 3xx y urls.redirect_to nunca se rellena. Es el mismo hueco de las reglas HTTP-REDIRECT-*.
+
+     Existe igualmente porque documenta el caso con precisión y porque el día que exista el
+     servidor HTTP de pruebas, este mismo fichero, servido por él con un 301 en
+     /destino/, demuestra la regla sin tocar nada más. La regla está cubierta mientras tanto por
+     sus tests contra una base de datos en memoria. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Una página cuyo canonical apunta a una redirección</title>
+<link rel="canonical" href="https://fixture.local/destino/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Página de prueba que declara como canónica una URL que redirige a otra, en vez de la que responde 200 directamente.">
+<meta property="og:title" content="Canonical a una redirección">
+<meta property="og:description" content="El canonical apunta a /destino/, que redirige.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>El canonical apunta a una redirección</h1>
+<p>Google tiene que elegir entre la señal del canonical y la de la redirección, y suele quedarse
+con el destino final: la etiqueta acaba no sirviendo para nada. El arreglo es apuntarla
+directamente a la URL que responde 200.</p>
+<a href="/destino/">Destino que redirige</a>
+</main>
+</body>
+</html>

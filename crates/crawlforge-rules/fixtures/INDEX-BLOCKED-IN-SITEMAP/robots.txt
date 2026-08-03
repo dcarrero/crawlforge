@@ -1,0 +1,6 @@
+# El sitemap declara /privado/ y este robots.txt lo bloquea: el buscador no puede
+# ni leer la página que se le está pidiendo que indexe.
+User-agent: *
+Disallow: /privado/
+
+Sitemap: https://fixture.local/sitemap.xml

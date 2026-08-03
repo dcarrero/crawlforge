@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!-- HREFLANG-NO-SELF: la página declara dos alternativas de idioma y ninguna es ella misma.
+     Es el fallo de un conmutador de idiomas que lista «los otros idiomas» en vez del conjunto
+     completo. El resto del <head> está sano a propósito: el hallazgo tiene que ser este. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Página en español de un sitio multiidioma</title>
+<meta name="description" content="Esta página forma parte de un conjunto multiidioma cuyo hreflang no se incluye a sí mismo, que es el defecto que documenta este fixture.">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="alternate" hreflang="en" href="https://fixture.local/en/">
+<link rel="alternate" hreflang="fr" href="https://fixture.local/fr/">
+<meta property="og:title" content="Página en español de un sitio multiidioma">
+<meta property="og:description" content="Conjunto hreflang sin autorreferencia.">
+<meta property="og:image" content="https://fixture.local/tarjeta.png">
+</head>
+<body>
+<main>
+<h1>Versión en español</h1>
+<p>El conjunto hreflang de esta página nombra el inglés y el francés, pero no el español, así que
+Google descarta el grupo entero y ninguna de las tres traducciones se beneficia de las demás.</p>
+</main>
+</body>
+</html>

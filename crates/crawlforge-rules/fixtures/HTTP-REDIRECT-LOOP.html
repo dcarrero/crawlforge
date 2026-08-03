@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<!-- HTTP-REDIRECT-LOOP: no se puede provocar en modo filesystem, por lo mismo que
+     HTTP-REDIRECT-CHAIN: sin 3xx no hay aristas de redirección, y sin aristas no hay ciclo. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Bucle de redirección</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Fixture de HTTP-REDIRECT-LOOP. No dispara en modo filesystem porque un árbol de ficheros no puede emitir un 3xx.">
+<meta property="og:title" content="Bucle de redirección">
+<meta property="og:description" content="Las redirecciones vuelven sobre una URL ya visitada.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>Bucle de redirección</h1>
+<h2>Por qué este fixture no dispara su regla</h2>
+<p>Un bucle es un ciclo en el grafo de redirecciones, y ese grafo se construye a
+partir de respuestas 3xx que el modo <code>filesystem</code> no puede producir. Hace falta un
+servidor de pruebas que devuelva dos 301 apuntándose el uno al otro.</p>
+<p>Los tests unitarios cubren el ciclo de dos URLs, la URL que redirige a sí misma y la cadena
+que entra en un ciclo sin duplicar el hallazgo.</p>
+</main>
+</body>
+</html>

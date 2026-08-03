@@ -1,0 +1,28 @@
+[package]
+name = "crawlforge-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "crawlforge"
+path = "src/main.rs"
+
+[dependencies]
+crawlforge-core.workspace = true
+crawlforge-rules.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+indicatif.workspace = true
+url.workspace = true
+csv.workspace = true
+rust_xlsxwriter.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

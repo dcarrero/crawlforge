@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<!-- HTTP-REDIRECT-CHAIN: no se puede provocar en modo filesystem. El motor rellena
+     urls.redirect_to solo cuando la respuesta es un 3xx con cabecera Location, y el fetcher de
+     ficheros no emite 3xx: un fichero no redirige. Sin aristas en el grafo de redirecciones no
+     hay cadena que recorrer. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Cadena de redirecciones</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Fixture de HTTP-REDIRECT-CHAIN. No dispara en modo filesystem porque un árbol de ficheros no puede emitir un 3xx.">
+<meta property="og:title" content="Cadena de redirecciones">
+<meta property="og:description" content="Dos o más saltos hasta el destino final.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>Cadena de redirecciones</h1>
+<h2>Por qué este fixture no dispara su regla</h2>
+<p>La regla recorre el grafo que forman las filas de <code>urls</code> con
+<code>redirect_to</code> relleno. Ese campo solo se escribe cuando la respuesta es un 3xx con
+cabecera <code>Location</code>, y en modo <code>filesystem</code> no hay cabeceras ni 3xx: el
+fetcher devuelve el fichero o un 404.</p>
+<p>El recorrido, el recuento de saltos, la elección de la cabeza de la cadena y la exclusión de
+los bucles están cubiertos por los tests unitarios sobre una base en memoria con el esquema
+real.</p>
+</main>
+</body>
+</html>

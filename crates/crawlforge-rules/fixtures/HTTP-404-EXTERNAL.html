@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<!-- HTTP-404-EXTERNAL: no se puede provocar en modo filesystem. Un enlace a otro
+     host se registra como fila externa con crawl_state='skipped' y status_code nulo: el motor
+     no lo pide, ni podría, porque en este modo no hay red. La regla queda demostrada con sus
+     tests unitarios sobre una base en memoria, y este fichero es la semilla del fixture de
+     modo http cuando exista un banco de pruebas con servidor. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Enlace externo roto</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Fixture de HTTP-404-EXTERNAL. No dispara en modo filesystem porque las URLs de otros dominios no se piden.">
+<meta property="og:title" content="Enlace externo roto">
+<meta property="og:description" content="Enlace a un dominio ajeno que devuelve 4xx.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>Enlace externo roto</h1>
+<h2>Por qué este fixture no dispara su regla</h2>
+<p>La regla necesita que la fila de una URL de otro dominio tenga
+<code>status_code</code> en el rango 4xx. En modo <code>filesystem</code> eso no ocurre nunca: no
+hay red, y el motor registra las URLs externas sin pedirlas, con el estado a nulo. Un dato que no
+existe no puede producir un hallazgo, y esa es la respuesta correcta.</p>
+<p>El enlace de abajo es el que se comprobaría en un rastreo por HTTP.</p>
+<p><a href="https://otro.example/una-pagina-que-ya-no-existe">Un enlace externo que devolvería 404</a></p>
+</main>
+</body>
+</html>

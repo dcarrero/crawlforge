@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<!-- INDEX-ROBOTS-BLOCKED: el enlace a /privado/ apunta a una ruta que el robots.txt prohíbe.
+     La regla es de alcance `site` y no `page`: el motor excluye la URL antes de descargarla
+     —que es lo que significa respetar robots.txt— así que el hallazgo se deduce del almacén
+     (crawl_state='excluded', exclusion_reason='robots') y no de la página. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Portada que enlaza a una ruta prohibida en robots.txt</title>
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="El sitio enlaza internamente a una zona que su propio robots.txt impide rastrear, así que el enlace no lleva a ninguna parte para el buscador.">
+</head>
+<body><main><h1>Portada</h1><a href="/privado/">Zona privada</a></main></body>
+</html>

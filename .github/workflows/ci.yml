@@ -1,0 +1,99 @@
+# Integración continua del motor.
+#
+# ⚠️ Este pipeline está escrito y validado, pero **no se ejecuta todavía**: en este repositorio
+# los trabajos se encolan y mueren en doce segundos sin asignarse a ninguna máquina —`runner_name`
+# vacío, cero pasos— que es como se manifiesta un repositorio privado sin minutos de GitHub
+# Actions disponibles. No es un problema del fichero. En cuanto la cuenta tenga minutos, corre
+# solo. Mientras tanto, `tools/verificar.sh` hace lo mismo en local.
+#
+# Tres cosas, en orden de lo que más duele que se rompa:
+#
+# 1. Que compile y pasen los tests en las tres plataformas. El motor toca el sistema de
+#    ficheros, y ahí rutas, separadores y mayúsculas se comportan distinto en cada una.
+# 2. Clippy sin avisos. Es la convención del proyecto, no una preferencia.
+# 3. La regresión de rendimiento. La velocidad y la memoria son el argumento del
+#    producto y se pierden en un push cualquiera sin que nadie se entere.
+
+name: CI
+
+# **Solo manual.** Nada de `push` ni `pull_request`: este repositorio es privado y cada ejecución
+# consume minutos de la cuota de la cuenta. La verificación de cada cambio se hace en local con
+# `tools/verificar.sh`, que corre lo mismo y no cuesta nada; el pipeline se lanza a mano cuando
+# interesa comprobar las tres plataformas —antes de una publicación, o al tocar algo que roce el
+# sistema de ficheros—.
+#
+#   gh workflow run CI
+#
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Nada de `RUSTFLAGS: -D warnings` global: eso aplica también a las dependencias de terceros y
+  # rompe la compilación por avisos que no son nuestros. El rigor va en el paso de clippy, que es
+  # donde corresponde.
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Sin fail-fast: si algo se rompe solo en Windows, interesa ver que Linux va bien.
+      fail-fast: false
+      matrix:
+        # **macOS no está aquí a propósito.** Es la máquina de desarrollo, y se verifica en
+        # local con `tools/suite.sh`, que además hace más que este pipeline: usa la
+        # herramienta de verdad —audita, exporta, informa, compara— y abre el `.xlsx` con
+        # `openpyxl`. Duplicarlo en CI costaría el **décuplo** de minutos: GitHub factura
+        # macOS a 10x y Windows a 2x, así que un job de macOS de 12 minutos se cobra como
+        # 120. Lo que aquí hace falta es exactamente lo que en local no se puede probar.
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # La caché es lo que hace que esto tarde minutos y no decenas de minutos: `rusqlite` viene
+      # con SQLite empaquetado y compilarlo cada vez domina el tiempo del pipeline.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compilar
+        run: cargo build --workspace --all-targets
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  rendimiento:
+    name: Regresión de rendimiento
+    # Solo en Linux: los umbrales están calibrados contra una máquina de referencia y compararlos
+    # entre tres sistemas distintos daría rojos que no significan nada. Lo que se vigila aquí es
+    # la tendencia del código, no la máquina.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # En `--release` a propósito: en debug el motor va un orden de magnitud más lento y el test
+      # no afirma sobre los números. Ver la cabecera de `tests/regresion_rendimiento.rs`.
+      - name: Medir
+        run: cargo test --release -p crawlforge-core --test regresion_rendimiento -- --nocapture
+
+  fixtures:
+    name: Cada regla dispara su fixture
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Va en su propio trabajo porque es el test que de verdad dice si el catálogo funciona:
+      # rastrea de verdad el fixture de cada regla y exige que produzca su hallazgo. Un rojo aquí
+      # significa que una regla ha dejado de detectar lo que dice detectar.
+      - name: Banco de fixtures
+        run: cargo test -p crawlforge-core --test fixtures_de_reglas -- --nocapture

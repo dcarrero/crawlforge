@@ -1,0 +1,76 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/crawlforge-core",
+    "crates/crawlforge-rules",
+    "crates/crawlforge-adapters",
+    "crates/crawlforge-ffi",
+    "crates/crawlforge-cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.85"
+license = "UNLICENSED"
+publish = false
+
+# Versiones centralizadas: los crates heredan con `workspace = true`.
+# El stack está cerrado (`docs/CONVENTIONS.md §3`) — no añadas dependencias equivalentes.
+[workspace.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "stream"] }
+lol_html = "2"
+texting_robots = "0.2"
+# governor se retiró: el limitador es el `Throttle` propio, por host y con freno adaptativo.
+# Razonamiento en `crawlforge-core/src/throttle.rs`.
+rusqlite = { version = "0.32", features = ["bundled", "functions"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "mysql"] }
+russh = "0.45"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+# Progreso en terminal. Solo en la CLI: el core notifica por callback
+# y no conoce al terminal. Detecta él mismo si la salida no es un TTY y entonces no pinta nada.
+indicatif = "0.17"
+csv = "1"
+# `constant_memory`: cada fila se vuelca a un temporal según se escribe en vez de acumular el
+# libro entero en RAM. Sin ella, exportar un rastreo de 500.000 URLs costaba 5,2 GB de memoria —el
+# mismo defecto de Screaming Frog que este producto ataca, trasladado al export.
+rust_xlsxwriter = { version = "0.79", features = ["constant_memory"] }
+url = "2"
+# Configuración YAML de la CLI. `serde_norway` y no `serde_yaml`
+# porque este último está archivado sin mantenimiento desde 2024; el fork conserva la
+# misma API y sigue recibiendo correcciones. Solo en la CLI: el core no conoce el formato.
+serde_norway = "0.9"
+uuid = { version = "1", features = ["v7"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+regex = "1"
+quick-xml = "0.37"
+flate2 = "1"
+rand = "0.8"
+futures = "0.3"
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+walkdir = "2"
+
+# Miembros internos
+crawlforge-core = { path = "crates/crawlforge-core" }
+crawlforge-rules = { path = "crates/crawlforge-rules" }
+crawlforge-adapters = { path = "crates/crawlforge-adapters" }
+crawlforge-hub = { path = "crates/crawlforge-hub" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+# El banco de rendimiento se mide con este perfil, no con `release` a secas.
+[profile.bench-max]
+inherits = "release"
+lto = "fat"
+panic = "abort"

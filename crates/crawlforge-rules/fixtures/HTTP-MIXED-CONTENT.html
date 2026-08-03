@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<!-- HTTP-MIXED-CONTENT: la base del fixture es https://fixture.local/, así que esta página se
+     sirve por HTTPS, y carga tres recursos escribiendo http:// a mano. El enlace <a> por http://
+     está aquí a propósito: no debe contar, porque contenido mixto es lo que la página *carga*,
+     no aquello a lo que enlaza. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Una página HTTPS que carga recursos por HTTP</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Página de prueba con contenido mixto: una hoja de estilo, un script y una imagen servidos por HTTP desde una página HTTPS.">
+<link rel="stylesheet" href="http://cdn.ejemplo.com/estilo.css">
+<meta property="og:title" content="Contenido mixto">
+<meta property="og:description" content="Recursos por HTTP en una página HTTPS.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>Contenido mixto</h1>
+<h2>Qué está mal aquí</h2>
+<p>Esta página viaja cifrada, pero pide la hoja de estilo, el script y la imagen por HTTP.
+El navegador bloquea sin avisar la hoja de estilo y el script, porque son recursos activos que
+podrían reescribir la página entera, y marca la conexión como no segura. El resultado que ve el
+visitante es una página sin maquetar y un candado tachado en la barra de direcciones.</p>
+<p>La imagen es contenido pasivo: no se bloquea, pero degrada el candado igual. El arreglo no
+tiene misterio, se cambia el esquema del recurso, y por eso conviene detectarlo antes de
+desplegar y no cuando lo cuenta un cliente por teléfono.</p>
+<p>El enlace de abajo apunta a un sitio ajeno que va por HTTP. No es contenido mixto: seguir un
+enlace es una navegación nueva, con su propia barra de direcciones y su propio candado. Si la
+regla contara los enlaces, cualquier sitio que cite una web antigua aparecería como inseguro.</p>
+<p><a href="http://otro.example/una-pagina-antigua">Un enlace externo por HTTP, que no cuenta</a></p>
+<img src="http://cdn.ejemplo.com/foto.jpg" alt="Una foto servida por HTTP" width="640" height="480">
+<script src="http://cdn.ejemplo.com/analitica.js"></script>
+</main>
+</body>
+</html>

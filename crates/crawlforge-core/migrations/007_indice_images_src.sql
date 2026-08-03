@@ -1,0 +1,30 @@
+-- Migración 007 — el índice por el que las reglas de imagen hacen JOIN.
+--
+-- `images` tenía índice sobre `page_url_id` («¿qué imágenes usa esta página?») y sobre
+-- `alt_present`, y **ninguno sobre `src_url_id`**, que es la dirección contraria: «¿qué páginas
+-- usan esta imagen?». Es por donde entran `ASSET-IMG-HEAVY` y `ASSET-IMG-BROKEN`:
+--
+--     FROM urls u JOIN images i ON i.src_url_id = u.id
+--
+-- Sin él, el plan es
+--
+--     SEARCH u USING INDEX idx_urls_status (status_code=?)
+--     SCAN i
+--     USE TEMP B-TREE FOR count(DISTINCT)
+--
+-- es decir, **un recorrido completo de `images` por cada URL candidata**.
+--
+-- Hasta el 2026-08-02 no dolía porque la tabla estaba casi vacía en los sitios grandes: los
+-- plugins de *lazy-load* de WordPress escriben el `src` como una URI `data:` y mueven la URL
+-- real a `data-src`, que el parser no leía. Al arreglarlo, la tabla de un medio de comunicación
+-- pasó de **0 a 4.409.298 filas** en el mismo rastreo, y la pasada final se fue a horas.
+--
+-- Es el segundo índice que falta encontrado el mismo día, y por el mismo camino: existía el que
+-- casi no se lee y faltaba el que sostiene un `JOIN`. Al añadir una regla de conjunto, mirar
+-- `EXPLAIN QUERY PLAN` sobre un rastreo real y no solo sobre un fixture: a mil filas cualquier
+-- plan parece bueno.
+--
+-- Crear un índice no toca datos: es seguro sobre un fichero de rastreo antiguo, y un rastreo
+-- interrumpido puede cruzarla y seguir reanudándose (`ResumeSafety::Safe`).
+
+CREATE INDEX IF NOT EXISTS idx_images_src ON images(src_url_id);

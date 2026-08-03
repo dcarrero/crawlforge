@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<!-- INDEX-SITEMAP-MISSING: un sitio sin ningún sitemap. Este directorio no lleva sitemap.xml
+     a propósito.
+
+     No dispara en el banco, y está declarado en SIN_FIXTURE_EN_FILESYSTEM: la regla se limita
+     al modo `http` porque en una auditoría de un `dist/` la ausencia de sitemap no es un
+     hallazgo —el sitio aún no se ha publicado, y avisar de ello en cada compilación sería
+     ruido en el pipeline de CI—. Con el servidor HTTP de pruebas, este mismo
+     fixture, servido por HTTP, sí la demuestra. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Portada de un sitio que no publica ningún sitemap</title>
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Sitio sin sitemap.xml ni referencia en robots.txt, que es lo que obliga al buscador a descubrirlo todo enlace a enlace.">
+</head>
+<body><main><h1>Sin sitemap</h1><p>No hay sitemap.xml ni robots.txt que lo declare.</p></main></body>
+</html>

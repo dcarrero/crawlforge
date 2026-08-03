@@ -1,0 +1,4 @@
+# /privado/ está prohibido, y aun así la portada lo enlaza. El sitio gasta enlaces internos
+# en una URL que él mismo ha decidido que no se rastree.
+User-agent: *
+Disallow: /privado/

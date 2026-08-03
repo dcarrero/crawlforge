@@ -1,0 +1,35 @@
+-- Migración 006 — el índice que le faltaba a la detección de contenido duplicado.
+--
+-- `DUP-CONTENT-EXACT` agrupa `pages` por `html_hash` **dos veces**: una en la subconsulta
+-- `GROUP BY html_hash HAVING COUNT(*) > 1` y otra en la ventana `COUNT(*) OVER (PARTITION BY
+-- html_hash)`. Sin índice sobre esa columna, SQLite resuelve las dos con sendos B-tree
+-- temporales sobre la tabla entera:
+--
+--     SEARCH pages USING INDEX idx_pages_indexable (is_indexable=?)
+--     USE TEMP B-TREE FOR GROUP BY
+--
+-- Con 216.349 páginas en un fichero de 5,3 GB y 64 MB de caché, eso significa recorrer una tabla
+-- ancha —`heading_json`, `og_json`, `twitter_json`, `schema_types`— y ordenarla, dos veces.
+-- **Medido el 2026-08-02 rastreando un medio de comunicación entero: la pasada final llevaba más de
+-- ocho horas en esta única regla**, cuando el rastreo de 487.621 URLs había terminado en nueve
+-- horas y media.
+--
+-- El índice existía para `text_hash` —el simhash de casi-duplicados, que hoy no lee ninguna
+-- regla— y no para `html_hash`, que es el que se usa.
+--
+-- **Compuesto y no parcial**, y esto se decidió midiendo, no de cabeza. La primera versión fue
+-- `pages(html_hash) WHERE html_hash IS NOT NULL AND is_indexable = 1`, que parece más ajustada;
+-- SQLite **no la usa**: sigue prefiriendo `idx_pages_indexable` y ordenando. Con el par en este
+-- orden —el filtro de igualdad primero, la columna de agrupación después— el plan pasa a
+--
+--     SEARCH pages USING COVERING INDEX idx_pages_html_hash (is_indexable=? AND html_hash>?)
+--
+-- sin B-tree temporal: el índice ya trae los `html_hash` ordenados dentro de cada valor de
+-- `is_indexable`, y al cubrir las dos columnas ni siquiera hace falta tocar la tabla.
+--
+-- Se paga en cada `INSERT` de `pages`, que es una fila por página y no por enlace, así que el
+-- coste de escritura es marginal frente a lo que ahorra.
+--
+-- Crear un índice no toca datos: es seguro sobre un fichero de rastreo antiguo.
+
+CREATE INDEX IF NOT EXISTS idx_pages_html_hash ON pages(is_indexable, html_hash);

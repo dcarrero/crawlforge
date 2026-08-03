@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<!-- HTTP-SLOW-RESPONSE: no se puede provocar en modo filesystem, y esta vez el propio motor lo
+     dice. `PageContext::ttfb_ms` se rellena con `fetcher.is_network().then_some(...)`, y el
+     fetcher de ficheros devuelve `false`: leer un fichero del disco tarda algo, pero no es un
+     TTFB, y avisar de que un `dist/` local «responde lento» sería un hallazgo inventado. La
+     regla trata ese `None` como ausencia de dato, que es lo correcto. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Respuesta lenta del servidor</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Fixture de HTTP-SLOW-RESPONSE. No dispara en modo filesystem porque ahí no hay red y el motor no mide TTFB a propósito.">
+<meta property="og:title" content="Respuesta lenta del servidor">
+<meta property="og:description" content="TTFB por encima de un segundo.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>Respuesta lenta del servidor</h1>
+<h2>Por qué este fixture no dispara su regla</h2>
+<p>La regla compara el tiempo hasta el primer byte con un umbral de mil milisegundos. En modo
+<code>filesystem</code> ese tiempo no se mide: el motor pone <code>ttfb_ms</code> a nulo cuando la
+fuente no pasa por la red, precisamente para que nadie confunda el tiempo de leer un fichero del
+disco con la latencia de un servidor. Es una decisión del motor, no una carencia.</p>
+<p>Demostrar la regla con un rastreo de verdad exige un servidor de pruebas al que se le pueda
+pedir que tarde. Mientras eso no exista, la cubren sus tests unitarios: el caso lento, el umbral
+exacto —que no es inclusivo— y el nulo del modo sin red.</p>
+</main>
+</body>
+</html>

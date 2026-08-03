@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!-- CONTENT-H1-MULTIPLE: dos H1 en la misma página. El primero es el nombre del sitio, marcado
+     como encabezado principal por la plantilla, y el segundo es el titular real del artículo.
+     El resto del documento está sano y pasa de 300 palabras para no mezclar defectos. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Dos encabezados principales en la misma página</title>
+<meta name="description" content="Ejemplo de plantilla que marca el nombre del sitio como H1 además del titular del artículo, con contenido suficiente para no disparar otras reglas.">
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<h1>Cuaderno de taller</h1>
+<main>
+<h1>Cómo elegir el nivel de un encabezado sin mirar su tamaño</h1>
+<p>La costumbre de elegir el encabezado por el aspecto que tiene en pantalla viene de los años en
+que las hojas de estilo daban miedo y era más rápido bajar un nivel que escribir una regla de
+CSS. El resultado se sigue viendo hoy en miles de plantillas: encabezados escogidos por su cuerpo
+de letra y no por el papel que cumplen dentro del documento. Quien lee con los ojos no nota nada,
+porque el navegador dibuja exactamente lo que se le pide. Quien navega el documento por su
+estructura, en cambio, se encuentra un índice que no corresponde con lo que hay escrito.</p>
+<h2>El encabezado es una etiqueta de jerarquía, no de estilo</h2>
+<p>Un encabezado dice dos cosas al mismo tiempo: cuál es el tema del bloque que abre y a qué otro
+bloque pertenece. La segunda parte es la que se pierde cuando se elige por tamaño. Si el titular
+de una sección aparece como H4 porque el H4 de la plantilla tiene el cuerpo de letra que
+convenía, el lector de pantalla anunciará ese bloque como un apartado de tercer nivel de algo que
+no existe, y quien indexa la página tendrá que decidir por su cuenta qué depende de qué. El
+tamaño se arregla con una clase; el nivel, no.</p>
+<h2>Un solo tema principal por página</h2>
+<p>De ahí sale la norma de un único encabezado de primer nivel. No es una prohibición de la
+especificación, que desde HTML5 admite varios, sino una consecuencia práctica: una página trata
+de una cosa, y ese algo se escribe una vez, en el sitio donde el lector espera encontrarlo. El
+error más repetido es marcar el nombre del sitio o el logotipo de la cabecera como encabezado
+principal, además del titular del contenido. La página acaba diciendo que trata de dos temas
+distintos, y el que gana casi nunca es el que interesa.</p>
+<h2>Cómo comprobarlo</h2>
+<p>La revisión más rápida es leer solo los encabezados de la página, en orden, y preguntarse si
+ese esquema por sí solo cuenta de qué va el texto. Si el esquema empieza con el nombre de la casa
+y repite el mismo nivel dos veces, hay trabajo que hacer en la plantilla y no en el artículo.</p>
+</main>
+</body>
+</html>

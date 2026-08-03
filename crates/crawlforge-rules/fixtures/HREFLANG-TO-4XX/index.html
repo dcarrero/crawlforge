@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!-- HREFLANG-TO-4XX: el hreflang `en` apunta a /en/, que no existe en el árbol.
+     El fixture es un directorio porque la regla es de conjunto: el destino tiene que haberse
+     pedido para saber que devuelve 4xx, y el enlace del conmutador de idiomas es lo que lo
+     mete en el rastreo. En un sitio real ese enlace visible también estaría ahí. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Portada con una traducción prometida que no existe</title>
+<meta name="description" content="El conjunto hreflang de esta portada promete una versión inglesa que no está publicada, así que el destino devuelve un 4xx y la relación no vale nada.">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="alternate" hreflang="es" href="https://fixture.local/">
+<link rel="alternate" hreflang="en" href="https://fixture.local/en/">
+<meta property="og:title" content="Portada con una traducción prometida que no existe">
+<meta property="og:description" content="Alternativa de idioma que devuelve un error.">
+<meta property="og:image" content="https://fixture.local/tarjeta.png">
+</head>
+<body>
+<main>
+<h1>Versión en español</h1>
+<p>El visitante que pulsa en English aterriza en una página de error, y Google saca esta página
+del conjunto porque la alternativa que declara no se puede recuperar.</p>
+<a href="/en/">English version</a>
+</main>
+</body>
+</html>

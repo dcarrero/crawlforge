@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<!-- DUP-CONTENT-EXACT: /copia-uno/ y /copia-dos/ son el mismo fichero byte a byte, así que
+     comparten `html_hash`. Ninguna de las dos declara canonical, con lo que las dos quedan
+     indexables y compiten entre sí: si una canonizara a la otra el problema estaría resuelto y
+     la regla —con razón— no avisaría. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Portada del fixture de contenido idéntico</title>
+<meta name="description" content="Una descripción correcta, de longitud suficiente para no llamar la atención de otras reglas del catálogo.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="canonical" href="https://fixture.local/">
+</head>
+<body>
+<main><h1>Un encabezado correcto</h1>
+<p>Las dos páginas de abajo devuelven exactamente el mismo HTML.</p>
+<a href="/copia-uno/">Primera copia</a>
+<a href="/copia-dos/">Segunda copia</a></main>
+</body>
+</html>

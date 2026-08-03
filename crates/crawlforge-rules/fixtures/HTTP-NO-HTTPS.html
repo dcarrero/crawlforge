@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<!-- HTTP-NO-HTTPS: no se puede provocar en modo filesystem, y el motivo es
+     menos obvio que en las demás. Un enlace escrito como http://fixture.local/... sí queda
+     interno, porque is_internal compara solo el host, pero antes de encolarlo el motor lo pasa
+     por Fetcher::canonicalize, que en este modo reconstruye la URL sobre la base del rastreo
+     —https://fixture.local/— y le devuelve el esquema seguro. Cualquier ruta que exista acaba
+     como https; la que no existe se queda en http pero responde 404, y un 404 no dice nada
+     sobre cómo está configurado HTTPS. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>El sitio responde por HTTP</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Fixture de HTTP-NO-HTTPS. No dispara en modo filesystem porque la canonicalización del fetcher de ficheros devuelve las URLs sobre la base https del rastreo.">
+<meta property="og:title" content="El sitio responde por HTTP">
+<meta property="og:description" content="URLs internas que sirven contenido por HTTP.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>El sitio responde por HTTP</h1>
+<h2>Por qué este fixture no dispara su regla</h2>
+<p>La regla busca URLs internas con esquema <code>http</code> que sirvan contenido
+sin llevar al visitante a HTTPS. En modo <code>filesystem</code> no puede haberlas: el fetcher
+sabe qué fichero sirve cada ruta y reescribe la URL sobre la base del rastreo, que es
+<code>https://fixture.local/</code>. El enlace de abajo está escrito con <code>http://</code> a
+propósito y el motor lo unifica con su forma segura.</p>
+<p><a href="http://fixture.local/">Un enlace interno escrito por HTTP, que el motor unifica</a></p>
+<p>Los tests unitarios cubren el 2xx por HTTP, el 301 de HTTP a HTTPS —que es lo correcto y no
+avisa—, el 301 de HTTP a HTTP —que sigue estando mal—, el 404 por HTTP y la URL externa.</p>
+</main>
+</body>
+</html>

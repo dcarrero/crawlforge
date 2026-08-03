@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<!-- El lado que rompe la reciprocidad: se declara a sí misma y se olvida de la versión
+     española, que sí la declara. Todo lo demás está sano. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>English version of the home page</title>
+<meta name="description" content="This English page declares only itself in its hreflang set, so it never confirms the Spanish page that points at it and the relationship is discarded.">
+<link rel="canonical" href="https://fixture.local/en/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="alternate" hreflang="en" href="https://fixture.local/en/">
+<meta property="og:title" content="English version of the home page">
+<meta property="og:description" content="Hreflang set that only declares itself.">
+<meta property="og:image" content="https://fixture.local/tarjeta.png">
+</head>
+<body>
+<main>
+<h1>English version</h1>
+<p>The Spanish home page declares this one as its English alternate. This page does not return
+the favour, which is exactly the defect the fixture documents.</p>
+</main>
+</body>
+</html>

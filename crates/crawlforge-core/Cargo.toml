@@ -1,0 +1,41 @@
+[package]
+name = "crawlforge-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+crawlforge-rules.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+lol_html.workspace = true
+texting_robots.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+xxhash-rust.workspace = true
+quick-xml.workspace = true
+flate2.workspace = true
+regex.workspace = true
+rand.workspace = true
+futures.workspace = true
+sysinfo.workspace = true
+walkdir.workspace = true
+
+[features]
+default = []
+# Los dos unicos cfg de plataforma permitidos. Ver docs/CONVENTIONS.md y docs/01-ARQUITECTURA.md SS6.
+render_webview = []
+render_cdp = []
+scheduler_in_app = []
+scheduler_daemon = []
+
+[[bench]]
+name = "parse_speed"
+harness = false

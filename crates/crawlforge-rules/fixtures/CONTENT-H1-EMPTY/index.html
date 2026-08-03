@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!-- CONTENT-H1-EMPTY: el H1 existe pero no aporta texto. Su único contenido es el logotipo, y la
+     imagen no lleva `alt`, así que el encabezado principal queda mudo. Es el caso real de la
+     regla, no un `<h1></h1>` de laboratorio.
+     Este fixture dispara también CONTENT-H1-MISSING (para el motor el H1 no tiene texto) y, en
+     cuanto exista, ASSET-IMG-NO-ALT. Es inevitable: son los síntomas del mismo defecto y el
+     catálogo cubre cada uno desde su ángulo.
+     Es un directorio y no un fichero suelto para poder incluir el logotipo de verdad: apuntando a
+     una imagen inexistente el fixture documentaría además un 404 interno, que no es lo suyo. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Un encabezado principal que solo contiene el logotipo</title>
+<meta name="description" content="Ejemplo de H1 cuyo único contenido es una imagen sin atributo alt, con texto suficiente en el cuerpo para no disparar la regla de contenido escaso.">
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<main>
+<h1><img src="/logotipo.svg" width="180" height="40"></h1>
+<p>El encabezado de arriba parece un titular en la pantalla, porque el logotipo ocupa su sitio y
+tiene su tamaño. Para cualquier cosa que lea el documento sin verlo, sin embargo, ese encabezado
+está vacío: no hay texto que anunciar ni palabras que asociar al tema de la página. El defecto es
+más difícil de detectar que un H1 ausente, precisamente porque en el navegador no se nota nada
+raro.</p>
+<h2>Por qué la imagen no sustituye al texto</h2>
+<p>Una imagen dentro de un encabezado puede aportar su texto alternativo, y en ese caso el
+encabezado sí dice algo. El problema aparece cuando la imagen no lleva atributo alternativo: el
+lector de pantalla lee el nombre del fichero, si acaso, y quien indexa la página se queda sin la
+frase que resume el contenido. Un logotipo en un encabezado es además una elección discutible por
+sí misma, porque el nombre de la casa rara vez es el tema de la página que se está leyendo.</p>
+<h2>Cómo se llega a esta situación</h2>
+<p>Casi siempre por herencia. La cabecera del sitio se maquetó una vez con el logotipo dentro de
+un encabezado principal para que ocupara el ancho previsto, y desde entonces todas las páginas
+arrastran ese encabezado. Cuando llega el momento de escribir el titular real del contenido, o se
+marca con otro nivel para no repetir estilos, o se deja como párrafo con una clase que imita el
+aspecto de un titular. El documento acaba con un encabezado principal mudo y un titular que no es
+encabezado.</p>
+<h2>La reparación</h2>
+<p>La reparación es corta y no toca el diseño: el logotipo de la cabecera pasa a ser un enlace con
+su texto alternativo, y el encabezado principal se reserva para el titular del contenido. Si por
+motivos de plantilla el logotipo tiene que seguir en un encabezado, al menos la imagen debe
+llevar un texto alternativo con el nombre del sitio, para que el encabezado deje de estar vacío y
+diga alguna cosa a quien no puede verlo. Las dos versiones se ven idénticas en pantalla.</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!-- HREFLANG-INVALID-CODE: `en-UK` no existe. `UK` está reservado en la ISO 3166-1 pero no
+     asignado; el código del Reino Unido es `GB`. La autorreferencia `es` está puesta a propósito
+     para que el único hallazgo del fixture sea el del código. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Página con un código de hreflang mal escrito</title>
+<meta name="description" content="El conjunto hreflang de esta página usa en-UK, que Google descarta en silencio porque UK no es un código de región asignado por la ISO 3166-1.">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="alternate" hreflang="es" href="https://fixture.local/">
+<link rel="alternate" hreflang="en-UK" href="https://fixture.local/en/">
+<meta property="og:title" content="Página con un código de hreflang mal escrito">
+<meta property="og:description" content="Código de región no asignado en el conjunto hreflang.">
+<meta property="og:image" content="https://fixture.local/tarjeta.png">
+</head>
+<body>
+<main>
+<h1>Versión en español</h1>
+<p>La anotación en-UK no la interpreta ningún buscador: la versión británica queda fuera del
+conjunto sin que nada lo avise, que es lo que hace tan difícil ver este fallo a ojo.</p>
+</main>
+</body>
+</html>

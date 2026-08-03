@@ -1,0 +1,56 @@
+# Configuración de rastreo de CrawlForge (`--config`).
+#
+#   crawlforge crawl https://ejemplo.es --config crawl-config.example.yaml
+#   crawlforge audit ./dist --base https://ejemplo.es/ --config crawl-config.example.yaml
+#
+# El fichero describe el sitio; la línea de comandos describe la ejecución.
+# **Los flags ganan sobre el fichero**: `--max-urls 100` pisa al `max_urls` de aquí.
+# Todos los campos son opcionales: los que no aparezcan conservan su valor por defecto.
+# Un campo mal escrito es un error, no una opción ignorada en silencio.
+
+# Nombre del proyecto, para el fichero de rastreo y el hub.
+# project_name: "Blog de ejemplo"
+
+# Tope de URLs a rastrear. Sin él, se rastrea hasta agotar el sitio
+# (o hasta el tope del nivel: el gratuito corta a 1.000).
+max_urls: 5000
+
+# Profundidad máxima en clics desde la semilla.
+# max_depth: 10
+
+# Duración máxima del rastreo, en segundos.
+# max_duration_secs: 600
+
+# Peticiones simultáneas por host. Entre 1 y 20; por defecto 5.
+concurrency: 8
+
+# User-Agent de las peticiones. Por defecto, el del producto.
+# user_agent: "CrawlForge/0.0.1 (auditoría interna)"
+
+# Ignorar robots.txt. Solo en sitios propios.
+# ignore_robots: false
+
+# Rastrear también las URLs externas enlazadas (por defecto solo se registran).
+# follow_external: false
+
+# Respetar rel="nofollow" al descubrir enlaces. Por defecto, sí.
+# respect_nofollow: true
+
+# Rastrear solo las URLs que casen con alguno de estos patrones (regex, sin anclar:
+# una cadena literal funciona como un «contiene»). La semilla se rastrea siempre.
+# include_patterns:
+#   - "/blog/"
+
+# No rastrear las URLs que casen con alguno de estos patrones. Ganan sobre
+# include_patterns, y lo excluido queda registrado en el informe, no desaparece.
+# Los flags --include/--exclude sustituyen a estas listas, no se mezclan con ellas.
+# exclude_patterns:
+#   - "/wp-admin/"
+#   - "\\?replytocom="
+
+# Descubrir y leer sitemaps. El cruce sitemap ↔ enlaces detecta páginas huérfanas.
+# discover_sitemaps: true
+
+# Acumular el texto de cuerpo para búsqueda (FTS5). Nivel Pro: multiplica el
+# tamaño del fichero de rastreo.
+# collect_body_text: false

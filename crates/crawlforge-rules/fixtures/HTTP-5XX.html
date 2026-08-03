@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<!-- HTTP-5XX: no se puede provocar en modo filesystem. El fetcher de
+     ficheros solo devuelve 200 cuando encuentra el fichero y 404 cuando no: no existe ninguna
+     condición que produzca un 5xx, porque no hay servidor al que se le pueda romper nada.
+     Además las reglas de página solo se evalúan cuando la respuesta trae HTML, y el 404 del
+     modo filesystem llega con el cuerpo vacío. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Error de servidor</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Fixture de HTTP-5XX. No dispara en modo filesystem porque sin servidor no hay forma de generar un 5xx.">
+<meta property="og:title" content="Error de servidor">
+<meta property="og:description" content="Respuesta 5xx del servidor.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>Error de servidor</h1>
+<h2>Por qué este fixture no dispara su regla</h2>
+<p>Un 5xx es, por definición, un fallo del servidor al construir la respuesta. En
+modo <code>filesystem</code> no hay servidor: hay un árbol de ficheros y dos únicos resultados
+posibles, 200 si el fichero está y 404 si no. Demostrar esta regla exige un banco de pruebas con
+un servidor que se pueda hacer fallar a voluntad.</p>
+<p>La lógica de la regla —el rango 500 a 599, y que un 5xx no se silencie por ser no indexable—
+está cubierta por sus tests unitarios.</p>
+</main>
+</body>
+</html>

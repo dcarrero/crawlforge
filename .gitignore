@@ -1,0 +1,49 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Ficheros de rastreo y fixtures: se regeneran con tools/gen-fixture.sh, no se versionan.
+# El de 500k pesa ~500 MB.
+/fixtures/*.sqlite
+/fixtures/*.sqlite-wal
+/fixtures/*.sqlite-shm
+*.crawl
+
+# Auditorías de trabajo real. Se hacen dentro del repo por comodidad —el binario está en el
+# PATH y se rastrea desde donde uno esté— y no se versionan: un rastreo de un sitio mediano son
+# decenas de MB, y los de un cliente no tienen por qué acabar en un repositorio de código.
+/auditorias/
+
+# Exports
+/out/
+*.xlsx
+*.parquet
+
+# macOS / Xcode
+.DS_Store
+xcuserdata/
+*.xcuserstate
+/apps/macos/build/
+/apps/macos/DerivedData/
+
+# Windows / Visual Studio
+/apps/windows/bin/
+/apps/windows/obj/
+/apps/windows/.vs/
+*.user
+
+# Web
+/web/node_modules/
+/web/dist/
+/web/.astro/
+
+# Secretos y credenciales de firma
+.env
+.env.*
+!.env.example
+*.p12
+*.mobileprovision
+*.pfx
+
+# Zip original de la documentación: su contenido ya vive en docs/ y fases/.
+/_archivo/

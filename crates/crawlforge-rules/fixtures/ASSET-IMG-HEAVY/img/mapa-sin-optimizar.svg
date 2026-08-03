@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="0 0 1600 1200">
+<!--
+  ASSET-IMG-HEAVY necesita una imagen que pase de 200 KB de verdad: la regla lee el peso de
+  urls.content_length, o sea los bytes que devolvió la fuente al pedir el fichero. No hay forma
+  de declararlo desde el HTML, así que el fixture tiene que pesar.
+
+  Se eligió un SVG y no un JPEG por dos motivos: es texto, así que el repositorio no gana un
+  binario opaco y el diff sigue siendo legible; y un SVG exportado sin optimizar de cientos de
+  kilobytes es un caso real, no inventado.
+
+  El peso tampoco se versiona: el arnés expande el marcador de abajo a bytes de verdad al copiar
+  el fixture. Ver `crawlforge-core/tests/fixtures_de_reglas.rs`.
+-->
+<!--RELLENO:210000-->
+<rect width="1600" height="1200" fill="#e8e8e8"/>
+<circle cx="800" cy="600" r="380" fill="#c9d6e3"/>
+</svg>

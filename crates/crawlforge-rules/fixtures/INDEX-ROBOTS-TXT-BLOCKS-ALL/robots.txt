@@ -1,0 +1,4 @@
+# El fichero del entorno de pruebas, subido a producción por error. Es el accidente
+# más común y más caro: el sitio entero deja de poder indexarse y nada lo avisa.
+User-agent: *
+Disallow: /

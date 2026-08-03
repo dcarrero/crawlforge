@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<!-- ASSET-IMG-BROKEN: el `src` de la imagen no tiene fichero detrás, así que el rastreo la
+     resuelve como 404 y la regla la encuentra por `images` cruzada con `urls`.
+     Un solo fichero basta: lo que provoca el defecto es precisamente que la imagen no exista.
+     Este fixture dispara además HTTP-404-INTERNAL, y es inevitable: una imagen rota es también
+     una URL interna que devuelve 404. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Una página con una imagen que no carga</title>
+<meta name="description" content="Una descripción correcta, de longitud suficiente para no llamar la atención de otras reglas.">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<main><h1>Un encabezado correcto</h1>
+<p>La imagen de abajo apunta a un fichero que no existe en el árbol publicado.</p>
+<img src="/img/imagen-que-no-existe.png" alt="Una foto que se quedó en el servidor antiguo" width="640" height="480">
+</main>
+</body>
+</html>

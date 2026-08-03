@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!-- HTTP-REDIRECT-TO-404: no se puede provocar en modo filesystem. Hace falta un 3xx
+     —que el fetcher de ficheros no emite— cuyo destino devuelva 4xx. El 404 sí se puede
+     provocar, el 3xx no, y sin las dos mitades no hay hallazgo. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Redirección a un error</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Fixture de HTTP-REDIRECT-TO-404. No dispara en modo filesystem porque hace falta un 3xx, y un árbol de ficheros no lo emite.">
+<meta property="og:title" content="Redirección a un error">
+<meta property="og:description" content="La redirección termina en una URL con error.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>Redirección a un error</h1>
+<h2>Por qué este fixture no dispara su regla</h2>
+<p>El hallazgo necesita las dos mitades: una redirección y un destino roto. La
+segunda mitad sí se puede montar con ficheros —basta enlazar a una ruta que no exista— pero la
+primera no, porque el modo <code>filesystem</code> no emite 3xx.</p>
+<p>Los tests unitarios cubren la redirección directa a un 404, la cadena que acaba en un 410 y el
+caso en que el destino no llegó a rastrearse, donde la regla calla en vez de suponer.</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<!-- HTTP-LARGE-PAGE: el umbral del catálogo es 500 KB de HTML (512.000 bytes), así que el
+     fixture tiene que pasar de ahí de verdad: no hay forma de demostrar un umbral de tamaño con
+     un fichero pequeño. Los párrafos de relleno imitan lo que produce el defecto real, una
+     plantilla que vuelca en la página contenido que no muestra. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Una página con demasiado HTML</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Página de prueba cuyo documento HTML pasa de 500 KB sin contar imágenes ni scripts, que es el umbral de HTTP-LARGE-PAGE.">
+<meta property="og:title" content="Una página con demasiado HTML">
+<meta property="og:description" content="Medio megabyte de marcado.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>Medio megabyte de marcado</h1>
+<h2>Por qué esto es un problema</h2>
+<p>Medio megabyte de marcado es casi siempre una plantilla que vuelca en la página contenido que
+no muestra: un menú con las 4.000 categorías del catálogo, o un JSON de estado de la aplicación.
+El visitante lo descarga entero y el rastreador gasta presupuesto en leerlo.</p>
+<!-- El peso no se versiona: el arnés de fixtures expande este marcador a bytes de verdad al
+     rastrear el fixture, porque el umbral de la regla es de tamaño real y no hay forma de
+     demostrarlo con un fichero pequeño. Sin esto, el repositorio cargaría con medio megabyte
+     de relleno para siempre. Ver `crawlforge-core/tests/fixtures_de_reglas.rs`. -->
+<!--RELLENO:520000-->
+</main>
+</body>
+</html>

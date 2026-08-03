@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<!-- CANON-TO-4XX: el canonical apunta a una URL que no existe en el árbol publicado.
+     Hace falta el enlace además del canonical: el rastreo solo encola lo enlazado, así que sin
+     el <a> la URL de destino no tendría fila en `urls` y no habría con qué cruzar el canonical.
+     El canonical se escribe en la forma publicada, con barra final, porque el `JOIN` de la
+     regla es por texto contra `urls.url`. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Una página que canoniza a un error</title>
+<meta name="description" content="Una descripción correcta, de longitud suficiente para no llamar la atención de otras reglas del catálogo.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="canonical" href="https://fixture.local/no-existe/">
+</head>
+<body>
+<main><h1>Un encabezado correcto</h1>
+<p>Esta página se declara duplicada de algo que no existe.</p>
+<a href="/no-existe/">La URL del canonical</a></main>
+</body>
+</html>
