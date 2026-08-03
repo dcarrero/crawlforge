@@ -68,6 +68,17 @@ an API. No `unwrap()` or `expect()` outside tests and `main`. Conventional Commi
 numbered and forward-only, and a published one is never edited: a year-old crawl file must still
 open.
 
+## Versioning
+
+Do not bump the version in a pull request — it is set when a release is cut. But it helps to know
+what your change implies, because it decides when it ships:
+
+- **A new rule, or a rule that starts or stops firing, is a minor bump.** Someone's CI gate depends
+  on that behaviour, so it is never a patch.
+- **A change to the crawl file schema that older builds cannot open is major.**
+
+Rule IDs never change meaning. A historical diff between two crawls depends on it.
+
 ## Performance
 
 Two invariants that are easy to break by accident, both measured:

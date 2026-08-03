@@ -7,7 +7,19 @@ can drift apart.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## Versioning
+
+While the major version is 0, the API is not stable and minor versions may change it. In practice:
+
+- **Patch** — a fix that changes no behaviour anyone could be relying on.
+- **Minor** — a new rule, a new command, a new flag, or a fix that changes what a rule reports.
+  A rule that starts or stops firing is a minor bump: someone's CI gate depends on it.
+- **Major** — a change to the crawl file schema that older builds cannot open, or removing a
+  command. Not taken lightly, and 1.0.0 will mean the schema and the rule IDs are stable.
+
+Rule IDs never change meaning. A historical diff between two crawls depends on it.
+
+## [0.1.0] — 2026-08-03
 
 First public release. Everything below shipped before the repository was opened; it is recorded
 because the reasoning is worth more than the diff.

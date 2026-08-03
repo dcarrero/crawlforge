@@ -89,6 +89,21 @@ debe seguir abriéndose.
 
 **Conventional Commits**: `feat(core):`, `fix(rules):`, `docs:`.
 
+## 4.bis Versionado
+
+Semántico, y con el major en 0 la API no es estable. En la práctica:
+
+- **Patch** — un arreglo que no cambia ningún comportamiento del que alguien pueda depender.
+- **Minor** — una regla nueva, un comando, un flag, o un arreglo que cambia lo que una regla
+  reporta. **Que una regla empiece o deje de dispararse es minor**, nunca patch: la puerta de
+  integración continua de alguien depende de eso.
+- **Major** — un cambio de esquema que los binarios anteriores no puedan abrir, o quitar un
+  comando. `1.0.0` significará que el esquema y los IDs de regla son estables, así que **el salto
+  se consulta antes de darlo**.
+
+**Los IDs de regla no cambian de significado nunca.** Un diff histórico entre dos rastreos depende
+de ello.
+
 ## 5. Antipatrones
 
 Errores que este proyecto no puede permitirse:
