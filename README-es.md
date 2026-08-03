@@ -143,4 +143,12 @@ español.** Una regla sin caso de prueba es una regla de la que nadie se puede f
 
 ---
 
+## Autoría
+
+Desarrollado por **David Carrero Fernández-Baillo** — [carrero.es](https://carrero.es) — en
+**Color Vivo Internet, S.L.** — [colorvivo.com](https://colorvivo.com).
+
+Esta herramienta sale de una agencia que gestiona más de cien sitios: se escribió para resolver un
+problema propio, y las mediciones de este README salen de auditar sitios de los que respondemos.
+
 English version: [`README.md`](README.md)

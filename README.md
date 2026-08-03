@@ -137,4 +137,12 @@ both English and Spanish.** A rule with no test case is a rule nobody can trust,
 
 ---
 
+## Author
+
+Built by **David Carrero Fernández-Baillo** — [carrero.es](https://carrero.es) — at
+**Color Vivo Internet, S.L.** — [colorvivo.com](https://colorvivo.com).
+
+An agency that runs a hundred-plus sites is where this tool comes from: it was written to solve a
+problem we had, and the measurements in this README are from auditing sites we are responsible for.
+
 Spanish version: [`README-es.md`](README-es.md)
