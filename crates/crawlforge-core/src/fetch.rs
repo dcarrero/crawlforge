@@ -13,6 +13,9 @@ use url::Url;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Timeout total de una petición.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Timeout de una comprobación de estado de URL externa. Más corto que [`REQUEST_TIMEOUT`]
+/// a propósito: un host de terceros muerto no puede colgar la auditoría del usuario.
+pub const EXTERNAL_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 /// Reintentos antes de dar una URL por errónea.
 pub const MAX_RETRIES: u32 = 3;
 /// Límite de tamaño de una página. Superarlo marca `error_kind='toolarge'`.
@@ -120,6 +123,19 @@ pub struct FetchFailure {
     pub message: String,
 }
 
+/// Lo que devuelve una comprobación de estado de una URL externa: **solo cabeceras**.
+///
+/// No hay cuerpo a propósito: comprobar que un enlace resuelve es lo que hace el navegador
+/// cuando el visitante lo pulsa; no se indexa, no se almacena y no se sigue nada del sitio
+/// ajeno. `content_length` sale de la cabecera `Content-Length`, no de una descarga.
+#[derive(Debug, Clone)]
+pub struct StatusProbe {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub content_length: Option<u64>,
+    pub response_time_ms: u32,
+}
+
 /// Fuente de bytes. `HttpFetcher`, `FilesystemFetcher` y, en el futuro, un fetcher que renderice JavaScript.
 pub trait Fetcher: Send + Sync {
     fn fetch(
@@ -142,6 +158,32 @@ pub trait Fetcher: Send + Sync {
     /// es un TTFB, y avisar de que un `dist/` local «responde lento» sería un hallazgo inventado.
     fn is_network(&self) -> bool {
         true
+    }
+
+    /// ¿Puede esta fuente comprobar el estado de una URL externa?
+    ///
+    /// Solo el fetcher HTTP puede: el de sistema de ficheros no tiene cliente de red, así que
+    /// en modo `filesystem` las externas quedan registradas sin estado, como siempre.
+    fn can_check_status(&self) -> bool {
+        false
+    }
+
+    /// Comprueba el estado de una URL sin descargarla ni parsearla.
+    ///
+    /// Es la mitad de red de `CrawlLimits::check_external`: `HEAD` con timeout corto
+    /// ([`EXTERNAL_CHECK_TIMEOUT`]) y, si el servidor rechaza `HEAD` (405/501), un único
+    /// reintento con `GET` del que solo se leen las cabeceras. Sin reintentos de red: un host
+    /// ajeno que no responde ya es la respuesta, y el backoff de los reintentos multiplicaría
+    /// la espera por cada host muerto que el sitio enlace.
+    fn check_status(
+        &self,
+        _url: &Url,
+    ) -> impl std::future::Future<Output = std::result::Result<StatusProbe, FetchFailure>> + Send
+    {
+        std::future::ready(Err(FetchFailure {
+            kind: ErrorKind::Connection,
+            message: "status checks are not supported by this fetcher".to_string(),
+        }))
     }
 }
 
@@ -227,6 +269,39 @@ impl HttpFetcher {
         host.eq_ignore_ascii_case(&scope.host).then_some(scope.header_value.as_str())
     }
 
+    /// Una petición de solo cabeceras, con el timeout corto de las comprobaciones externas.
+    ///
+    /// El cuerpo no se lee nunca, ni siquiera en el `GET` de respaldo: la respuesta se suelta
+    /// con las cabeceras ya en mano, y `content_length` sale de la cabecera. Descargar el
+    /// cuerpo de un host ajeno sería exactamente lo que esta función promete no hacer.
+    async fn probe_once(
+        &self,
+        url: &Url,
+        method: reqwest::Method,
+    ) -> std::result::Result<StatusProbe, FetchFailure> {
+        let started = Instant::now();
+        let mut request = self
+            .client
+            .request(method, url.clone())
+            .timeout(EXTERNAL_CHECK_TIMEOUT);
+        // La credencial sigue acotada a su host; para una URL externa esto devuelve `None`.
+        if let Some(header) = self.auth_header_for(url) {
+            request = request.header(reqwest::header::AUTHORIZATION, header);
+        }
+        let response = request.send().await.map_err(|e| classify_reqwest_error(&e))?;
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        Ok(StatusProbe {
+            status: response.status().as_u16(),
+            content_type,
+            content_length: response.content_length(),
+            response_time_ms: started.elapsed().as_millis() as u32,
+        })
+    }
+
     /// Una sola petición, sin reintentos.
     async fn fetch_once(
         &self,
@@ -309,6 +384,24 @@ impl HttpFetcher {
 }
 
 impl Fetcher for HttpFetcher {
+    fn can_check_status(&self) -> bool {
+        true
+    }
+
+    /// `HEAD` y, si el servidor lo rechaza (405/501 — hay muchos que lo hacen), un único
+    /// reintento con `GET` del que solo se leen las cabeceras.
+    async fn check_status(
+        &self,
+        url: &Url,
+    ) -> std::result::Result<StatusProbe, FetchFailure> {
+        match self.probe_once(url, reqwest::Method::HEAD).await {
+            Ok(probe) if matches!(probe.status, 405 | 501) => {
+                self.probe_once(url, reqwest::Method::GET).await
+            }
+            other => other,
+        }
+    }
+
     async fn fetch(
         &self,
         url: &Url,

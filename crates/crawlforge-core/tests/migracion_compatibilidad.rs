@@ -37,6 +37,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (5, include_str!("../migrations/005_orphans_solo_paginas.sql")),
     (6, include_str!("../migrations/006_indice_html_hash.sql")),
     (7, include_str!("../migrations/007_indice_images_src.sql")),
+    (8, include_str!("../migrations/008_indice_unico_resources.sql")),
 ];
 
 struct Dir {

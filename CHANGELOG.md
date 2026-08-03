@@ -19,6 +19,41 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.3.0] — 2026-08-04
+
+### Added
+
+- **Broken external links are now reported, and the check is on by default.** `HTTP-404-EXTERNAL`
+  had been written, fixtured and tested since the beginning, and could never fire: external URLs
+  were recorded without ever being requested, so there was no status to report. They are now
+  probed for status only — `HEAD`, falling back to `GET` on a 405 or 501, never reading the body.
+  Each distinct URL is checked once no matter how many pages link to it, so a thousand links to
+  the same URL cost one request.
+
+  The probe is deliberately polite to servers that are not yours: one request in flight per
+  external host, its own 10-second timeout so a dead third party cannot stall your audit, and no
+  retries. It does not fetch the external host's `robots.txt` — verifying that a link resolves is
+  what the visitor's browser does when they click it, and nothing of that site is parsed, stored
+  or followed.
+
+  External checks do not count against `--max-urls`: that budget is for your own pages. A separate
+  `--max-external` (10,000) bounds the work, and when it is reached the summary says how many links
+  went unchecked — a cap that truncates silently makes an incomplete report look complete. Reaching
+  it never marks the crawl as truncated, which would suppress the rules that need a complete link
+  graph. `--no-external-check` turns the whole thing off.
+
+- **The `resources` table is populated.** It had existed in the schema since the first migration
+  and the writer had never inserted a row — a table that exists and lies is worse than no table.
+  One row per resource URL, with kind, status, size and mime; `kind` comes from the response
+  content type, falling back to the URL extension when the server sends nothing useful, which is
+  common for fonts. Migration 008 adds a unique index on `resources(url_id)`, so resuming an
+  interrupted crawl updates rows instead of duplicating them. Older crawl files still open.
+
+  There is no page-to-resource edge, on purpose. For images that edge already exists in `images`
+  and it matters: a 1.9 MB image used by one post from three years ago is not the same problem as
+  the same image in the template header. For CSS and JavaScript it matters much less, because a
+  900 KB bundle is loaded by the whole template — the file itself already identifies the problem.
+
 ## [0.2.0] — 2026-08-04
 
 Two promises the engine made and did not keep. Both were found by reading the code against its own

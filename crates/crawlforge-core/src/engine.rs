@@ -16,7 +16,7 @@ use crate::parse::{self, ParsedPage};
 use crate::robots::{HostRules, RobotsCache};
 use crate::store;
 use crate::writer::{
-    self, CrawlResult, CrawlState, ImageRow, IssueRow, LinkRow, PageRow, UrlRow,
+    self, CrawlResult, CrawlState, ImageRow, IssueRow, LinkRow, PageRow, ResourceRow, UrlRow,
 };
 use crawlforge_rules::{ImageView, LinkView, PageContext, PageRule};
 use rusqlite::Connection;
@@ -54,9 +54,18 @@ pub struct CrawlMetrics {
     pub elements_written: u64,
     /// Documentos HTML efectivamente parseados.
     ///
-    /// No coincide con `urls_fetched`: un rastreo comprueba el estado de imágenes, hojas de
-    /// estilo y scripts, y eso son URLs pero no páginas.
+    /// No coincide con `urls_fetched`: un rastreo pide también las imágenes, hojas de estilo
+    /// y scripts internos —URLs que se descargan para conocer su estado y su peso, quedan en
+    /// la tabla `resources`, y **no** se parsean como páginas ni aportan enlaces—.
     pub pages_parsed: u64,
+    /// URLs externas cuyo estado se comprobó (`CrawlLimits::check_external`): una sonda de
+    /// solo cabeceras por URL única. No cuentan en [`Self::urls_fetched`] ni contra
+    /// `max_urls`: el presupuesto del rastreo es del sitio del usuario.
+    pub externals_checked: u64,
+    /// URLs externas descubiertas por encima de `max_external`: quedaron registradas sin
+    /// estado. El resumen tiene que decir cuántas — un tope que trunca en silencio hace que
+    /// el informe parezca completo cuando no lo está.
+    pub externals_unchecked: u64,
     /// Duración del bucle de rastreo, sin el descubrimiento de sitemaps ni la pasada final.
     ///
     /// La eficiencia de paralelismo se calcula sobre esto y no sobre [`Self::elapsed`]: el suelo
@@ -850,6 +859,17 @@ async fn run_with<F: Fetcher + 'static>(
     // frente a 13,4 s teóricos). Con latencias uniformes el defecto no se ve, que es por lo
     // que el modo `filesystem` iba sobrado y el HTTP no.
     let mut in_flight = tokio::task::JoinSet::new();
+    // La comprobación de estado de las externas (`check_external`). Solo actúa cuando las
+    // externas no se rastrean enteras —con `follow_external` se piden como cualquier URL, que
+    // es más— y cuando la fuente puede hacer red: en modo `filesystem` no hay cliente HTTP y
+    // las externas quedan registradas sin estado, como siempre.
+    let external_checks =
+        job.limits.check_external && !job.limits.follow_external && fetcher.can_check_status();
+    let mut externals = ExternalQueue::default();
+    // Externas encoladas para comprobar, contra el tope `max_external`. Cuenta encoladas y no
+    // comprobadas: así el tope decide en el descubrimiento y las descartadas se cuentan una
+    // sola vez en `externals_unchecked`.
+    let mut externals_enqueued: u64 = 0;
     // URLs sacadas del frontier cuyo host estaba al límite al despachar. Se reintentan antes
     // de sacar nada nuevo, así que conservan su orden.
     let mut deferred: VecDeque<QueuedUrl> = VecDeque::new();
@@ -875,21 +895,49 @@ async fn run_with<F: Fetcher + 'static>(
         // semilla—, que el freno adaptativo puede haber reducido si ese servidor está dando
         // señales de ir ahogado.
         while in_flight.len() < MAX_TOTAL_IN_FLIGHT {
-            let Some(item) =
+            if let Some(item) =
                 next_dispatchable(&mut frontier, &mut deferred, &throttle, &in_flight_by_host)
-            else {
+            {
+                let host = item.url.host_str().unwrap_or_default().to_string();
+                *in_flight_by_host.entry(host.clone()).or_insert(0) += 1;
+                let fetcher = Arc::clone(&fetcher);
+                let robots = Arc::clone(&robots);
+                let throttle = Arc::clone(&throttle);
+                let pacer = Arc::clone(&pacer);
+                // Un incremento atómico, no una copia del trabajo: ver el `Arc::new` de arriba.
+                let job = Arc::clone(&job);
+                let task = in_flight.spawn(async move {
+                    let outcome =
+                        process_url(&*fetcher, &robots, &throttle, &pacer, &job, &item).await;
+                    (item, outcome)
+                });
+                host_by_task.insert(task.id(), host);
+                continue;
+            }
+            // Sin nada interno despachable: una comprobación de externa, si su host tiene
+            // hueco. Van detrás de lo interno a propósito — el rastreo del sitio del usuario
+            // no espera por el estado de un enlace ajeno.
+            let Some(url) = externals.next_dispatchable(&throttle, &in_flight_by_host) else {
                 break;
             };
-            let host = item.url.host_str().unwrap_or_default().to_string();
+            let host = url.host_str().unwrap_or_default().to_string();
             *in_flight_by_host.entry(host.clone()).or_insert(0) += 1;
             let fetcher = Arc::clone(&fetcher);
-            let robots = Arc::clone(&robots);
-            let throttle = Arc::clone(&throttle);
-            let pacer = Arc::clone(&pacer);
-            // Un incremento atómico, no una copia del trabajo: ver el `Arc::new` de arriba.
-            let job = Arc::clone(&job);
+            let item = QueuedUrl {
+                url,
+                depth: 0,
+                discovered_from: None,
+                source: DiscoverySource::Link,
+            };
             let task = in_flight.spawn(async move {
-                let outcome = process_url(&*fetcher, &robots, &throttle, &pacer, &job, &item).await;
+                // Ni el robots.txt ni el Crawl-delay del host ajeno se consultan, y es una
+                // decisión, no un olvido: comprobar que un enlace resuelve es lo que hace el
+                // navegador cuando el visitante lo pulsa — no se indexa, no se almacena y no
+                // se sigue nada del sitio ajeno. Pedir además su robots.txt casi duplicaría
+                // las peticiones a terceros para poder decir menos. La cortesía la ponen la
+                // única petición en vuelo por host (`Throttle::force_serial`, fijado al
+                // encolar) y el timeout corto de la sonda (`EXTERNAL_CHECK_TIMEOUT`).
+                let outcome = UrlOutcome::ExternalChecked(fetcher.check_status(&item.url).await);
                 (item, outcome)
             });
             host_by_task.insert(task.id(), host);
@@ -898,9 +946,11 @@ async fn run_with<F: Fetcher + 'static>(
         // Sin nada en vuelo y sin nada en la cola, el rastreo ha terminado. No basta con
         // mirar la cola: una petición en vuelo todavía puede descubrir enlaces nuevos. Y sin
         // nada en vuelo tampoco puede haber retenidas: con el límite mínimo de 1 por host,
-        // cualquier retenida se habría despachado en el rellenado de arriba.
+        // cualquier retenida —interna o externa— se habría despachado en el rellenado de
+        // arriba.
         if in_flight.is_empty() {
             debug_assert!(deferred.is_empty());
+            debug_assert!(externals.pending() == 0);
             break;
         }
 
@@ -956,8 +1006,39 @@ async fn run_with<F: Fetcher + 'static>(
                 }
                 UrlOutcome::Failed(failure) => {
                     metrics.urls_errored += 1;
+                    // Un recurso que no responde sigue siendo un recurso: la fila queda con
+                    // el `kind` de su extensión y el estado a NULL, que es la verdad.
+                    let resource = resource_row(hash, None, None, None, &item.url);
                     writer.send(CrawlResult {
                         url: Some(failed_row(&item, hash, &failure, in_sitemap.contains(&hash))),
+                        resource,
+                        ..Default::default()
+                    }).await?;
+                }
+                UrlOutcome::ExternalChecked(check) => {
+                    // Solo estado: se rellena la fila de `urls` (y la de `resources` si la
+                    // sonda clasifica la URL como recurso — un CSS en un CDN). Nada de esto
+                    // toca `urls_fetched`: el presupuesto `max_urls` es del sitio del usuario.
+                    metrics.externals_checked += 1;
+                    let (row, resource) = match &check {
+                        Ok(probe) => (
+                            external_checked_row(&item, hash, probe),
+                            resource_row(
+                                hash,
+                                probe.content_type.as_deref(),
+                                Some(probe.status),
+                                probe.content_length,
+                                &item.url,
+                            ),
+                        ),
+                        Err(failure) => (
+                            external_check_failed_row(&item, hash, failure),
+                            resource_row(hash, None, None, None, &item.url),
+                        ),
+                    };
+                    writer.send(CrawlResult {
+                        url: Some(row),
+                        resource,
                         ..Default::default()
                     }).await?;
                 }
@@ -1038,13 +1119,30 @@ async fn run_with<F: Fetcher + 'static>(
                             let internal = normalize::is_internal(&n.normalized, &seed_host);
                             if !internal && !job.limits.follow_external {
                                 // Las externas no se rastrean, pero sí se registran: el
-                                // informe necesita saber a dónde apunta el sitio.
+                                // informe necesita saber a dónde apunta el sitio. Y con
+                                // `check_external` —el defecto— además se les comprueba el
+                                // estado, una vez por URL única: es lo que hace posible
+                                // HTTP-404-EXTERNAL. La deduplicación la da el frontier: mil
+                                // enlaces a la misma externa entran aquí una sola vez.
                                 frontier.mark_seen(link_hash);
                                 metrics.urls_discovered += 1;
                                 writer.send(CrawlResult {
                                     url: Some(external_row(n, link_hash)),
                                     ..Default::default()
                                 }).await?;
+                                if external_checks {
+                                    if externals_enqueued < job.limits.max_external {
+                                        externals_enqueued += 1;
+                                        if let Some(h) = n.normalized.host_str() {
+                                            // Una petición en vuelo por host ajeno, sin
+                                            // recuperación: educación, no rendimiento.
+                                            throttle.force_serial(h);
+                                        }
+                                        externals.push(n.normalized.clone());
+                                    } else {
+                                        metrics.externals_unchecked += 1;
+                                    }
+                                }
                                 continue;
                             }
                             // Los patrones del usuario van antes que `nofollow` y que la
@@ -1203,7 +1301,7 @@ async fn run_with<F: Fetcher + 'static>(
         metrics.peak_rss_bytes = rss.sample_if_due();
         emitter.tick(
             &metrics,
-            (frontier.pending() + deferred.len() + in_flight.len()) as u64,
+            (frontier.pending() + deferred.len() + in_flight.len() + externals.pending()) as u64,
         );
     }
 
@@ -1709,7 +1807,25 @@ async fn resend_existing_rows(store_path: &Path, writer: &writer::WriterHandle) 
         for (id, row) in tramo {
             last_id = id;
             total += 1;
-            writer.send(CrawlResult { url: Some(row), ..Default::default() }).await?;
+            // La fila de `resources` se repone junto con la de `urls`. Cubre dos casos: el
+            // upsert del escritor la deja idéntica si ya estaba, y la **crea** si el fichero
+            // es de un esquema anterior a que el motor poblara la tabla — así un rastreo
+            // interrumpido antes de la migración 008 no queda con la tabla a medias.
+            let resource = row
+                .status_code
+                .is_some()
+                .then(|| Url::parse(&row.url).ok())
+                .flatten()
+                .and_then(|u| {
+                    resource_row(
+                        row.url_hash,
+                        row.content_type.as_deref(),
+                        row.status_code,
+                        row.content_length,
+                        &u,
+                    )
+                });
+            writer.send(CrawlResult { url: Some(row), resource, ..Default::default() }).await?;
         }
     }
 }
@@ -1800,6 +1916,75 @@ enum UrlOutcome {
     /// una por URL rastreada: sin indirección, cada exclusión pagaría el tamaño de un
     /// documento completo.
     Fetched(Box<FetchedOutcome>),
+    /// El resultado de la comprobación de estado de una URL externa (`check_external`):
+    /// solo cabeceras, sin cuerpo, sin parseo y sin enlaces.
+    ExternalChecked(std::result::Result<crate::fetch::StatusProbe, crate::fetch::FetchFailure>),
+}
+
+/// Cola de comprobaciones de estado de URLs externas.
+///
+/// Aparte del frontier a propósito: estas URLs no forman parte del rastreo (no cuentan contra
+/// `max_urls`, no se parsean, no aportan enlaces) y su único orden relevante es «una petición
+/// en vuelo por host ajeno». Se agrupa por host para que buscar una despachable recorra la
+/// ronda de hosts y no las URLs retenidas: con el límite en 1 por `force_serial`, un host con
+/// cien URLs pendientes tendría noventa y nueve retenidas en cada rellenado del pool.
+///
+/// La deduplicación no vive aquí: el índice de vistas del frontier corta las repeticiones
+/// antes de llegar a `push`.
+#[derive(Default)]
+struct ExternalQueue {
+    by_host: HashMap<String, VecDeque<Url>>,
+    /// Ronda de hosts con trabajo. Invariante: un host está aquí ⟺ su cola existe y no está
+    /// vacía.
+    hosts: VecDeque<String>,
+    pending: usize,
+}
+
+impl ExternalQueue {
+    fn push(&mut self, url: Url) {
+        let host = url.host_str().unwrap_or_default().to_string();
+        match self.by_host.entry(host.clone()) {
+            std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().push_back(url),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(VecDeque::from([url]));
+                self.hosts.push_back(host);
+            }
+        }
+        self.pending += 1;
+    }
+
+    /// La siguiente URL cuyo host tiene hueco, rotando la ronda de hosts para que uno lento
+    /// no acapare el turno.
+    fn next_dispatchable(
+        &mut self,
+        throttle: &crate::throttle::Throttle,
+        in_flight_by_host: &HashMap<String, usize>,
+    ) -> Option<Url> {
+        for _ in 0..self.hosts.len() {
+            let host = self.hosts.pop_front()?;
+            let in_flight = in_flight_by_host.get(&host).copied().unwrap_or(0);
+            if in_flight >= throttle.limit_for(&host) as usize {
+                self.hosts.push_back(host);
+                continue;
+            }
+            let Some(queue) = self.by_host.get_mut(&host) else { continue };
+            let url = queue.pop_front();
+            if queue.is_empty() {
+                self.by_host.remove(&host);
+            } else {
+                self.hosts.push_back(host);
+            }
+            if let Some(url) = url {
+                self.pending -= 1;
+                return Some(url);
+            }
+        }
+        None
+    }
+
+    fn pending(&self) -> usize {
+        self.pending
+    }
 }
 
 struct FetchedOutcome {
@@ -2473,6 +2658,115 @@ fn external_row(n: &NormalizedUrl, hash: i64) -> UrlRow {
     }
 }
 
+/// La fila de una URL externa cuyo estado se acaba de comprobar.
+///
+/// `crawl_state` sigue siendo `skipped`, y no es un descuido: «skipped» significa «no se
+/// rastreó», y sigue siendo verdad — solo se comprobó su estado. Marcarla `done` tendría un
+/// efecto secundario real: la reanudación descuenta las filas `done` del presupuesto
+/// `max_urls`, y las externas no cuentan contra ese presupuesto.
+fn external_checked_row(item: &QueuedUrl, hash: i64, probe: &crate::fetch::StatusProbe) -> UrlRow {
+    let mut row = base_row(item, hash, false);
+    row.depth = None;
+    row.is_internal = false;
+    row.crawl_state = CrawlState::Skipped;
+    row.status_code = Some(probe.status);
+    row.content_type = probe.content_type.clone();
+    row.content_length = probe.content_length;
+    row.response_time_ms = Some(probe.response_time_ms);
+    row.fetched_at = Some(now_iso8601());
+    row
+}
+
+/// Como [`external_checked_row`], para una sonda que falló: queda el motivo y ningún estado.
+fn external_check_failed_row(
+    item: &QueuedUrl,
+    hash: i64,
+    failure: &crate::fetch::FetchFailure,
+) -> UrlRow {
+    let mut row = base_row(item, hash, false);
+    row.depth = None;
+    row.is_internal = false;
+    row.crawl_state = CrawlState::Skipped;
+    row.error_kind = Some(failure.kind.as_str().to_string());
+    row.error_message = Some(failure.message.clone());
+    row.fetched_at = Some(now_iso8601());
+    row
+}
+
+/// La fila de `resources` de una URL ya pedida (o sondeada), si algo la clasifica como recurso.
+fn resource_row(
+    hash: i64,
+    content_type: Option<&str>,
+    status: Option<u16>,
+    size_bytes: Option<u64>,
+    url: &Url,
+) -> Option<ResourceRow> {
+    resource_kind(content_type, status, url).map(|kind| ResourceRow {
+        url_hash: hash,
+        kind,
+        status_code: status,
+        size_bytes,
+        mime: content_type.map(|s| s.to_string()),
+    })
+}
+
+/// Clasifica una respuesta como recurso (`'img'|'css'|'js'|'font'|'video'`), si lo es.
+///
+/// Manda el `content_type` de la respuesta; la extensión de la URL es el respaldo para cuando
+/// el servidor no manda uno útil (`application/octet-stream` es frecuente en fuentes) — y para
+/// los errores: el 404 de una hoja de estilo llega como `text/html`, y ese recurso roto es
+/// justo lo que la tabla tiene que enseñar. La única excepción del respaldo es una página HTML
+/// servida con 2xx: eso es una página, aunque su URL acabe en `.css`.
+fn resource_kind(content_type: Option<&str>, status: Option<u16>, url: &Url) -> Option<&'static str> {
+    if let Some(kind) = resource_kind_from_mime(content_type) {
+        return Some(kind);
+    }
+    let html_ok = status.is_some_and(|s| (200..300).contains(&s))
+        && content_type.is_some_and(|c| {
+            let c = c.to_ascii_lowercase();
+            c.contains("text/html") || c.contains("application/xhtml")
+        });
+    if html_ok {
+        return None;
+    }
+    resource_kind_from_extension(url)
+}
+
+fn resource_kind_from_mime(content_type: Option<&str>) -> Option<&'static str> {
+    let ct = content_type?.to_ascii_lowercase();
+    let mime = ct.split(';').next().unwrap_or("").trim().to_string();
+    if mime == "text/css" {
+        return Some("css");
+    }
+    // text/javascript, application/javascript, application/x-javascript, *ecmascript…
+    if mime.contains("javascript") || mime.contains("ecmascript") {
+        return Some("js");
+    }
+    if mime.starts_with("image/") {
+        return Some("img");
+    }
+    // font/woff2, application/font-woff, application/x-font-ttf, application/vnd.ms-fontobject.
+    if mime.starts_with("font/") || mime.contains("font") {
+        return Some("font");
+    }
+    if mime.starts_with("video/") {
+        return Some("video");
+    }
+    None
+}
+
+fn resource_kind_from_extension(url: &Url) -> Option<&'static str> {
+    let ext = url.path().rsplit('.').next()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "css" => Some("css"),
+        "js" | "mjs" => Some("js"),
+        "jpg" | "jpeg" | "png" | "webp" | "avif" | "svg" | "gif" | "ico" => Some("img"),
+        "woff" | "woff2" | "ttf" | "otf" | "eot" => Some("font"),
+        "mp4" | "webm" | "ogv" | "mov" | "m4v" => Some("video"),
+        _ => None,
+    }
+}
+
 /// Resuelve un href a su forma publicada, la misma que usa el frontier al encolar.
 ///
 /// Si dos consumidores resolvieran distinto, el JOIN por hash no encontraría el destino y el
@@ -2536,8 +2830,19 @@ fn build_result<F: Fetcher>(
         }
     }
 
+    // La fila de `resources`, si la respuesta clasifica la URL como recurso: es lo que puebla
+    // la tabla que existía desde la 001 y nadie escribía. Se calcula para cualquier respuesta
+    // —también un 404: el recurso roto es justo lo que hay que poder enseñar—.
+    let resource = resource_row(
+        hash,
+        doc.content_type.as_deref(),
+        Some(doc.status),
+        Some(doc.content_length()),
+        &doc.url,
+    );
+
     let Some(parsed) = page else {
-        return CrawlResult { url: Some(url_row), ..Default::default() };
+        return CrawlResult { url: Some(url_row), resource, ..Default::default() };
     };
 
     // Canonical resuelto a absoluto, para poder compararlo con la propia URL.
@@ -2736,7 +3041,7 @@ fn build_result<F: Fetcher>(
         })
         .collect();
 
-    CrawlResult { url: Some(url_row), page: Some(page_row), links, images, issues }
+    CrawlResult { url: Some(url_row), page: Some(page_row), links, images, issues, resource }
 }
 
 /// Las reglas de página que corresponden al nivel del trabajo.
@@ -3123,6 +3428,45 @@ mod tests {
         assert_eq!(TruncationReason::MaxUrls.as_str(), "max_urls");
         assert_eq!(TruncationReason::MaxDepth.as_str(), "max_depth");
         assert_eq!(TruncationReason::MaxDuration.as_str(), "max_duration");
+    }
+
+    #[test]
+    fn clasifica_los_recursos_por_content_type_con_la_extension_de_respaldo() {
+        let u = |s: &str| Url::parse(s).expect("URL de test válida");
+
+        // Manda el content_type de la respuesta, con o sin parámetros.
+        assert_eq!(resource_kind(Some("text/css"), Some(200), &u("https://x.es/a")), Some("css"));
+        assert_eq!(
+            resource_kind(Some("application/javascript; charset=utf-8"), Some(200), &u("https://x.es/a")),
+            Some("js")
+        );
+        assert_eq!(resource_kind(Some("image/webp"), Some(200), &u("https://x.es/a")), Some("img"));
+        assert_eq!(resource_kind(Some("font/woff2"), Some(200), &u("https://x.es/a")), Some("font"));
+        assert_eq!(
+            resource_kind(Some("application/vnd.ms-fontobject"), Some(200), &u("https://x.es/a")),
+            Some("font")
+        );
+        assert_eq!(resource_kind(Some("video/mp4"), Some(200), &u("https://x.es/a")), Some("video"));
+
+        // El respaldo por extensión: fuentes servidas como octet-stream, que es frecuente.
+        assert_eq!(
+            resource_kind(Some("application/octet-stream"), Some(200), &u("https://x.es/f.woff2")),
+            Some("font")
+        );
+        // Y los errores: el 404 de un CSS llega como text/html y tiene que seguir siendo css.
+        assert_eq!(
+            resource_kind(Some("text/html"), Some(404), &u("https://x.es/roto.css")),
+            Some("css")
+        );
+        // Un fallo de red no trae ni content_type ni estado: decide la extensión.
+        assert_eq!(resource_kind(None, None, &u("https://x.es/app.js")), Some("js"));
+
+        // Una página HTML servida con 2xx es una página, aunque su URL acabe en .css.
+        assert_eq!(resource_kind(Some("text/html"), Some(200), &u("https://x.es/raro.css")), None);
+        // Y lo que no es recurso, no es recurso.
+        assert_eq!(resource_kind(Some("text/html"), Some(200), &u("https://x.es/pagina")), None);
+        assert_eq!(resource_kind(Some("application/pdf"), Some(200), &u("https://x.es/doc.pdf")), None);
+        assert_eq!(resource_kind(None, None, &u("https://x.es/sin-extension")), None);
     }
 
     #[test]

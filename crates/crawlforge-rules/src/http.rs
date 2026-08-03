@@ -1103,8 +1103,9 @@ mod tests {
 
     #[test]
     fn una_url_externa_sin_estado_comprobado_no_da_hallazgo() {
-        // Es el estado actual del motor: las externas se registran pero no se piden. Sin dato,
-        // no hay hallazgo.
+        // Con `--no-external-check`, y con cualquier sonda que no llegue a completarse, la
+        // externa queda registrada sin estado. Sin dato no hay hallazgo: la regla calla en vez
+        // de afirmar que el enlace está bien, que sería mentir por omisión.
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
         insertar(&conn, Fila::externa(2, "https://otro.example/quizas", None));

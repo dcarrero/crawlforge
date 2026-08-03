@@ -18,6 +18,10 @@ const MIGRATIONS: &[(i64, &str, ResumeSafety)] = &[
     (5, include_str!("../migrations/005_orphans_solo_paginas.sql"), ResumeSafety::Safe),
     (6, include_str!("../migrations/006_indice_html_hash.sql"), ResumeSafety::Safe),
     (7, include_str!("../migrations/007_indice_images_src.sql"), ResumeSafety::Safe),
+    // `Safe` con matiz: el índice no cambia el significado de ninguna fila ya escrita, y el
+    // motor repone las filas de `resources` de la mitad antigua al reanudar (ver
+    // `engine::resend_existing_rows`), así que el fichero reanudado queda completo.
+    (8, include_str!("../migrations/008_indice_unico_resources.sql"), ResumeSafety::Safe),
 ];
 
 /// ¿Puede un rastreo a medias cruzar esta migración y seguir reanudándose?

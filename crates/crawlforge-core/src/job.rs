@@ -86,6 +86,23 @@ pub struct CrawlLimits {
     pub exclude_patterns: Vec<String>,
     /// Por defecto las externas solo se comprueban de estado, no se rastrean.
     pub follow_external: bool,
+    /// Comprobar el estado de las URLs externas enlazadas: `HEAD` (con `GET` de respaldo si
+    /// el servidor rechaza `HEAD`), una vez por URL, sin parsear ni seguir nada del sitio
+    /// ajeno. Es la mitad que faltaba de la promesa de `follow_external`: sin ella,
+    /// `HTTP-404-EXTERNAL` no podía dispararse nunca. Solo actúa cuando `follow_external`
+    /// está apagado — con él encendido las externas se rastrean enteras, que es más.
+    ///
+    /// El `default` de serde existe por la reanudación: un `config_json` guardado por un
+    /// binario anterior no trae el campo y debe deserializar con el comportamiento por defecto.
+    #[serde(default = "default_true")]
+    pub check_external: bool,
+    /// Tope de URLs externas comprobadas por rastreo. Al alcanzarlo, las restantes quedan
+    /// registradas sin estado y **se dice cuántas** (`CrawlMetrics::externals_unchecked`):
+    /// un tope que trunca en silencio hace que el informe parezca completo cuando no lo está.
+    /// No marca `crawl_meta.truncated`: ese campo significa «el rastreo del sitio del usuario
+    /// está incompleto» y apagaría las reglas de `REQUIERE_GRAFO_COMPLETO`.
+    #[serde(default = "default_max_external")]
+    pub max_external: u64,
     pub respect_nofollow: bool,
     /// 1..=20. Por defecto 5.
     pub concurrency_per_host: u8,
@@ -101,6 +118,16 @@ pub struct CrawlLimits {
     pub http_basic_auth: Option<HttpBasicAuth>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+/// El tope por defecto de externas comprobadas. Diez mil cubre con holgura cualquier sitio
+/// razonable y acota el coste en uno que enlace a medio internet.
+fn default_max_external() -> u64 {
+    10_000
+}
+
 impl Default for CrawlLimits {
     fn default() -> Self {
         Self {
@@ -111,6 +138,8 @@ impl Default for CrawlLimits {
             include_patterns: Vec::new(),
             exclude_patterns: Vec::new(),
             follow_external: false,
+            check_external: default_true(),
+            max_external: default_max_external(),
             respect_nofollow: true,
             concurrency_per_host: 5,
             user_agent: crate::fetch::DEFAULT_USER_AGENT.to_string(),
@@ -217,6 +246,10 @@ pub struct JobConfig {
     pub user_agent: Option<String>,
     pub ignore_robots: Option<bool>,
     pub follow_external: Option<bool>,
+    /// Comprobar el estado de las URLs externas enlazadas (activado por defecto).
+    pub check_external: Option<bool>,
+    /// Tope de URLs externas comprobadas por rastreo (10.000 por defecto).
+    pub max_external: Option<u64>,
     pub respect_nofollow: Option<bool>,
     /// Solo se rastrean las URLs que casen con alguno de estos patrones (regex, sin anclar).
     /// La semilla de un rastreo HTTP se rastrea siempre. Semántica completa: `pattern.rs`.
@@ -268,6 +301,12 @@ impl JobConfig {
         }
         if let Some(v) = self.follow_external {
             job.limits.follow_external = v;
+        }
+        if let Some(v) = self.check_external {
+            job.limits.check_external = v;
+        }
+        if let Some(n) = self.max_external {
+            job.limits.max_external = n;
         }
         if let Some(v) = self.respect_nofollow {
             job.limits.respect_nofollow = v;
@@ -532,9 +571,33 @@ mod tests {
         let l = CrawlLimits::default();
         assert_eq!(l.concurrency_per_host, 5);
         assert!(l.respect_nofollow);
-        assert!(!l.follow_external, "por defecto las externas solo se comprueban");
+        // «Por defecto las externas solo se comprueban» dejó de ser una promesa vacía cuando
+        // llegó `check_external`: la comprobación de estado existe y está activada de serie.
+        assert!(!l.follow_external, "por defecto las externas no se rastrean");
+        assert!(l.check_external, "…pero su estado sí se comprueba, como promete la doc");
+        assert_eq!(l.max_external, 10_000);
         assert!(!l.ignore_robots);
         assert_eq!(l.max_size_per_url, 10 * 1024 * 1024);
+    }
+
+    #[test]
+    fn un_config_json_antiguo_sin_check_external_deserializa_con_el_defecto() {
+        // La reanudación relee `crawl_meta.config_json` tal como lo guardó el binario
+        // original: un fichero anterior a `check_external`/`max_external` no trae los campos
+        // y tiene que seguir abriéndose (guarda de no regresión de compatibilidad).
+        let mut job = CrawlJob::http("https://ejemplo.es");
+        job.limits.check_external = false; // que el defecto no venga de casualidad
+        let mut json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&job).expect("serializar"))
+                .expect("releer");
+        let limits = json["limits"].as_object_mut().expect("limits es un objeto");
+        limits.remove("check_external");
+        limits.remove("max_external");
+
+        let back: CrawlJob =
+            serde_json::from_value(json).expect("un config_json antiguo debe seguir leyéndose");
+        assert!(back.limits.check_external, "sin el campo manda el valor por defecto");
+        assert_eq!(back.limits.max_external, 10_000);
     }
 
     #[test]
@@ -684,6 +747,24 @@ mod tests {
             job.limits.exclude_patterns,
             vec!["/wp-admin/".to_string(), r"\?s=".to_string()]
         );
+    }
+
+    #[test]
+    fn el_config_puede_apagar_y_acotar_la_comprobacion_de_externas() {
+        let mut job = CrawlJob::http("https://ejemplo.es");
+        let config: JobConfig =
+            serde_json::from_str("{\"check_external\": false, \"max_external\": 50}")
+                .expect("deserializar");
+        config.apply_to(&mut job).expect("configuración válida");
+        assert!(!job.limits.check_external);
+        assert_eq!(job.limits.max_external, 50);
+
+        // Y su ausencia no toca lo que hubiera.
+        let mut job = CrawlJob::http("https://ejemplo.es");
+        job.limits.max_external = 7;
+        JobConfig::default().apply_to(&mut job).expect("vacío siempre es válido");
+        assert_eq!(job.limits.max_external, 7);
+        assert!(job.limits.check_external);
     }
 
     #[test]

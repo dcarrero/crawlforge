@@ -166,6 +166,8 @@ struct CrawlLimits {
     include_patterns: Vec<Regex>,
     exclude_patterns: Vec<Regex>,
     follow_external: bool,        // por defecto: solo comprobar estado, no rastrear
+    check_external: bool,         // esa comprobación de estado; activada por defecto
+    max_external: u64,            // tope de externas comprobadas; 10_000 por defecto
     respect_nofollow: bool,
     concurrency_per_host: u8,     // 1..=20, por defecto 5
     user_agent: String,
@@ -176,6 +178,16 @@ struct CrawlLimits {
 limpiamente con `status='done'`, marca `truncated=true` en `crawl_meta`, y **muestra todos los
 hallazgos encontrados hasta ahí**. No se ocultan resultados: se limita la escala. Ver
 `00-VISION.md §6`.
+
+**La comprobación de externas es solo estado.** Una petición `HEAD` por URL externa única —con
+un `GET` de respaldo si el servidor responde 405/501—, con una sola petición en vuelo por host
+ajeno y un timeout más corto que el del rastreo: no se parsea, no se extraen enlaces, no se crea
+fila en `pages`; solo se rellena el estado de la fila de `urls`, que es lo que necesita
+`HTTP-404-EXTERNAL`. No se pide el `robots.txt` del host ajeno: comprobar que un enlace resuelve
+es lo que hace el navegador cuando el visitante lo pulsa, y pedirlo casi duplicaría las
+peticiones a terceros para poder decir menos. Las externas **no cuentan contra `max_urls`**, y
+alcanzar `max_external` **no marca `crawl_meta.truncated`** —ese campo apaga las reglas de
+`REQUIERE_GRAFO_COMPLETO`—: deja externas sin comprobar y el resumen dice cuántas.
 
 ### 9.bis Patrones de inclusión y exclusión (`pattern.rs`)
 

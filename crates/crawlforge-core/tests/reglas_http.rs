@@ -10,22 +10,15 @@
 //! Los tests son deterministas y no salen de `127.0.0.1`: el servidor asigna su propio puerto y
 //! sirve un mapa de rutas fijo.
 //!
-//! # Tres huecos del motor que este fichero documenta con un test
+//! # Los huecos del motor que este fichero documentó con un test
 //!
-//! Rastrear de verdad enseña lo que ningún test unitario podía enseñar, y aquí ha salido esto:
-//!
-//! 1. **Las URLs externas se registran pero nunca se piden** con la configuración por defecto, así
-//!    que `HTTP-404-EXTERNAL` no puede disparar. Lo fija
-//!    `el_motor_no_pide_las_urls_externas_y_por_eso_no_hay_404_externo`.
-//! 2. **`follow_external` no arregla lo anterior y además miente**: la URL ajena se rastrea, pero
-//!    su fila se queda con `is_internal = 1` y su 404 se reporta como `HTTP-404-INTERNAL`. Lo fija
-//!    `ni_con_follow_external_dispara_el_404_externo_y_encima_lo_cuenta_como_interno`.
-//! 3. **El destino de una redirección no se encola**: si nadie más lo enlaza, no llega a existir
-//!    como fila y la cadena se queda sin recorrer. Lo fija
-//!    `una_redireccion_a_una_url_que_nadie_enlaza_deja_la_cadena_sin_recorrer`.
-//!
-//! Ninguno de los tres se arregla desde aquí: un test que documenta un hueco vale más que un
-//! informe, porque falla el día que el hueco se cierra y obliga a actualizarlo.
+//! Rastrear de verdad enseña lo que ningún test unitario podía enseñar, y aquí salieron tres
+//! huecos. Los tres están cerrados: las URLs externas se comprueban de estado por defecto
+//! (`CrawlLimits::check_external`, demostrado de extremo a extremo en `tests/externas.rs`),
+//! `follow_external` marca las ajenas como lo que son, y el destino de una redirección se
+//! encola. Los tests que los documentaban fallaron el día del cierre —que era su función— y
+//! hoy fijan el comportamiento nuevo; el de las externas fija además que
+//! `check_external = false` recupera a propósito el comportamiento antiguo.
 
 mod support;
 
@@ -363,14 +356,12 @@ async fn un_canonical_que_apunta_a_una_redireccion_se_reporta() {
 // ---------------------------------------------------------------- Huecos del motor
 
 #[tokio::test]
-async fn el_motor_no_pide_las_urls_externas_y_por_eso_no_hay_404_externo() {
-    // **Hueco confirmado del motor.** `engine.rs::external_row` escribe la URL de otro dominio
-    // con `crawl_state='skipped'` y `status_code` nulo, y nadie vuelve a mirarla. Sin código de
-    // estado, `HTTP-404-EXTERNAL` no tiene de qué avisar, que es el comportamiento correcto de la
-    // regla: no inventa hallazgos con datos que no tiene. Lo que falta es del core, no de ella.
-    //
-    // `CrawlLimits::follow_external` promete otra cosa —«por defecto las externas solo se
-    // comprueban de estado»— y esa comprobación no existe.
+async fn por_defecto_la_externa_rota_recibe_su_404_y_la_regla_dispara() {
+    // Este test documentaba el hueco contrario —«las externas se registran pero nunca se
+    // piden, así que HTTP-404-EXTERNAL no puede disparar»— y falló el día que el hueco se
+    // cerró, que era su función. Hoy fija el cierre: con `check_external` (el defecto), la
+    // externa recibe una sonda de estado y el 404 ajeno por fin es un hallazgo. El detalle
+    // fino (HEAD, deduplicación, tope, robots ajeno) vive en `tests/externas.rs`.
     let ajeno = ServidorDePruebas::arrancar_como_otro_host(&[]).await;
     let propio = ServidorDePruebas::arrancar(&[(
         "/",
@@ -381,8 +372,35 @@ async fn el_motor_no_pide_las_urls_externas_y_por_eso_no_hay_404_externo() {
     let r = rastrear("externa-por-defecto", &propio).await;
 
     let externa = ajeno.url_como_otro_host("/muerta");
+    assert!(r.existe_url(&externa), "la URL externa se registra");
+    assert_eq!(r.estado(&externa), Some(404), "y su estado se comprueba");
+    assert_eq!(ajeno.peticiones("/muerta"), 1, "una sonda, no un rastreo");
+    assert_eq!(
+        r.urls_de("HTTP-404-EXTERNAL"),
+        vec![externa],
+        "con el estado en la fila, la regla ya tiene de qué avisar"
+    );
+}
+
+#[tokio::test]
+async fn sin_check_external_la_externa_queda_sin_estado_y_la_regla_calla() {
+    // El comportamiento antiguo, ahora elegido a propósito con `--no-external-check`: la URL
+    // ajena se registra sin estado, y la regla calla en vez de suponer.
+    let ajeno = ServidorDePruebas::arrancar_como_otro_host(&[]).await;
+    let propio = ServidorDePruebas::arrancar(&[(
+        "/",
+        portada(&[&ajeno.url_como_otro_host("/muerta")]),
+    )])
+    .await;
+
+    let r = rastrear_con("externa-apagada", &propio, |job| {
+        job.limits.check_external = false;
+    })
+    .await;
+
+    let externa = ajeno.url_como_otro_host("/muerta");
     assert!(r.existe_url(&externa), "la URL externa sí se registra");
-    assert_eq!(r.estado(&externa), None, "pero nunca se pide, así que no tiene estado");
+    assert_eq!(r.estado(&externa), None, "sin comprobación no hay estado");
     assert_eq!(ajeno.peticiones("/muerta"), 0, "el servidor ajeno no recibe ninguna petición");
     assert!(
         r.urls_de("HTTP-404-EXTERNAL").is_empty(),

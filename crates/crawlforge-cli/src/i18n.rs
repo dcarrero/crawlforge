@@ -211,6 +211,13 @@ pub mod msg {
             en: "Crawl truncated by {reason}. The findings shown are those found up to that point.",
             es: "Rastreo truncado por {reason}. Los hallazgos mostrados son los encontrados hasta ese punto.",
         }
+        // El tope de externas no trunca el rastreo del sitio —ese es `crawl_truncated`— pero
+        // dejar enlaces sin comprobar en silencio haría que el informe pareciera completo sin
+        // serlo, así que se dice cuántos quedaron fuera.
+        external_unchecked(n) {
+            en: "{n} external links were not checked: the max_external cap was reached. Raise it with --max-external.",
+            es: "{n} enlaces externos quedaron sin comprobar: se alcanzó el tope max_external. Súbelo con --max-external.",
+        }
         results_title() {
             en: "Results",
             es: "Resultados",

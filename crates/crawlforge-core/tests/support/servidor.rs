@@ -40,6 +40,9 @@ pub struct Respuesta {
     /// Valor exacto de `Authorization` sin el cual la ruta responde 401, como un staging
     /// protegido con Basic Auth. `None` = ruta pública.
     pub autorizacion_requerida: Option<String>,
+    /// Responder 405 a las peticiones `HEAD`, como los servidores que lo rechazan. Es lo
+    /// que provoca el `GET` de respaldo de la comprobación de externas.
+    pub rechaza_head: bool,
 }
 
 impl Respuesta {
@@ -50,6 +53,7 @@ impl Respuesta {
             body: body.into(),
             retardo: Duration::ZERO,
             autorizacion_requerida: None,
+            rechaza_head: false,
         }
     }
 
@@ -118,6 +122,14 @@ impl Respuesta {
         self
     }
 
+    /// La misma respuesta, pero respondiendo 405 a `HEAD`: hay muchos servidores que lo
+    /// rechazan, y la comprobación de externas tiene que caer al `GET` de respaldo.
+    #[allow(dead_code)]
+    pub fn rechazando_head(mut self) -> Self {
+        self.rechaza_head = true;
+        self
+    }
+
     /// El 401 con el que responde una ruta protegida, con su `WWW-Authenticate` de rigor.
     fn no_autorizada() -> Self {
         let mut r = Self::pagina("401 Unauthorized", "<p>Authentication required.</p>");
@@ -132,7 +144,18 @@ impl Respuesta {
         Self::error(404)
     }
 
-    fn serializar(&self) -> Vec<u8> {
+    /// El 405 con el que una ruta que rechaza `HEAD` responde a ese método.
+    fn metodo_no_permitido() -> Self {
+        let mut r = Self::pagina("405 Method Not Allowed", "<p>Use GET.</p>");
+        r.status = 405;
+        r.headers.push(("Allow".to_string(), "GET".to_string()));
+        r
+    }
+
+    /// `sin_cuerpo`: para una petición `HEAD`, las cabeceras —`Content-Length` incluida—
+    /// prometen lo que un `GET` devolvería, pero el cuerpo no viaja. Es lo que hace un
+    /// servidor real y lo que permite afirmar que una sonda de estado no descargó nada.
+    fn serializar(&self, sin_cuerpo: bool) -> Vec<u8> {
         let mut salida = format!("HTTP/1.1 {} {}\r\n", self.status, motivo(self.status));
         for (nombre, valor) in &self.headers {
             salida.push_str(&format!("{nombre}: {valor}\r\n"));
@@ -140,7 +163,9 @@ impl Respuesta {
         salida.push_str(&format!("Content-Length: {}\r\n", self.body.len()));
         salida.push_str("Connection: close\r\n\r\n");
         let mut bytes = salida.into_bytes();
-        bytes.extend_from_slice(self.body.as_bytes());
+        if !sin_cuerpo {
+            bytes.extend_from_slice(self.body.as_bytes());
+        }
         bytes
     }
 }
@@ -150,6 +175,7 @@ impl Respuesta {
 fn motivo(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        405 => "Method Not Allowed",
         301 => "Moved Permanently",
         302 => "Found",
         307 => "Temporary Redirect",
@@ -171,6 +197,9 @@ type Autorizaciones = Arc<Mutex<HashMap<String, Vec<Option<String>>>>>;
 /// El instante en que llegó cada petición, por ruta y en orden. Es cómo se afirma que un
 /// `Crawl-delay` espació los arranques — o que no los espació.
 type Llegadas = Arc<Mutex<HashMap<String, Vec<std::time::Instant>>>>;
+/// El método HTTP de cada petición a una ruta, en orden de llegada: es cómo se afirma que la
+/// comprobación de externas usó `HEAD` — y que cayó a `GET` cuando el servidor lo rechazó.
+type Metodos = Arc<Mutex<HashMap<String, Vec<String>>>>;
 
 /// Un servidor de pruebas vivo. Se apaga al soltarlo.
 pub struct ServidorDePruebas {
@@ -179,6 +208,7 @@ pub struct ServidorDePruebas {
     peticiones: Contador,
     autorizaciones: Autorizaciones,
     llegadas: Llegadas,
+    metodos: Metodos,
     tareas: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -203,15 +233,17 @@ impl ServidorDePruebas {
         let peticiones: Contador = Arc::new(Mutex::new(HashMap::new()));
         let autorizaciones: Autorizaciones = Arc::new(Mutex::new(HashMap::new()));
         let llegadas: Llegadas = Arc::new(Mutex::new(HashMap::new()));
+        let metodos: Metodos = Arc::new(Mutex::new(HashMap::new()));
         let tareas = vec![{
             let mapa = Arc::clone(&mapa);
             let peticiones = Arc::clone(&peticiones);
             let autorizaciones = Arc::clone(&autorizaciones);
             let llegadas = Arc::clone(&llegadas);
-            tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones, llegadas))
+            let metodos = Arc::clone(&metodos);
+            tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones, llegadas, metodos))
         }];
 
-        Self { puerto, peticiones, autorizaciones, llegadas, tareas }
+        Self { puerto, peticiones, autorizaciones, llegadas, metodos, tareas }
     }
 
     /// [`Self::arrancar_con_puerto`] y [`Self::arrancar_como_otro_host`] a la vez: rutas que
@@ -233,6 +265,7 @@ impl ServidorDePruebas {
         let peticiones: Contador = Arc::new(Mutex::new(HashMap::new()));
         let autorizaciones: Autorizaciones = Arc::new(Mutex::new(HashMap::new()));
         let llegadas: Llegadas = Arc::new(Mutex::new(HashMap::new()));
+        let metodos: Metodos = Arc::new(Mutex::new(HashMap::new()));
         let tareas = escuchas
             .into_iter()
             .map(|escucha| {
@@ -240,11 +273,12 @@ impl ServidorDePruebas {
                 let peticiones = Arc::clone(&peticiones);
                 let autorizaciones = Arc::clone(&autorizaciones);
                 let llegadas = Arc::clone(&llegadas);
-                tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones, llegadas))
+                let metodos = Arc::clone(&metodos);
+                tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones, llegadas, metodos))
             })
             .collect();
 
-        Self { puerto, peticiones, autorizaciones, llegadas, tareas }
+        Self { puerto, peticiones, autorizaciones, llegadas, metodos, tareas }
     }
 
     /// Igual, pero además intenta escuchar en `[::1]` con el mismo puerto.
@@ -266,6 +300,7 @@ impl ServidorDePruebas {
         let peticiones: Contador = Arc::new(Mutex::new(HashMap::new()));
         let autorizaciones: Autorizaciones = Arc::new(Mutex::new(HashMap::new()));
         let llegadas: Llegadas = Arc::new(Mutex::new(HashMap::new()));
+        let metodos: Metodos = Arc::new(Mutex::new(HashMap::new()));
 
         let escucha = TcpListener::bind("127.0.0.1:0").await.expect("abrir el puerto de pruebas");
         let puerto = escucha.local_addr().expect("puerto asignado").port();
@@ -284,11 +319,12 @@ impl ServidorDePruebas {
                 let peticiones = Arc::clone(&peticiones);
                 let autorizaciones = Arc::clone(&autorizaciones);
                 let llegadas = Arc::clone(&llegadas);
-                tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones, llegadas))
+                let metodos = Arc::clone(&metodos);
+                tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones, llegadas, metodos))
             })
             .collect();
 
-        Self { puerto, peticiones, autorizaciones, llegadas, tareas }
+        Self { puerto, peticiones, autorizaciones, llegadas, metodos, tareas }
     }
 
     /// URL base del sitio, con la barra final.
@@ -329,6 +365,18 @@ impl ServidorDePruebas {
             .unwrap_or_default()
     }
 
+    /// El método HTTP de cada petición a una ruta, en orden de llegada. Es cómo se afirma
+    /// que una comprobación de estado usó `HEAD` — y que cayó a `GET` ante un 405.
+    #[allow(dead_code)]
+    pub fn metodos(&self, ruta: &str) -> Vec<String> {
+        self.metodos
+            .lock()
+            .expect("el registro de métodos no debería envenenarse")
+            .get(ruta)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Instantes de llegada de cada petición a una ruta, en orden. Se toman al leer la
     /// petición, antes de aplicar ningún retardo de respuesta: miden cuándo **arrancó** la
     /// petición del cliente, que es lo que un `Crawl-delay` promete espaciar.
@@ -359,6 +407,7 @@ async fn aceptar(
     peticiones: Contador,
     autorizaciones: Autorizaciones,
     llegadas: Llegadas,
+    metodos: Metodos,
 ) {
     let mut conexiones = tokio::task::JoinSet::new();
     loop {
@@ -374,6 +423,7 @@ async fn aceptar(
             Arc::clone(&peticiones),
             Arc::clone(&autorizaciones),
             Arc::clone(&llegadas),
+            Arc::clone(&metodos),
         ));
     }
 }
@@ -384,8 +434,9 @@ async fn atender(
     peticiones: Contador,
     autorizaciones: Autorizaciones,
     llegadas: Llegadas,
+    metodos: Metodos,
 ) {
-    let Some((objetivo, autorizacion)) = leer_peticion(&mut stream).await else {
+    let Some((metodo, objetivo, autorizacion)) = leer_peticion(&mut stream).await else {
         return;
     };
 
@@ -398,8 +449,18 @@ async fn atender(
     if let Ok(mut registro) = llegadas.lock() {
         registro.entry(objetivo.clone()).or_default().push(std::time::Instant::now());
     }
+    if let Ok(mut registro) = metodos.lock() {
+        registro.entry(objetivo.clone()).or_default().push(metodo.clone());
+    }
 
+    let es_head = metodo.eq_ignore_ascii_case("HEAD");
     let respuesta = rutas.get(&objetivo).cloned().unwrap_or_else(Respuesta::no_encontrada);
+    // Un servidor que rechaza HEAD responde 405 sin mirar nada más, como los reales.
+    let respuesta = if es_head && respuesta.rechaza_head {
+        Respuesta::metodo_no_permitido()
+    } else {
+        respuesta
+    };
     // Una ruta protegida responde 401 salvo que la petición traiga la `Authorization` exacta,
     // como haría el Basic Auth de un staging real.
     let respuesta = match &respuesta.autorizacion_requerida {
@@ -412,19 +473,20 @@ async fn atender(
         tokio::time::sleep(respuesta.retardo).await;
     }
 
-    let _ = stream.write_all(&respuesta.serializar()).await;
+    // A un HEAD se le responde sin cuerpo, con las cabeceras del GET equivalente.
+    let _ = stream.write_all(&respuesta.serializar(es_head)).await;
     let _ = stream.flush().await;
     let _ = stream.shutdown().await;
 }
 
-/// Lee la petición hasta la línea en blanco y devuelve su objetivo (`/ruta?consulta`) y su
-/// cabecera `Authorization`, si la traía.
+/// Lee la petición hasta la línea en blanco y devuelve su método, su objetivo
+/// (`/ruta?consulta`) y su cabecera `Authorization`, si la traía.
 ///
-/// No se interpreta nada más: el motor solo hace `GET`, y un servidor de pruebas que valide
-/// cabeceras solo puede fallar de formas que no enseñan nada sobre el motor. `Authorization`
-/// es la excepción con propósito: es lo que permite montar un staging protegido y afirmar a
-/// qué host viajó una credencial — y a cuál no.
-async fn leer_peticion(stream: &mut TcpStream) -> Option<(String, Option<String>)> {
+/// No se interpreta casi nada más: un servidor de pruebas que valide cabeceras solo puede
+/// fallar de formas que no enseñan nada sobre el motor. Las dos excepciones tienen propósito:
+/// `Authorization` permite montar un staging protegido y afirmar a qué host viajó una
+/// credencial, y el método permite afirmar que una comprobación de estado fue `HEAD`.
+async fn leer_peticion(stream: &mut TcpStream) -> Option<(String, String, Option<String>)> {
     let mut crudo = Vec::new();
     let mut buffer = [0u8; 1024];
 
@@ -442,7 +504,7 @@ async fn leer_peticion(stream: &mut TcpStream) -> Option<(String, Option<String>
     let texto = String::from_utf8_lossy(&crudo);
     let primera = texto.lines().next()?;
     let mut partes = primera.split_whitespace();
-    let _metodo = partes.next()?;
+    let metodo = partes.next()?.to_string();
     let objetivo = partes.next()?.to_string();
 
     let autorizacion = texto.lines().skip(1).take_while(|l| !l.is_empty()).find_map(|linea| {
@@ -453,5 +515,5 @@ async fn leer_peticion(stream: &mut TcpStream) -> Option<(String, Option<String>
             .then(|| valor.trim().to_string())
     });
 
-    Some((objetivo, autorizacion))
+    Some((metodo, objetivo, autorizacion))
 }

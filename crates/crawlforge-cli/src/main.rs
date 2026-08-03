@@ -71,6 +71,15 @@ enum Command {
         /// Ignore robots.txt. Only for sites you own.
         #[arg(long)]
         ignore_robots: bool,
+        /// Do not check the status of external links. By default every unique external URL
+        /// gets one HEAD request (status only, nothing is crawled), which is what makes
+        /// broken external links reportable.
+        #[arg(long)]
+        no_external_check: bool,
+        /// Stop checking external links after this many. The summary says how many were
+        /// left unchecked [default: 10000].
+        #[arg(long, value_name = "N")]
+        max_external: Option<u64>,
         /// Only crawl URLs matching this regex (repeatable; a plain string matches anywhere
         /// in the URL). The seed URL is always crawled. Overrides the config file.
         #[arg(long, value_name = "REGEX")]
@@ -329,6 +338,8 @@ async fn main() -> Result<()> {
             max_depth,
             no_sitemaps,
             ignore_robots,
+            no_external_check,
+            max_external,
             include,
             exclude,
             csv,
@@ -346,7 +357,15 @@ async fn main() -> Result<()> {
             apply_config_file(&mut job, config.as_deref())?;
             apply_crawl_flags(
                 &mut job,
-                &CrawlFlags { concurrency, max_urls, max_depth, no_sitemaps, ignore_robots },
+                &CrawlFlags {
+                    concurrency,
+                    max_urls,
+                    max_depth,
+                    no_sitemaps,
+                    ignore_robots,
+                    no_external_check,
+                    max_external,
+                },
             );
             apply_pattern_flags(&mut job, include, exclude);
             apply_http_auth(&mut job, &url, url_auth)?;
@@ -537,6 +556,8 @@ struct CrawlFlags {
     max_depth: Option<u32>,
     no_sitemaps: bool,
     ignore_robots: bool,
+    no_external_check: bool,
+    max_external: Option<u64>,
 }
 
 /// Carga `--config` sobre el trabajo, si se pidió. Los flags se aplican después y ganan.
@@ -575,6 +596,12 @@ fn apply_crawl_flags(job: &mut CrawlJob, flags: &CrawlFlags) {
     }
     if flags.ignore_robots {
         job.limits.ignore_robots = true;
+    }
+    if flags.no_external_check {
+        job.limits.check_external = false;
+    }
+    if let Some(n) = flags.max_external {
+        job.limits.max_external = n;
     }
 }
 
@@ -1940,6 +1967,8 @@ mod tests {
                 max_depth: None,
                 no_sitemaps: false,
                 ignore_robots: false, // no darlo no des-activa lo que pidió el fichero
+                no_external_check: false,
+                max_external: None,
             },
         );
 

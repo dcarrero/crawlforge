@@ -131,6 +131,23 @@ pub struct ImageRow {
     pub format: Option<String>,
 }
 
+/// Fila de `resources`: **una por URL de recurso**, no por par (página, recurso).
+///
+/// La arista página↔recurso no existe a propósito (`docs/02-MODELO-DATOS.md §3.5`): en CSS y
+/// JS aporta mucho menos que en imágenes —un `bundle.js` pesado se carga en toda la plantilla,
+/// no en una página concreta—, así que el fichero ya identifica el problema. Para las imágenes
+/// esa arista sí existe y vive en `images`.
+#[derive(Debug, Clone)]
+pub struct ResourceRow {
+    pub url_hash: i64,
+    /// 'img'|'css'|'js'|'font'|'video'. Deducido del `content_type` de la respuesta, con la
+    /// extensión de la URL como respaldo (ver `engine::resource_kind`).
+    pub kind: &'static str,
+    pub status_code: Option<u16>,
+    pub size_bytes: Option<u64>,
+    pub mime: Option<String>,
+}
+
 /// Fila de `issues`.
 #[derive(Debug, Clone)]
 pub struct IssueRow {
@@ -150,6 +167,8 @@ pub struct CrawlResult {
     pub links: Vec<LinkRow>,
     pub images: Vec<ImageRow>,
     pub issues: Vec<IssueRow>,
+    /// La fila de `resources` de esta URL, si la respuesta la clasifica como recurso.
+    pub resource: Option<ResourceRow>,
 }
 
 /// Un lote acumulado, listo para escribirse en una sola transacción.
@@ -160,6 +179,7 @@ pub struct Batch {
     pub links: Vec<LinkRow>,
     pub images: Vec<ImageRow>,
     pub issues: Vec<IssueRow>,
+    pub resources: Vec<ResourceRow>,
 }
 
 impl Batch {
@@ -173,6 +193,9 @@ impl Batch {
         self.links.extend(result.links);
         self.images.extend(result.images);
         self.issues.extend(result.issues);
+        if let Some(r) = result.resource {
+            self.resources.push(r);
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -185,6 +208,7 @@ impl Batch {
             && self.links.is_empty()
             && self.images.is_empty()
             && self.issues.is_empty()
+            && self.resources.is_empty()
     }
 
     pub fn is_full(&self) -> bool {
@@ -217,6 +241,7 @@ pub fn write_batch(conn: &mut Connection, batch: &Batch, index: &mut IdIndex) ->
     insert_links(&tx, &batch.links, index)?;
     insert_images(&tx, &batch.images, index)?;
     insert_issues(&tx, &batch.issues, index)?;
+    insert_resources(&tx, &batch.resources, index)?;
     tx.commit()?;
     Ok(())
 }
@@ -448,6 +473,38 @@ fn insert_images(tx: &Transaction<'_>, rows: &[ImageRow], index: &IdIndex) -> Re
     Ok(())
 }
 
+fn insert_resources(tx: &Transaction<'_>, rows: &[ResourceRow], index: &IdIndex) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    // El `url_id` se resuelve contra el índice en memoria, como `links` e `images`: nunca un
+    // JOIN por fila. El upsert existe por la reanudación, que repone estas filas junto con las
+    // de `urls` (`engine::resend_existing_rows`): reponer actualiza, no duplica. El índice
+    // único que lo hace posible es la migración 008.
+    let mut stmt = tx.prepare_cached(
+        "INSERT INTO resources (url_id, kind, status_code, size_bytes, mime)
+         VALUES (?1,?2,?3,?4,?5)
+         ON CONFLICT(url_id) DO UPDATE SET
+             kind        = excluded.kind,
+             status_code = COALESCE(excluded.status_code, resources.status_code),
+             size_bytes  = COALESCE(excluded.size_bytes, resources.size_bytes),
+             mime        = COALESCE(excluded.mime, resources.mime)",
+    )?;
+    for r in rows {
+        // Sin fila de URL no hay recurso al que colgarse: se omite en vez de violar la clave
+        // foránea y tumbar la transacción entera. Mismo criterio que `insert_links`.
+        let Some(&url_id) = index.get(&r.url_hash) else { continue };
+        stmt.execute(params![
+            url_id,
+            r.kind,
+            r.status_code,
+            r.size_bytes.map(|v| v as i64),
+            r.mime,
+        ])?;
+    }
+    Ok(())
+}
+
 fn insert_issues(tx: &Transaction<'_>, rows: &[IssueRow], index: &IdIndex) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
@@ -540,6 +597,7 @@ pub struct WriterStats {
     pub links: u64,
     pub images: u64,
     pub issues: u64,
+    pub resources: u64,
     pub batches: u64,
 }
 
@@ -658,6 +716,7 @@ fn flush(
     stats.links += batch.links.len() as u64;
     stats.images += batch.images.len() as u64;
     stats.issues += batch.issues.len() as u64;
+    stats.resources += batch.resources.len() as u64;
     stats.batches += 1;
 
     write_batch(conn, batch, index)?;

@@ -133,8 +133,6 @@ pub struct ParsedPage {
     pub headings: Vec<Heading>,
     pub links: Vec<RawLink>,
     pub images: Vec<RawImage>,
-    pub stylesheets: Vec<String>,
-    pub scripts: Vec<String>,
     pub og: Vec<(String, String)>,
     pub twitter: Vec<(String, String)>,
     pub schema_types: Vec<String>,
@@ -524,8 +522,9 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                         a.page.hreflang.push((lang, href));
                                     }
                                 }
+                                // El recurso viaja como un `RawLink` más: es lo que lo
+                                // encola, lo deja en `links` y —tras pedirlo— en `resources`.
                                 "stylesheet" => {
-                                    a.page.stylesheets.push(href.clone());
                                     let region = a.current_region();
                                     let position = a.link_position;
                                     a.link_position += 1;
@@ -743,7 +742,6 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 _ => return Ok(()),
                             };
                             let mut a = acc.borrow_mut();
-                            a.page.scripts.push(src.clone());
                             let region = a.current_region();
                             let position = a.link_position;
                             a.link_position += 1;
@@ -1373,14 +1371,16 @@ mod tests {
 
     #[test]
     fn recoge_hojas_de_estilo_scripts_e_iframes() {
+        // Como enlaces con su elemento, que es el único camino que alguien consume: por él
+        // se encolan, se piden y acaban en `resources`. Los campos aparte que había
+        // (`page.stylesheets`, `page.scripts`) no los leía nadie y se retiraron.
         let p = parse(
             r#"<head><link rel="stylesheet" href="/e.css"></head>
                <body><script src="/a.js"></script><iframe src="/marco"></iframe></body>"#,
         );
-        assert_eq!(p.stylesheets, vec!["/e.css"]);
-        assert_eq!(p.scripts, vec!["/a.js"]);
+        assert!(p.links.iter().any(|l| l.element == LinkElement::Link && l.href == "/e.css"));
+        assert!(p.links.iter().any(|l| l.element == LinkElement::Script && l.href == "/a.js"));
         assert!(p.links.iter().any(|l| l.element == LinkElement::Iframe && l.href == "/marco"));
-        assert!(p.links.iter().any(|l| l.element == LinkElement::Link));
     }
 
     // --- JSON-LD ---

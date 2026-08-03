@@ -30,8 +30,17 @@ concurrency: 8
 # Ignorar robots.txt. Solo en sitios propios.
 # ignore_robots: false
 
-# Rastrear también las URLs externas enlazadas (por defecto solo se registran).
+# Rastrear también las URLs externas enlazadas (por defecto solo se comprueba su estado).
 # follow_external: false
+
+# Comprobar el estado de las URLs externas enlazadas: una petición HEAD por URL única,
+# sin rastrear nada del sitio ajeno. Es lo que detecta los enlaces externos rotos.
+# Activado por defecto; en la línea de comandos, --no-external-check lo apaga.
+# check_external: true
+
+# Tope de URLs externas comprobadas por rastreo. Al alcanzarlo, el resumen dice
+# cuántas quedaron sin comprobar.
+# max_external: 10000
 
 # Respetar rel="nofollow" al descubrir enlaces. Por defecto, sí.
 # respect_nofollow: true

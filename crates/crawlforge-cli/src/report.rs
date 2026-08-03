@@ -80,6 +80,18 @@ fn print_truncation(outcome: &CrawlOutcome, lang: Lang) {
         // traduce: es literalmente el nombre del límite que lo causó.
         println!("  {}", msg::crawl_truncated(lang, reason.as_str()));
     }
+    // Alcanzar `max_external` **no** es un truncado del rastreo (no toca `crawl_meta.truncated`
+    // ni apaga ninguna regla), pero sí deja enlaces sin comprobar y hay que decir cuántos.
+    if outcome.metrics.externals_unchecked > 0 {
+        println!();
+        println!(
+            "  {}",
+            msg::external_unchecked(
+                lang,
+                i18n::group_thousands(lang, outcome.metrics.externals_unchecked)
+            )
+        );
+    }
 }
 
 /// Métricas de motor. **En inglés a propósito**: es salida de desarrollo detrás de `--bench`,

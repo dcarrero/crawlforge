@@ -1,0 +1,15 @@
+-- 008 · Índice único sobre resources(url_id).
+--
+-- La tabla `resources` existe desde la 001 y el escritor empieza a poblarla ahora: una fila
+-- por URL de recurso (CSS, JS, imagen, fuente), no por par (página, recurso) — esa arista
+-- vive en `images` para las imágenes y se decidió no construirla para el resto
+-- (`docs/02-MODELO-DATOS.md §3.5`).
+--
+-- El índice único es lo que hace ejecutable esa semántica: el escritor inserta con
+-- `ON CONFLICT(url_id) DO UPDATE`, así que reponer filas en una reanudación —que reenvía
+-- todas las URLs ya escritas para reconstruir su índice en memoria— actualiza en vez de
+-- duplicar. Sin unicidad, cada reanudación sumaría una copia de cada recurso.
+--
+-- La tabla está vacía en todo fichero anterior a esta migración (nadie la escribía), así que
+-- crear el índice único no puede fallar por duplicados preexistentes.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_url ON resources(url_id);

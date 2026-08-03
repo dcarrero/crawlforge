@@ -191,6 +191,14 @@ CREATE INDEX idx_images_page ON images(page_url_id);
 CREATE INDEX idx_images_alt  ON images(alt_present);
 ```
 
+`resources` es **una fila por URL de recurso**, no por par (página, recurso) — fíjate en que no
+tiene `page_url_id`, y es a propósito: en CSS y JS la arista página↔recurso aporta mucho menos
+que en imágenes (un `bundle.js` de 900 KB se carga en toda la plantilla, no en una entrada
+concreta), así que el fichero ya identifica el problema. Para las imágenes esa arista sí existe
+y vive en `images`. El `kind` se deduce del `content_type` de la respuesta, con la extensión de
+la URL como respaldo cuando el servidor no manda uno útil (`application/octet-stream` es
+frecuente en fuentes). La unicidad por `url_id` la garantiza el índice de la migración 008.
+
 ### 3.6 Hallazgos — la tabla que es el producto
 
 ```sql
