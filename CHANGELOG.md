@@ -19,6 +19,30 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.2.0] — 2026-08-04
+
+Two promises the engine made and did not keep. Both were found by reading the code against its own
+documentation, not by a failing test — the test suite was green through all of it.
+
+### Fixed
+
+- **`Crawl-delay` now actually limits the host.** The module documentation said a declared
+  `Crawl-delay` overrides the configured concurrency for that host. What the code did was sleep
+  inside each worker task, so with a concurrency of 5 all five tasks slept in parallel and the five
+  requests left together. The delay spaced batches, not requests — which is exactly the burst the
+  directive asks you to avoid. A host that declares a delay is now crawled with **one request in
+  flight**, with at least the declared delay between the start of one request and the start of the
+  next. Other hosts in the same crawl keep the concurrency you asked for. The wait stays
+  cancellable, so `--max-duration` still cuts a long delay short.
+- **`--ignore-robots` now reports what is blocked.** The `blocked_by_robots` flag was initialised
+  to `false` and never set, leaving its whole path dead: it reaches `evaluate_indexability`, where
+  it is the highest-priority root cause of a page not being indexable. Ignoring `robots.txt` is the
+  one case where a disallowed page gets crawled at all, and it is precisely when you want to know
+  which ones they are — you asked to see what Google does not. Those pages now come back with
+  `is_indexable = 0` and `indexability_reason = 'robots'`. Ignoring the file still means ignoring
+  it entirely: no exclusion, and no `Crawl-delay` either. If `/robots.txt` cannot be read, nothing
+  is marked — an unreadable file is not evidence that nothing is blocked.
+
 ## [0.1.0] — 2026-08-03
 
 First public release. Everything below shipped before the repository was opened; it is recorded

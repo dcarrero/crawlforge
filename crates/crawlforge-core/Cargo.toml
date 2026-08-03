@@ -28,6 +28,11 @@ futures.workspace = true
 sysinfo.workspace = true
 walkdir.workspace = true
 
+[dev-dependencies]
+# `test-util` da el reloj pausado (`start_paused`) con el que los tests de `CrawlDelayGate`
+# afirman esperas exactas sin esperar de verdad. Solo en tests: el build normal no lo arrastra.
+tokio = { workspace = true, features = ["test-util"] }
+
 [features]
 default = []
 # Los dos unicos cfg de plataforma permitidos. Ver docs/CONVENTIONS.md y docs/01-ARQUITECTURA.md SS6.

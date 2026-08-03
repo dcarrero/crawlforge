@@ -168,6 +168,9 @@ type Contador = Arc<Mutex<HashMap<String, usize>>>;
 /// La cabecera `Authorization` que trajo cada petición, por ruta y en orden de llegada.
 /// `None` = la petición no la llevaba. Es cómo se afirma que una credencial viajó — o que no.
 type Autorizaciones = Arc<Mutex<HashMap<String, Vec<Option<String>>>>>;
+/// El instante en que llegó cada petición, por ruta y en orden. Es cómo se afirma que un
+/// `Crawl-delay` espació los arranques — o que no los espació.
+type Llegadas = Arc<Mutex<HashMap<String, Vec<std::time::Instant>>>>;
 
 /// Un servidor de pruebas vivo. Se apaga al soltarlo.
 pub struct ServidorDePruebas {
@@ -175,6 +178,7 @@ pub struct ServidorDePruebas {
     #[allow(dead_code)]
     peticiones: Contador,
     autorizaciones: Autorizaciones,
+    llegadas: Llegadas,
     tareas: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -198,14 +202,16 @@ impl ServidorDePruebas {
         let mapa: Rutas = Arc::new(rutas(puerto).into_iter().collect());
         let peticiones: Contador = Arc::new(Mutex::new(HashMap::new()));
         let autorizaciones: Autorizaciones = Arc::new(Mutex::new(HashMap::new()));
+        let llegadas: Llegadas = Arc::new(Mutex::new(HashMap::new()));
         let tareas = vec![{
             let mapa = Arc::clone(&mapa);
             let peticiones = Arc::clone(&peticiones);
             let autorizaciones = Arc::clone(&autorizaciones);
-            tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones))
+            let llegadas = Arc::clone(&llegadas);
+            tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones, llegadas))
         }];
 
-        Self { puerto, peticiones, autorizaciones, tareas }
+        Self { puerto, peticiones, autorizaciones, llegadas, tareas }
     }
 
     /// [`Self::arrancar_con_puerto`] y [`Self::arrancar_como_otro_host`] a la vez: rutas que
@@ -226,17 +232,19 @@ impl ServidorDePruebas {
         let mapa: Rutas = Arc::new(rutas(puerto).into_iter().collect());
         let peticiones: Contador = Arc::new(Mutex::new(HashMap::new()));
         let autorizaciones: Autorizaciones = Arc::new(Mutex::new(HashMap::new()));
+        let llegadas: Llegadas = Arc::new(Mutex::new(HashMap::new()));
         let tareas = escuchas
             .into_iter()
             .map(|escucha| {
                 let mapa = Arc::clone(&mapa);
                 let peticiones = Arc::clone(&peticiones);
                 let autorizaciones = Arc::clone(&autorizaciones);
-                tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones))
+                let llegadas = Arc::clone(&llegadas);
+                tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones, llegadas))
             })
             .collect();
 
-        Self { puerto, peticiones, autorizaciones, tareas }
+        Self { puerto, peticiones, autorizaciones, llegadas, tareas }
     }
 
     /// Igual, pero además intenta escuchar en `[::1]` con el mismo puerto.
@@ -257,6 +265,7 @@ impl ServidorDePruebas {
         );
         let peticiones: Contador = Arc::new(Mutex::new(HashMap::new()));
         let autorizaciones: Autorizaciones = Arc::new(Mutex::new(HashMap::new()));
+        let llegadas: Llegadas = Arc::new(Mutex::new(HashMap::new()));
 
         let escucha = TcpListener::bind("127.0.0.1:0").await.expect("abrir el puerto de pruebas");
         let puerto = escucha.local_addr().expect("puerto asignado").port();
@@ -274,11 +283,12 @@ impl ServidorDePruebas {
                 let mapa = Arc::clone(&mapa);
                 let peticiones = Arc::clone(&peticiones);
                 let autorizaciones = Arc::clone(&autorizaciones);
-                tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones))
+                let llegadas = Arc::clone(&llegadas);
+                tokio::spawn(aceptar(escucha, mapa, peticiones, autorizaciones, llegadas))
             })
             .collect();
 
-        Self { puerto, peticiones, autorizaciones, tareas }
+        Self { puerto, peticiones, autorizaciones, llegadas, tareas }
     }
 
     /// URL base del sitio, con la barra final.
@@ -318,6 +328,19 @@ impl ServidorDePruebas {
             .cloned()
             .unwrap_or_default()
     }
+
+    /// Instantes de llegada de cada petición a una ruta, en orden. Se toman al leer la
+    /// petición, antes de aplicar ningún retardo de respuesta: miden cuándo **arrancó** la
+    /// petición del cliente, que es lo que un `Crawl-delay` promete espaciar.
+    #[allow(dead_code)]
+    pub fn llegadas(&self, ruta: &str) -> Vec<std::time::Instant> {
+        self.llegadas
+            .lock()
+            .expect("el registro de llegadas no debería envenenarse")
+            .get(ruta)
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 impl Drop for ServidorDePruebas {
@@ -335,6 +358,7 @@ async fn aceptar(
     rutas: Rutas,
     peticiones: Contador,
     autorizaciones: Autorizaciones,
+    llegadas: Llegadas,
 ) {
     let mut conexiones = tokio::task::JoinSet::new();
     loop {
@@ -349,6 +373,7 @@ async fn aceptar(
             Arc::clone(&rutas),
             Arc::clone(&peticiones),
             Arc::clone(&autorizaciones),
+            Arc::clone(&llegadas),
         ));
     }
 }
@@ -358,6 +383,7 @@ async fn atender(
     rutas: Rutas,
     peticiones: Contador,
     autorizaciones: Autorizaciones,
+    llegadas: Llegadas,
 ) {
     let Some((objetivo, autorizacion)) = leer_peticion(&mut stream).await else {
         return;
@@ -368,6 +394,9 @@ async fn atender(
     }
     if let Ok(mut registro) = autorizaciones.lock() {
         registro.entry(objetivo.clone()).or_default().push(autorizacion.clone());
+    }
+    if let Ok(mut registro) = llegadas.lock() {
+        registro.entry(objetivo.clone()).or_default().push(std::time::Instant::now());
     }
 
     let respuesta = rutas.get(&objetivo).cloned().unwrap_or_else(Respuesta::no_encontrada);

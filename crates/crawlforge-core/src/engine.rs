@@ -634,6 +634,9 @@ async fn run_with<F: Fetcher + 'static>(
     let fetcher = Arc::new(fetcher);
     let robots = Arc::new(RobotsCache::new());
     let throttle = Arc::new(crate::throttle::Throttle::new(job.limits.effective_concurrency()));
+    // La puerta que hace cumplir el `Crawl-delay`: una petición en vuelo por host y arranques
+    // espaciados. El porqué de que el `Throttle` no baste solo está en su doc (`throttle.rs`).
+    let pacer = Arc::new(crate::throttle::CrawlDelayGate::new());
     // En una reanudación el frontier llega precargado: las `pending` en cola con su
     // profundidad guardada —el orden BFS sobrevive al corte— y todo lo demás marcado como
     // visto para no repetirlo. `already_fetched` descuenta del presupuesto lo ya rastreado:
@@ -881,10 +884,12 @@ async fn run_with<F: Fetcher + 'static>(
             *in_flight_by_host.entry(host.clone()).or_insert(0) += 1;
             let fetcher = Arc::clone(&fetcher);
             let robots = Arc::clone(&robots);
+            let throttle = Arc::clone(&throttle);
+            let pacer = Arc::clone(&pacer);
             // Un incremento atómico, no una copia del trabajo: ver el `Arc::new` de arriba.
             let job = Arc::clone(&job);
             let task = in_flight.spawn(async move {
-                let outcome = process_url(&*fetcher, &robots, &job, &item).await;
+                let outcome = process_url(&*fetcher, &robots, &throttle, &pacer, &job, &item).await;
                 (item, outcome)
             });
             host_by_task.insert(task.id(), host);
@@ -1806,26 +1811,45 @@ struct FetchedOutcome {
 async fn process_url<F: Fetcher>(
     fetcher: &F,
     robots: &RobotsCache,
+    throttle: &crate::throttle::Throttle,
+    pacer: &crate::throttle::CrawlDelayGate,
     job: &CrawlJob,
     item: &QueuedUrl,
 ) -> UrlOutcome {
-    // robots.txt, salvo que se haya pedido ignorarlo explícitamente.
-    let mut blocked = false;
-    if !job.limits.ignore_robots {
-        if let Some(host) = item.url.host_str() {
-            let rules = load_host_rules(fetcher, robots, &item.url, host, job).await;
+    let mut blocked_by_robots = false;
+    // El permiso del host cuando su robots.txt declara `Crawl-delay`. Se suelta al final de
+    // la función, con la petición ya respondida: mientras vive no arranca otra de ese host.
+    let mut delay_permit: Option<crate::throttle::CrawlDelayPermit> = None;
+    if let Some(host) = item.url.host_str() {
+        // El robots.txt se carga siempre, también con `ignore_robots`: ese flag es justo el
+        // único camino por el que una página bloqueada llega a rastrearse, y el informe tiene
+        // que poder decir cuáles lo están (`IndexabilityReason::Robots` es la causa raíz más
+        // prioritaria de `evaluate_indexability`). Si el fichero no se puede recuperar,
+        // `load_host_rules` cae a `allow_all` sin tumbar el rastreo, y no se marca nada:
+        // no se afirma lo que no se sabe.
+        let rules = load_host_rules(fetcher, robots, &item.url, host, job).await;
+        if job.limits.ignore_robots {
+            // Ignorarlo es ignorarlo entero: ni exclusión ni `Crawl-delay`. Solo se anota
+            // qué habría bloqueado, que es lo que el usuario pidió ver.
+            blocked_by_robots = !rules.allows(&item.url);
+        } else {
             if !rules.allows(&item.url) {
                 return UrlOutcome::Excluded(ExclusionReason::Robots);
             }
-            // Crawl-delay anula la concurrencia configurada para este host.
+            // Crawl-delay anula la concurrencia configurada para este host (`robots.rs`):
+            // el freno baja su límite a 1 para que el pool deje de despacharlo en paralelo,
+            // y la puerta serializa las peticiones que ya estaban despachadas cuando el
+            // robots.txt aún no se conocía, espaciando los arranques al menos `delay`.
+            // La espera vive dentro de esta tarea a propósito: el `select!` del bucle la
+            // corta al vencer `max_duration`, igual que cortaba el `sleep` antiguo.
             if let Some(delay) = rules.crawl_delay {
-                tokio::time::sleep(delay).await;
+                throttle.force_serial(host);
+                delay_permit = Some(pacer.acquire(host, delay).await);
             }
-            blocked = false;
         }
     }
 
-    match fetcher.fetch(&item.url).await {
+    let outcome = match fetcher.fetch(&item.url).await {
         Ok(Ok(doc)) => {
             let page = if doc.is_html() && !doc.body.is_empty() {
                 Some(parse::parse_html(&doc.body, job.collect_body_text))
@@ -1835,7 +1859,7 @@ async fn process_url<F: Fetcher>(
             UrlOutcome::Fetched(Box::new(FetchedOutcome {
                 doc,
                 page,
-                blocked_by_robots: blocked,
+                blocked_by_robots,
             }))
         }
         Ok(Err(failure)) => UrlOutcome::Failed(failure),
@@ -1843,7 +1867,11 @@ async fn process_url<F: Fetcher>(
             kind: crate::fetch::ErrorKind::Connection,
             message: e.to_string(),
         }),
-    }
+    };
+    // El permiso cubre la petición entera, no solo su arranque: soltarlo antes del `fetch`
+    // permitiría dos en vuelo en cuanto el retardo fuera menor que la latencia del servidor.
+    drop(delay_permit);
+    outcome
 }
 
 /// Carga (y cachea) el `robots.txt` de un host.

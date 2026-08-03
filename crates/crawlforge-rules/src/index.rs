@@ -16,12 +16,20 @@
 //! - [`BlockedInSitemap`], [`NoindexInSitemap`], [`OrphanPage`] y [`SitemapMissing`] llevan su
 //!   consulta escrita y probada contra el esquema real, pero no están en [`site_rules`] porque
 //!   ningún fixture puede producir su hallazgo. Registrarlas rompería el banco de fixtures.
-//! - [`RobotsBlocked`] es peor: el catálogo la declara de alcance `page` y el motor nunca
-//!   entrega una página con `PageContext::blocked_by_robots = true` — cuando `robots.txt`
-//!   prohíbe una URL, `engine::process_url` devuelve `Excluded(Robots)` **antes** de descargarla,
-//!   así que no hay `PageContext` que evaluar. El dato sí queda en el almacén
+//! - [`RobotsBlocked`] es peor: el catálogo la declara de alcance `page` y en un rastreo normal
+//!   el motor nunca entrega una página con `PageContext::blocked_by_robots = true` — cuando
+//!   `robots.txt` prohíbe una URL, `engine::process_url` devuelve `Excluded(Robots)` **antes** de
+//!   descargarla, así que no hay `PageContext` que evaluar. El dato sí queda en el almacén
 //!   (`crawl_state='excluded'`, `exclusion_reason='robots'`), pero leerlo la convierte en una
 //!   `SiteRule` y el alcance del catálogo es normativo.
+//!
+//!   La excepción es `--ignore-robots`: ahí la página bloqueada **sí** se descarga y desde el
+//!   2026-08-04 llega marcada, de modo que `evaluate_indexability` le pone
+//!   `IndexabilityReason::Robots`. Aun así la regla sigue sin registrarse, y por el motivo del
+//!   párrafo anterior: ningún fixture puede producir el hallazgo, porque hace falta un
+//!   `robots.txt` servido por HTTP más el flag. Registrarla rompería el banco de fixtures. Lo que
+//!   el usuario de `--ignore-robots` sí ve hoy es el motivo de no indexabilidad en la fila de la
+//!   página, que es donde iba a buscarlo.
 //!
 //! Tres reglas de §2 no están ni escritas, porque el dato que necesitan no existe en ninguna
 //! parte del esquema:

@@ -47,3 +47,8 @@ xcuserdata/
 
 # Zip original de la documentación: su contenido ya vive en docs/ y fases/.
 /_archivo/
+
+# Astro
+/web/astro/node_modules/
+/web/astro/dist/
+/web/astro/.astro/
