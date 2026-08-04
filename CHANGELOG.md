@@ -19,6 +19,16 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.6.1] — 2026-08-04
+
+### Fixed
+
+- **An external URL the perimeter rejects while resuming now says so.** Its row was left exactly
+  as a probe cut mid-flight leaves one — external, skipped, everything null — so every later
+  resume read it and rejected it again, and the report could not tell "not checked because it
+  points at your own network" from "never got around to checking it". It now carries
+  `local_network` like every other rejection, and counts as unchecked.
+
 ## [0.6.0] — 2026-08-04
 
 A second security review took the perimeter that 0.5.0 shipped and broke it, executing every

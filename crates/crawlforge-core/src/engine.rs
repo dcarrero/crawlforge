@@ -772,12 +772,17 @@ async fn run_with<F: Fetcher + 'static>(
     // profundidad guardada —el orden BFS sobrevive al corte— y todo lo demás marcado como
     // visto para no repetirlo. `already_fetched` descuenta del presupuesto lo ya rastreado:
     // sin él, un rastreo con `max_urls` interrumpido y reanudado rastrearía de más.
-    let (mut frontier, mut in_sitemap, already_fetched, resumed_probes) = match resume {
-        Some(setup) => {
-            (setup.frontier, setup.in_sitemap, setup.already_fetched, setup.pending_probes)
-        }
-        None => (Frontier::new(), std::collections::HashSet::new(), 0, Vec::new()),
-    };
+    let (mut frontier, mut in_sitemap, already_fetched, resumed_probes, rejected_probes) =
+        match resume {
+            Some(setup) => (
+                setup.frontier,
+                setup.in_sitemap,
+                setup.already_fetched,
+                setup.pending_probes,
+                setup.rejected_probes,
+            ),
+            None => (Frontier::new(), std::collections::HashSet::new(), 0, Vec::new(), Vec::new()),
+        };
     let mut metrics = CrawlMetrics::default();
     // En modo lista solo se descargan las URLs de la lista, así que ninguna página tiene a
     // sus enlazadores: el grafo de enlaces está incompleto **por definición**, no por un
@@ -1032,6 +1037,21 @@ async fn run_with<F: Fetcher + 'static>(
     // Sondas que quedaron a medias en una sesión anterior: filas externas, sin estado y sin
     // error, que el corte pilló en vuelo o en cola. Sin esto se perdían para siempre — la
     // reanudación solo relee las `pending`, y el frontier ya las tiene por vistas.
+    // Las que el perímetro rechazó al releer el plan: se les escribe su motivo.
+    //
+    // Sin esto la fila se quedaba exactamente igual que la de una sonda cortada a medias —
+    // externa, `skipped`, todo nulo—, así que cada reanudación posterior la volvía a leer y a
+    // rechazar, y el informe no podía distinguir «no se comprobó porque apunta a tu red» de «no
+    // se llegó a comprobar». Se escribe aquí y no al releer el plan porque **nadie escribe en
+    // SQLite salvo el hilo escritor**, y allí todavía no existe.
+    for url in rejected_probes {
+        let Ok(n) = normalize::normalize(url.as_str(), &job.normalize_policy()) else { continue };
+        let hash = n.hash();
+        let mut row = external_row(&n, hash);
+        row.exclusion_reason = Some(ExclusionReason::LocalNetwork);
+        metrics.externals_unchecked += 1;
+        writer.send(CrawlResult { url: Some(row), ..Default::default() }).await?;
+    }
     if external_checks {
         for url in resumed_probes {
             if let Some(host) = url.host_str() {
@@ -1871,6 +1891,14 @@ struct ResumeSetup {
     /// vistas, un enlace nuevo a esa misma URL tampoco las recuperaba. `HTTP-404-EXTERNAL`
     /// callaba sobre ellas y ningún contador lo delataba.
     pending_probes: Vec<Url>,
+    /// Las que el perímetro rechaza al releerlas, para poder **escribir su motivo**.
+    ///
+    /// Viajan hasta el bucle en vez de descartarse aquí porque aquí no hay a quién escribir:
+    /// el hilo escritor no existe todavía y **nadie escribe en SQLite salvo él**. Sin esto la
+    /// fila se quedaba sin `exclusion_reason`, o sea idéntica a una sonda que se cortó a
+    /// medias: cada reanudación posterior la volvía a leer y a rechazar, y el informe no podía
+    /// distinguir «no se comprobó porque apunta a tu red» de «no se llegó a comprobar».
+    rejected_probes: Vec<Url>,
 }
 
 fn not_resumable(store_path: &Path, reason: impl Into<String>) -> crate::CoreError {
@@ -2100,6 +2128,7 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
     // Las sondas que el corte pilló sin respuesta. Se releen solo si este rastreo las hace:
     // con `--no-external-check` o con `follow_external`, esas filas no son sondas a medias.
     let mut pending_probes = Vec::new();
+    let mut rejected_probes = Vec::new();
     if job.limits.check_external && !job.limits.follow_external {
         let mut stmt = conn.prepare(
             "SELECT url FROM urls
@@ -2119,6 +2148,7 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
             // `NetworkScreen` del rastreo, que la incluye.
             if !normalize::is_crawlable_scheme(&parsed) || !scope.screen.allows_host(&parsed) {
                 tracing::warn!(url, "reanudación: sonda externa fuera del perímetro; se descarta");
+                rejected_probes.push(parsed);
                 continue;
             }
             pending_probes.push(parsed);
@@ -2133,6 +2163,7 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
             in_sitemap,
             already_fetched: already_fetched.max(0) as u64,
             pending_probes,
+            rejected_probes,
         },
     ))
 }

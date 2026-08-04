@@ -519,12 +519,19 @@ async fn una_auditoria_local_no_repite_sus_sondas_al_reanudar_y_lo_dice() {
         sin_estado, sin_estado_tras_el_corte,
         "siguen exactamente las mismas sin comprobar: la reanudación no tocó ninguna"
     );
-    // Desorden conocido y aceptado: esas filas se quedan sin `exclusion_reason`, porque el
-    // rechazo ocurre al releer el plan y ahí no se escribe —**nadie escribe en SQLite salvo el
-    // hilo escritor**, y en ese punto todavía no existe—. La consecuencia es que cada
-    // reanudación posterior las vuelve a leer y a rechazar: idempotente y sin coste de red, pero
-    // indistinguibles de una sonda que se cortó a medias. Escribir el motivo pide llevar la lista
-    // hasta el escritor, y eso es un cambio aparte.
+    // Y quedan **dichas**: con su motivo escrito, no en un limbo indistinguible de una sonda que
+    // se cortó a medias. Sin esto, cada reanudación posterior las volvía a leer y a rechazar, y
+    // el informe no podía separar «no se comprobó porque apunta a tu red» de «no se llegó a
+    // comprobar».
+    let con_motivo: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM urls
+             WHERE is_internal = 0 AND status_code IS NULL AND exclusion_reason = 'local_network'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("contar");
+    assert_eq!(con_motivo, sin_estado, "las que no se comprueban llevan su motivo escrito");
 }
 
 #[tokio::test]
