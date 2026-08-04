@@ -382,10 +382,13 @@ crawlforge diff referencia.sqlite nuevo.sqlite --fail-on high || exit 1
 
 ```bash
 for s in blog1.com blog2.com blog3.com; do
-  crawlforge crawl "https://$s/" --max-urls 500 --out "$s.sqlite"
+  crawlforge crawl "https://$s/" --out "cartera/$s.sqlite"
 done
-for f in *.sqlite; do echo "── $f"; crawlforge report "$f" --lang es | head -12; done
+crawlforge portfolio ./cartera --lang es
 ```
+
+Un solo panel sobre todos los ficheros: qué cambió desde el rastreo anterior de cada sitio,
+qué reglas fallan en cuántos sitios, y una línea por sitio. Entero en §3.quater.
 
 ### Un conjunto concreto de URLs
 
@@ -393,6 +396,90 @@ for f in *.sqlite; do echo "── $f"; crawlforge report "$f" --lang es | head 
 printf '%s\n' https://cliente.com/landing-a https://cliente.com/landing-b > urls.txt
 crawlforge list urls.txt --lang es
 ```
+
+---
+
+## 3.quater La cartera: muchos sitios a la vez
+
+Una auditoría suelta es una foto. Quien lleva muchos sitios necesita otras dos respuestas:
+**qué se rompió desde la semana pasada** y **qué falla en todos a la vez**. Eso es
+`portfolio`:
+
+```bash
+crawlforge portfolio ./rastreos/               # un directorio se recorre buscando *.sqlite
+crawlforge portfolio a.sqlite b.sqlite c.sqlite
+```
+
+Los `.prev.sqlite` que hay junto a tus rastreos **no** cuentan como sitios: cada uno es el
+«antes» del rastreo de al lado, y el panel compara la pareja solo. Es el mismo fichero que
+usa `diff`, producido de la misma manera: repitiendo el rastreo sobre el mismo fichero de
+salida.
+
+Salida real, recortada (una cartera de prueba de cinco sitios; dos ficheros los rastreó una
+versión anterior, un rastreo quedó truncado y otro es de modo lista):
+
+```
+$ crawlforge portfolio ./cartera --lang es
+
+── Panel de cartera ─────────────────────────
+  5 sitios · rastreos del 2026-08-04 al 2026-08-04
+
+── Avisos ───────────────────────────────────
+  AVISO     No todos los sitios se rastrearon con el mismo catálogo de reglas (0.4.0,
+            0.6.2). Una regla puede faltar en un sitio porque no existía cuando se rastreó.
+
+── Qué cambió ───────────────────────────────
+  1 de 5 sitios tiene un rastreo anterior (.prev.sqlite) con el que comparar.
+
+  Hallazgos nuevos críticos y altos:
+    https://alpha.example/
+      crítico   HTTP-404-INTERNAL                   2
+        https://alpha.example/p/000005/
+        https://alpha.example/p/000006/
+
+  El resto, sitio a sitio:
+    https://alpha.example/
+      Hallazgos resueltos 2 · Códigos de estado que empeoran 2
+
+── Qué falla en toda la cartera ─────────────
+  Una regla que salta en la mayoría de los sitios rara vez es contenido: suele ser una
+  plantilla o un plugin compartido — un arreglo que sirve para todos.
+
+  medio     CANON-CROSS-DOMAIN             3 de 5 sitios
+  crítico   HTTP-NO-HTTPS                  2 de 5 sitios
+  medio     INDEX-DEEP-PAGE                1 de 5 sitios (2 no concluyentes)
+
+── La cartera de un vistazo ─────────────────
+       URLs  index.  crit  high   med   low  info  rastreado   sitio
+        240       0     2     0   118     0     0  2026-08-04  https://alpha.example/
+          8       0     1     1     7     0     0  2026-08-04  http://127.0.0.1:8912/  (truncado)
+```
+
+Tres cosas de esa salida son deliberadas, y son las que hacen fiable el panel:
+
+- **«1 de 5 sitios (2 no concluyentes)»** — un rastreo truncado o de modo lista nunca evaluó
+  las reglas que necesitan el grafo de enlaces completo, así que para esas reglas el panel
+  separa tres estados: dispara, no dispara, y **no se pudo evaluar**. Una regla que no
+  aparece en un sitio truncado no es una regla que ahí pase.
+- **El aviso del catálogo va arriba.** Ficheros rastreados con catálogos de reglas distintos
+  no se comparan en silencio: una regla puede «faltar» en un sitio porque aún no existía.
+- **El rango de fechas se dice siempre**, y si entre el rastreo más viejo y el más nuevo hay
+  más de una semana el panel lo avisa: eso no es una foto de la cartera, y «qué cambió»
+  cubriría un periodo distinto en cada sitio.
+
+Un fichero que no se puede abrir —no es un rastreo, es una base de otro programa, tiene un
+esquema más nuevo que el binario— sale en «Ficheros apartados» con su motivo, y el resto del
+panel se produce igual. Un fichero malo no te cuesta los otros once.
+
+Lo demás funciona como `report`: `--lang es` traduce el panel, y `--format md` o
+`--format html` con `--out` producen un fichero para pegar en un ticket o enviar:
+
+```bash
+crawlforge portfolio ./cartera --format html --out panel.html --lang es
+```
+
+El panel no es del nivel gratuito. La CLI corre por defecto como el nivel más alto; solo
+importa si defines `CRAWLFORGE_TIER` (ver §5).
 
 ---
 
@@ -409,7 +496,8 @@ Dicho por delante, para que no pierdas tiempo buscándolo:
   sigue apagada por defecto; una reanudación ignora lo que el fichero diga de ella, igual que
   ignora un `ignore_robots` guardado.
 - **No hay interfaz gráfica** todavía.
-- **No hay programación de rastreos** ni panel de cartera. Fases 6 y 7.
+- **No hay programación de rastreos.** El panel de cartera (§3.quater) lee los ficheros que
+  ya tienes; producirlos a un ritmo sigue siendo trabajo de tu cron.
 - **`HTTP-TEMP-REDIRECT`** no existe todavía: necesita un histórico de rastreos que aún no existe.
 
 Del catálogo gratuito están implementadas 59 de 60 reglas.
@@ -444,6 +532,7 @@ crawlforge resume <FICHERO>   # continuar un rastreo cortado
 crawlforge report <FICHERO>   # resumen, o --format md|html
 crawlforge export <FICHERO> --format xlsx --out a.xlsx
 crawlforge diff   <ANTES> <DESPUES> [--fail-on high]
+crawlforge portfolio <RUTA>... [--format md|html --out f]   # panel sobre muchos rastreos
 crawlforge rules  [--category X] [--detail]
 ```
 

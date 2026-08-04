@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "crawlforge-adapters"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "crawlforge-core",
  "reqwest",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "crawlforge-cli"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "crawlforge-core"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "crawlforge-rules",
  "flate2",
@@ -375,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "crawlforge-ffi"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "crawlforge-core",
  "serde",
@@ -384,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "crawlforge-rules"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "rusqlite",
  "serde",

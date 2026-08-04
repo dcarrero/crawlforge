@@ -33,6 +33,10 @@ pub enum Feature {
     FullTextSearch,
     MultipleProjects,
     CrawlDiff,
+    /// The portfolio panel: aggregate queries across many crawl files at once. The gate is
+    /// this feature, not a count: `Limits::max_portfolio_sites` only caps how many sites fit
+    /// once the feature is available.
+    Portfolio,
     JsRendering,
     CustomExtraction,
     Adapters,
@@ -52,6 +56,7 @@ impl Feature {
             Self::UnlimitedUrls
             | Self::MultipleProjects
             | Self::CrawlDiff
+            | Self::Portfolio
             | Self::JsRendering
             | Self::CustomExtraction
             | Self::Adapters
@@ -69,7 +74,12 @@ impl Feature {
 pub struct Limits {
     pub max_urls: Option<u64>,
     pub max_projects: Option<u32>,
-    /// Sitios que caben en el panel de cartera.
+    /// Sites that fit in the portfolio panel, **once [`Feature::Portfolio`] grants access**.
+    ///
+    /// `None` means "no limit", the same as every other field of this struct — never "no
+    /// portfolio". Until 2026-08 this field was `None` on `Free` meaning "none" and `None` on
+    /// `Agency` meaning "unlimited", two opposite readings of the same value; the access
+    /// question moved to `Feature::Portfolio` so this field can mean one thing only.
     pub max_portfolio_sites: Option<u32>,
 }
 
@@ -80,6 +90,8 @@ impl Limits {
     pub fn for_tier(tier: Tier) -> Self {
         match tier {
             Tier::Free => {
+                // `max_portfolio_sites` is irrelevant here: Free lacks `Feature::Portfolio`,
+                // so the panel never opens. The value is *not* what says "no portfolio".
                 Self { max_urls: Some(FREE_MAX_URLS), max_projects: Some(1), max_portfolio_sites: None }
             }
             Tier::Pro => {
@@ -201,6 +213,11 @@ mod tests {
         assert!(pro.is_feature_enabled(Feature::CrawlDiff));
         assert!(agency.is_feature_enabled(Feature::CrawlDiff));
 
+        // The portfolio panel is gated by the feature, not by `max_portfolio_sites`.
+        assert!(!free.is_feature_enabled(Feature::Portfolio), "Free has no portfolio panel");
+        assert!(pro.is_feature_enabled(Feature::Portfolio));
+        assert!(agency.is_feature_enabled(Feature::Portfolio));
+
         // La CLI y las reglas propias son de Agency.
         assert!(!pro.is_feature_enabled(Feature::Cli));
         assert!(agency.is_feature_enabled(Feature::Cli));
@@ -214,6 +231,7 @@ mod tests {
             Feature::UnlimitedUrls,
             Feature::MultipleProjects,
             Feature::CrawlDiff,
+            Feature::Portfolio,
             Feature::JsRendering,
             Feature::CustomExtraction,
             Feature::Adapters,

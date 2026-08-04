@@ -306,6 +306,28 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         fail_on: Vec<String>,
     },
+    /// Aggregate panel across many crawl files: what changed since each site's previous
+    /// crawl, which rules fail across the whole portfolio, and one line per site.
+    ///
+    /// This is the weekly question of whoever runs many sites: what broke, and what is a
+    /// shared template or plugin problem rather than content. Files are opened read-only.
+    Portfolio {
+        /// Crawl files or directories. A directory is scanned for `*.sqlite` files; the
+        /// `.prev.sqlite` next to a crawl is its "before" and is compared automatically —
+        /// it never counts as a site of its own.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// `terminal` to read it here, or `md`/`html` for a panel you can paste or send.
+        #[arg(short, long, default_value = "terminal")]
+        format: String,
+        /// File to write the panel to. Without it, it is printed.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Panel language. English is the original; `es` is available. Falls back to
+        /// CRAWLFORGE_LANG, then to English.
+        #[arg(long)]
+        lang: Option<String>,
+    },
     /// List the audit rule catalog, or explain one rule.
     Rules {
         /// A rule ID from a report, e.g. CANON-CHAIN: shows that rule's full record.
@@ -348,6 +370,7 @@ async fn main() -> Result<()> {
         Command::Report { lang, .. }
         | Command::Rules { lang, .. }
         | Command::Diff { lang, .. }
+        | Command::Portfolio { lang, .. }
         | Command::Inspect { lang, .. } => lang.clone(),
         _ => None,
     };
@@ -596,6 +619,14 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
             Ok(())
+        }
+        Command::Portfolio { paths, format, out, lang: _ } => {
+            // El nivel se lee como en el resto de la CLI (`run_and_report`): la variable de
+            // entorno de desarrollo, y sin ella la CLI es una función del nivel Agency. La
+            // puerta de la funcionalidad y el tope de sitios los aplica el propio módulo.
+            let source = DevSource::from_env().context("invalid CRAWLFORGE_TIER")?;
+            crawlforge_cli::portfolio::run(&source, &paths, &format, out.as_deref())
+                .context("the portfolio panel could not be generated")
         }
         Command::Rules { id, category, detail, .. } => match id {
             // El bucle real es «el informe enseña un ID → quiero saber qué significa».

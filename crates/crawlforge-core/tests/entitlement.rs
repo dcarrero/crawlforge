@@ -147,7 +147,25 @@ fn los_limites_del_nivel_gratuito_son_los_del_documento() {
     let free = Limits::for_tier(Tier::Free);
     assert_eq!(free.max_urls, Some(1_000));
     assert_eq!(free.max_projects, Some(1));
-    assert_eq!(free.max_portfolio_sites, None);
+    // "No portfolio panel" is the feature gate's job, not a numeric limit's: until 2026-08,
+    // `max_portfolio_sites: None` meant "none" on Free and "unlimited" on Agency at once.
+    use crawlforge_core::entitlement::{DevSource, EntitlementSource, Feature};
+    assert!(
+        !DevSource::new(Tier::Free).is_feature_enabled(Feature::Portfolio),
+        "the free tier must not open the portfolio panel"
+    );
+}
+
+#[test]
+fn max_portfolio_sites_means_one_thing_only() {
+    // `None` = "no limit" on every tier; access is decided by `Feature::Portfolio`. A `None`
+    // that means "none" here and "unlimited" there is exactly the ambiguity this pins down.
+    assert_eq!(Limits::for_tier(Tier::Pro).max_portfolio_sites, Some(10));
+    assert_eq!(
+        Limits::for_tier(Tier::Agency).max_portfolio_sites,
+        None,
+        "Agency: no limit on portfolio size"
+    );
 }
 
 #[tokio::test]

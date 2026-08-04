@@ -471,8 +471,9 @@ fn open_pair(antes: &Path, despues: &Path) -> Result<Connection> {
 
 /// URI `file:` en modo solo lectura. `ATTACH` hereda por defecto los permisos de la conexión
 /// principal, que es de escritura; el `mode=ro` es lo que garantiza que un diff no pueda tocar un
-/// fichero de rastreo.
-fn read_only_uri(path: &Path) -> Result<String> {
+/// fichero de rastreo. `pub(crate)` porque el panel de cartera abre sus ficheros con la misma
+/// garantía.
+pub(crate) fn read_only_uri(path: &Path) -> Result<String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -1721,8 +1722,9 @@ fn group_issues(changes: &[&Change], lang: Lang) -> Vec<(String, String, Vec<Str
 }
 
 /// De mejor a peor, para poder decir si un cambio de estado empeoró. «Sin respuesta» es lo peor:
-/// una URL que antes contestaba y ahora no, no está mejor.
-fn status_rank(code: Option<&str>) -> u8 {
+/// una URL que antes contestaba y ahora no, no está mejor. `pub(crate)` porque el panel de
+/// cartera clasifica los mismos cambios de estado con el mismo criterio.
+pub(crate) fn status_rank(code: Option<&str>) -> u8 {
     match code.and_then(|c| c.parse::<i64>().ok()) {
         Some(c) if (200..300).contains(&c) => 0,
         Some(c) if (300..400).contains(&c) => 1,

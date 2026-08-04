@@ -383,10 +383,13 @@ crawlforge diff referencia.sqlite nuevo.sqlite --fail-on high || exit 1
 
 ```bash
 for s in blog1.com blog2.com blog3.com; do
-  crawlforge crawl "https://$s/" --max-urls 500 --out "$s.sqlite"
+  crawlforge crawl "https://$s/" --out "portfolio/$s.sqlite"
 done
-for f in *.sqlite; do echo "── $f"; crawlforge report "$f" --lang es | head -12; done
+crawlforge portfolio ./portfolio
 ```
+
+One panel across all the files: what changed since each site's previous crawl, which rules
+fail on how many sites, and one line per site. The whole of it in §3.quater.
 
 ### A specific set of URLs
 
@@ -394,6 +397,88 @@ for f in *.sqlite; do echo "── $f"; crawlforge report "$f" --lang es | head 
 printf '%s\n' https://cliente.com/landing-a https://cliente.com/landing-b > urls.txt
 crawlforge list urls.txt --lang es
 ```
+
+---
+
+## 3.quater The portfolio: many sites at once
+
+A single audit is a snapshot. Whoever runs many sites needs two other answers: **what broke
+since last week**, and **what fails on all of them at once**. That is `portfolio`:
+
+```bash
+crawlforge portfolio ./crawls/                 # a directory is scanned for *.sqlite
+crawlforge portfolio a.sqlite b.sqlite c.sqlite
+```
+
+The `.prev.sqlite` files next to your crawls are **not** counted as sites: each one is the
+"before" of the crawl next to it, and the panel compares the pair automatically. That is the
+same file `diff` uses, produced the same way — by re-crawling onto the same output file.
+
+Real output, trimmed (a five-site test portfolio; two files were crawled by an older
+version, one crawl was truncated and one is a list crawl):
+
+```
+$ crawlforge portfolio ./cartera
+
+── Portfolio panel ──────────────────────────
+  5 sites · crawls from 2026-08-04 to 2026-08-04
+
+── Warnings ─────────────────────────────────
+  WARNING   Not every site was crawled with the same rule catalog (0.4.0, 0.6.2). A rule
+            can be missing on a site because it did not exist when that site was crawled.
+
+── What changed ─────────────────────────────
+  1 of 5 sites has a previous crawl (.prev.sqlite) to compare against.
+
+  New critical and high findings:
+    https://alpha.example/
+      critical  HTTP-404-INTERNAL                   2
+        https://alpha.example/p/000005/
+        https://alpha.example/p/000006/
+
+  The rest, site by site:
+    https://alpha.example/
+      Findings resolved 2 · Status codes that got worse 2
+
+── Failing across the portfolio ─────────────
+  A rule firing on most sites is rarely content: it is usually a shared template or
+  plugin — one fix that serves them all.
+
+  medium    CANON-CROSS-DOMAIN             3 of 5 sites
+  critical  HTTP-NO-HTTPS                  2 of 5 sites
+  medium    INDEX-DEEP-PAGE                1 of 5 sites (2 inconclusive)
+
+── The portfolio at a glance ────────────────
+       URLs  index.  crit  high   med   low  info  crawled     site
+        240       0     2     0   118     0     0  2026-08-04  https://alpha.example/
+          8       0     1     1     7     0     0  2026-08-04  http://127.0.0.1:8912/  (truncated)
+```
+
+Three things in that output are deliberate, and they are what makes the panel trustworthy:
+
+- **"1 of 5 sites (2 inconclusive)"** — a truncated or list-mode crawl never evaluated the
+  rules that need the complete link graph, so for those rules the panel separates three
+  states: fires, does not fire, and **could not be evaluated**. A rule that does not appear
+  on a truncated site is not a rule that passed there.
+- **The catalog warning goes on top.** Files crawled with different rule catalogs are not
+  silently comparable: a rule can be "missing" on a site because it did not exist yet.
+- **The date range is always stated**, and if the oldest and newest crawls are more than a
+  week apart the panel says so: that is not a snapshot of the portfolio, and "what changed"
+  would cover a different period on each site.
+
+A file that cannot be opened — not a crawl, another program's database, a schema newer than
+the binary — is listed under "Files set aside" with its reason, and the rest of the panel is
+still produced. One bad file does not cost you the other eleven.
+
+Everything else works like `report`: `--lang es` translates the panel, and `--format md` or
+`--format html` with `--out` produce a file you can paste into a ticket or send:
+
+```bash
+crawlforge portfolio ./cartera --format html --out panel.html --lang es
+```
+
+The panel is not part of the free tier. The CLI runs as the top tier by default; it only
+matters if you set `CRAWLFORGE_TIER` (see §5).
 
 ---
 
@@ -410,7 +495,8 @@ Said upfront, so you do not waste time looking for it:
   by default; a resumed crawl ignores whatever the file says about it, the same way it ignores a
   saved `ignore_robots`.
 - **There is no graphical interface** yet.
-- **There is no crawl scheduling** and no portfolio panel. Phases 6 and 7.
+- **There is no crawl scheduling.** The portfolio panel (§3.quater) reads the files you
+  already have; producing them on a schedule is still your cron's job.
 - **`HTTP-TEMP-REDIRECT`** does not exist yet: it needs a crawl history that does not exist yet.
 
 Of the free catalog, 59 of 60 rules are implemented.
@@ -445,6 +531,7 @@ crawlforge resume <FILE>      # continue an interrupted crawl
 crawlforge report <FILE>      # summary, or --format md|html
 crawlforge export <FILE> --format xlsx --out a.xlsx
 crawlforge diff   <BEFORE> <AFTER> [--fail-on high]
+crawlforge portfolio <PATH>... [--format md|html --out f]   # panel across many crawls
 crawlforge rules  [--category X] [--detail]
 ```
 

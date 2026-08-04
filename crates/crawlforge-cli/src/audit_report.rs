@@ -579,11 +579,13 @@ fn markdown(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
 
 fn html(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
     let cuerpo = markdown(conn, lang, store)?;
-    let es = lang == Lang::Es;
-    let titulo = msg::html_title(lang);
+    Ok(html_document(lang, &msg::html_title(lang), &markdown_body_to_html(&cuerpo)))
+}
 
-    // Conversión mínima y deliberada: el informe usa un subconjunto conocido de Markdown, así que
-    // no hace falta una dependencia para renderizarlo. Si el informe crece, se cambia.
+/// The minimal, deliberate Markdown-to-HTML conversion: the reports use a known subset of
+/// Markdown, so no dependency is needed to render it. If the reports grow, this changes.
+/// `pub(crate)` because the portfolio panel renders its Markdown the same way.
+pub(crate) fn markdown_body_to_html(cuerpo: &str) -> String {
     let mut html = String::new();
     let mut en_tabla = false;
     let mut en_lista = false;
@@ -639,12 +641,17 @@ fn html(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
     if en_lista {
         html.push_str("</ul>\n");
     }
+    html
+}
 
-    Ok(format!(
+/// Wraps a rendered body in the self-contained HTML document (embedded style, correct `lang`).
+/// `pub(crate)` because the portfolio panel produces the same kind of document.
+pub(crate) fn html_document(lang: Lang, titulo: &str, body: &str) -> String {
+    format!(
         "<!DOCTYPE html>\n<html lang=\"{}\">\n<head>\n<meta charset=\"utf-8\">\n\
-         <title>{titulo}</title>\n<style>{ESTILO}</style>\n</head>\n<body>\n{html}</body>\n</html>\n",
-        if es { "es" } else { "en" }
-    ))
+         <title>{titulo}</title>\n<style>{ESTILO}</style>\n</head>\n<body>\n{body}</body>\n</html>\n",
+        if lang == Lang::Es { "es" } else { "en" }
+    )
 }
 
 /// Estilo mínimo, dentro del documento: un informe que depende de una hoja externa deja de verse

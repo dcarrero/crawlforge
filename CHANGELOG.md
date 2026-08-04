@@ -19,6 +19,26 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.7.0] — 2026-08-04
+
+### Added
+
+- **`crawlforge portfolio <path>…`** — the aggregate panel across many crawl files. A directory
+  is scanned for `*.sqlite`; each site's `.prev.sqlite` is picked up automatically as the
+  "before" of its pair. Three sections: **what changed** (the per-site diff aggregated and
+  ordered by impact, new critical/high findings first), **what fails across the portfolio**
+  (on how many sites each rule fires — a rule firing on most sites usually means a shared
+  template or plugin), and **one line per site**, worst first. `--lang es`, `--format md|html`
+  and `--out` work as in `report`.
+- The portfolio counting separates three states per rule and site: fires, does not fire, and
+  **could not be evaluated** — a truncated or list-mode crawl never evaluated the full-graph
+  rules, and counting it as "clean" would be false ("9 of 12 sites, 2 inconclusive"). Mixed
+  rule-catalog versions and a date spread wider than a week are warned about at the top of the
+  panel. A file that cannot be opened is set aside with its reason; the panel is still produced.
+- `Feature::Portfolio` in the entitlement model, minimum tier Pro. `Limits::max_portfolio_sites`
+  now means one thing only: `None` is "no limit" on every tier — access is the feature's job,
+  the number is just the cap once access is granted.
+
 ## [0.6.2] — 2026-08-04
 
 ### Security

@@ -969,6 +969,218 @@ pub mod msg {
         }
     }
 
+    // ── Panel de cartera (`portfolio.rs`) ────────────────────────────────────
+    //
+    // Los IDs de regla, las severidades usadas como token (`crit`, `high`…), las rutas, las
+    // fechas y las versiones no se traducen: son datos e identificadores, como en el resto
+    // de la CLI.
+    messages! {
+        portfolio_title() {
+            en: "Portfolio panel",
+            es: "Panel de cartera",
+        }
+        portfolio_range(oldest, newest) {
+            en: "crawls from {oldest} to {newest}",
+            es: "rastreos del {oldest} al {newest}",
+        }
+        // Trap 3.3: crawls weeks apart are not a snapshot of the portfolio, and "what
+        // changed" would silently mean a different period on every site.
+        warn_portfolio_date_spread(days, oldest, newest) {
+            en: "The oldest crawl ({oldest}) and the newest ({newest}) are {days} days apart: \
+                 this panel is not a snapshot of the portfolio, and 'what changed' covers a \
+                 different period on each site.",
+            es: "Entre el rastreo más viejo ({oldest}) y el más nuevo ({newest}) hay {days} \
+                 días: este panel no es una foto de la cartera, y «qué cambió» cubre un \
+                 periodo distinto en cada sitio.",
+        }
+        // Trap 3.2: two files crawled with different catalogs are not comparable without
+        // saying so — a rule can be "missing" on a site because it did not exist yet.
+        warn_portfolio_rules_versions(versions) {
+            en: "Not every site was crawled with the same rule catalog ({versions}). A rule \
+                 can be missing on a site because it did not exist when that site was crawled.",
+            es: "No todos los sitios se rastrearon con el mismo catálogo de reglas \
+                 ({versions}). Una regla puede faltar en un sitio porque no existía cuando se \
+                 rastreó.",
+        }
+        warn_portfolio_core_versions(versions) {
+            en: "The crawls come from different engine versions ({versions}).",
+            es: "Los rastreos vienen de versiones distintas del motor ({versions}).",
+        }
+        portfolio_skipped_title() {
+            en: "Files set aside",
+            es: "Ficheros apartados",
+        }
+        // A .prev.sqlite is never an input: it is the "before" of the crawl next to it.
+        portfolio_prev_not_input() {
+            en: "it is a .prev.sqlite: the 'before' of the crawl next to it, already used by \
+                 the comparison. It does not count as a site.",
+            es: "es un .prev.sqlite: el «antes» del rastreo de al lado, que la comparación ya \
+                 usa. No cuenta como sitio.",
+        }
+        error_portfolio_newer_schema(version, supported) {
+            en: "its schema (v{version}) is newer than this build understands (v{supported}). \
+                 Update crawlforge to open it.",
+            es: "su esquema (v{version}) es más nuevo de lo que esta versión entiende \
+                 (v{supported}). Actualiza crawlforge para abrirlo.",
+        }
+        error_portfolio_no_sites() {
+            en: "no crawl files usable as a portfolio were found in the given paths. Crawl \
+                 files are produced by `crawlforge crawl`, `crawlforge audit` and `crawlforge \
+                 list`; a directory is scanned for *.sqlite files.",
+            es: "en las rutas indicadas no se encontró ningún fichero de rastreo utilizable \
+                 como cartera. Los ficheros de rastreo los generan `crawlforge crawl`, \
+                 `crawlforge audit` y `crawlforge list`; un directorio se recorre buscando \
+                 ficheros *.sqlite.",
+        }
+        error_portfolio_tier() {
+            en: "the portfolio panel is not part of the free tier: it needs Pro. Single-site \
+                 commands (`report`, `diff`, `export`) remain available.",
+            es: "el panel de cartera no es del nivel gratuito: necesita Pro. Los comandos de \
+                 un solo sitio (`report`, `diff`, `export`) siguen disponibles.",
+        }
+        error_portfolio_too_many(n, max) {
+            en: "the portfolio has {n} sites and this tier caps it at {max}.",
+            es: "la cartera tiene {n} sitios y este nivel admite {max}.",
+        }
+        portfolio_changes_title() {
+            en: "What changed",
+            es: "Qué cambió",
+        }
+        portfolio_no_pairs() {
+            en: "No site has a previous crawl next to it. Re-crawl into the same output file \
+                 and the previous crawl is kept as .prev.sqlite — that is the 'before' this \
+                 section compares against.",
+            es: "Ningún sitio tiene un rastreo anterior al lado. Repite el rastreo sobre el \
+                 mismo fichero de salida y el anterior se conserva como .prev.sqlite: ese es \
+                 el «antes» con el que compara esta sección.",
+        }
+        portfolio_new_critical_high() {
+            en: "New critical and high findings",
+            es: "Hallazgos nuevos críticos y altos",
+        }
+        portfolio_none_critical_high() {
+            en: "No new critical or high findings on any compared site.",
+            es: "Ningún hallazgo nuevo crítico o alto en los sitios comparados.",
+        }
+        portfolio_rest_title() {
+            en: "The rest, site by site",
+            es: "El resto, sitio a sitio",
+        }
+        portfolio_no_changes() {
+            en: "no changes",
+            es: "sin cambios",
+        }
+        // The diff of that pair cannot assert absences: one side is incomplete.
+        portfolio_pair_inconclusive() {
+            en: "one side is incomplete: what disappeared or got resolved cannot be asserted",
+            es: "un lado está incompleto: lo que desapareció o se resolvió no se puede afirmar",
+        }
+        portfolio_pair_failed(reason) {
+            en: "its comparison against the previous crawl failed: {reason}",
+            es: "su comparación con el rastreo anterior falló: {reason}",
+        }
+        portfolio_spread_title() {
+            en: "Failing across the portfolio",
+            es: "Qué falla en toda la cartera",
+        }
+        portfolio_spread_intro() {
+            en: "A rule firing on most sites is rarely content: it is usually a shared \
+                 template or plugin — one fix that serves them all.",
+            es: "Una regla que salta en la mayoría de los sitios rara vez es contenido: suele \
+                 ser una plantilla o un plugin compartido — un arreglo que sirve para todos.",
+        }
+        portfolio_spread_none() {
+            en: "No rule fires on any site of the portfolio.",
+            es: "Ninguna regla dispara en ningún sitio de la cartera.",
+        }
+        portfolio_glance_title() {
+            en: "The portfolio at a glance",
+            es: "La cartera de un vistazo",
+        }
+        th_site() {
+            en: "site",
+            es: "sitio",
+        }
+        th_crawled() {
+            en: "crawled",
+            es: "rastreado",
+        }
+        th_indexable() {
+            en: "index.",
+            es: "index.",
+        }
+        flag_truncated() {
+            en: "(truncated)",
+            es: "(truncado)",
+        }
+        flag_list_mode() {
+            en: "(list crawl)",
+            es: "(modo lista)",
+        }
+        flag_unfinished(status) {
+            en: "(did not finish: {status})",
+            es: "(sin terminar: {status})",
+        }
+        hint_site_diff() {
+            en: "Full diff of one site:",
+            es: "Diff completo de un sitio:",
+        }
+        portfolio_html_title() {
+            en: "Portfolio panel",
+            es: "Panel de cartera",
+        }
+    }
+
+    /// "{n} sites" with the plural resolved per language, like [`outlinks_title`].
+    pub fn portfolio_sites_count(lang: Lang, n: usize) -> String {
+        match lang {
+            Lang::En => format!("{n} {}", if n == 1 { "site" } else { "sites" }),
+            Lang::Es => format!("{n} {}", if n == 1 { "sitio" } else { "sitios" }),
+        }
+    }
+
+    /// "9 of 12 sites" — the numerator of the spread table.
+    pub fn portfolio_sites_of(lang: Lang, fired: usize, total: usize) -> String {
+        match lang {
+            Lang::En => format!("{fired} of {total} {}", if total == 1 { "site" } else { "sites" }),
+            Lang::Es => {
+                format!("{fired} de {total} {}", if total == 1 { "sitio" } else { "sitios" })
+            }
+        }
+    }
+
+    /// " (2 inconclusive)" — sites where the rule **could not be evaluated**: a truncated or
+    /// list-mode crawl does not evaluate the full-graph rules, and counting those sites as
+    /// "does not fire here" would be lying (trap 3.1). Empty when every site could answer.
+    pub fn portfolio_inconclusive_suffix(lang: Lang, n: usize) -> String {
+        if n == 0 {
+            return String::new();
+        }
+        match lang {
+            Lang::En => format!(" ({n} inconclusive)"),
+            Lang::Es => {
+                format!(" ({n} no {})", if n == 1 { "concluyente" } else { "concluyentes" })
+            }
+        }
+    }
+
+    /// "3 of 5 sites have a previous crawl (.prev.sqlite) to compare against." The noun
+    /// follows the total and the verb follows the pair count: "1 of 5 sites has".
+    pub fn portfolio_pairs_line(lang: Lang, pairs: usize, total: usize) -> String {
+        match lang {
+            Lang::En => format!(
+                "{pairs} of {total} {} {} a previous crawl (.prev.sqlite) to compare against.",
+                if total == 1 { "site" } else { "sites" },
+                if pairs == 1 { "has" } else { "have" }
+            ),
+            Lang::Es => format!(
+                "{pairs} de {total} {} {} un rastreo anterior (.prev.sqlite) con el que comparar.",
+                if total == 1 { "sitio" } else { "sitios" },
+                if pairs == 1 { "tiene" } else { "tienen" }
+            ),
+        }
+    }
+
     // ── Identificación de ficheros (`store_check.rs`) ────────────────────────
     messages! {
         error_store_is_diff(path) {
@@ -1148,6 +1360,13 @@ pub mod msg {
         report_written(path) {
             en: "Report written to {path}",
             es: "Informe escrito en {path}",
+        }
+        /// Con `--out` y el formato de terminal, lo que se escribe es Markdown: un volcado del
+        /// terminal en un fichero conserva sus cajas y se lee peor. Se dice **qué** se escribió
+        /// para que nadie abra el fichero esperando lo que acaba de ver en pantalla.
+        markdown_report_written(path) {
+            en: "Markdown report written to {path}",
+            es: "Informe Markdown escrito en {path}",
         }
         exported_csv(n, dir) {
             en: "Exported {n} CSV files to {dir}",
@@ -1467,6 +1686,26 @@ mod tests {
         assert_eq!(msg::note_external_status(Lang::Es, 1), "+1 externa");
         assert_eq!(msg::note_external_status(Lang::Es, 2), "+2 externas");
         assert_eq!(msg::note_external_status(Lang::En, 1), "+1 external");
+    }
+
+    #[test]
+    fn the_portfolio_plurals_resolve_in_both_languages() {
+        // The portfolio counters are hand-written for the same reason as the URL card's:
+        // "1 sitios" and "1 sites" are the shortcut the review caught.
+        assert_eq!(msg::portfolio_sites_count(Lang::En, 1), "1 site");
+        assert_eq!(msg::portfolio_sites_count(Lang::En, 5), "5 sites");
+        assert_eq!(msg::portfolio_sites_count(Lang::Es, 1), "1 sitio");
+        assert_eq!(msg::portfolio_sites_count(Lang::Es, 5), "5 sitios");
+        assert_eq!(msg::portfolio_sites_of(Lang::En, 9, 12), "9 of 12 sites");
+        assert_eq!(msg::portfolio_sites_of(Lang::Es, 9, 12), "9 de 12 sitios");
+        assert_eq!(msg::portfolio_inconclusive_suffix(Lang::En, 0), "");
+        assert_eq!(msg::portfolio_inconclusive_suffix(Lang::En, 2), " (2 inconclusive)");
+        assert_eq!(msg::portfolio_inconclusive_suffix(Lang::Es, 1), " (1 no concluyente)");
+        assert_eq!(msg::portfolio_inconclusive_suffix(Lang::Es, 2), " (2 no concluyentes)");
+        assert!(msg::portfolio_pairs_line(Lang::En, 1, 5).starts_with("1 of 5 sites has"));
+        assert!(msg::portfolio_pairs_line(Lang::En, 3, 5).starts_with("3 of 5 sites have"));
+        assert!(msg::portfolio_pairs_line(Lang::Es, 1, 5).starts_with("1 de 5 sitios tiene "));
+        assert!(msg::portfolio_pairs_line(Lang::Es, 3, 5).starts_with("3 de 5 sitios tienen"));
     }
 
     #[test]

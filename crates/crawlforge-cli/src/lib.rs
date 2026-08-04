@@ -14,6 +14,7 @@ pub mod audit_report;
 pub mod diff;
 pub mod i18n;
 pub mod inspect;
+pub mod portfolio;
 pub mod store_check;
 pub mod xlsx;
 
