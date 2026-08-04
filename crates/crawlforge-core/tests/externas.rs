@@ -407,6 +407,235 @@ async fn sin_check_external_las_externas_quedan_registradas_sin_estado() {
     );
 }
 
+/// El `(crawl_state, exclusion_reason)` de una URL externa, por su ruta.
+fn estado_y_motivo(conn: &Connection, ruta: &str) -> Option<(String, Option<String>)> {
+    conn.query_row(
+        "SELECT crawl_state, exclusion_reason FROM urls WHERE is_internal = 0 AND path = ?1",
+        [ruta],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .ok()
+}
+
+/// Un puerto que nadie escucha: se abre, se lee su número y se cierra. Es la forma de tener un
+/// host que **no responde** sin esperar a un timeout de red de verdad.
+fn puerto_cerrado() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("un puerto efímero libre");
+    let puerto = listener.local_addr().expect("dirección local").port();
+    drop(listener);
+    puerto
+}
+
+#[tokio::test]
+async fn un_enlace_nofollow_se_registra_pero_no_se_pide() {
+    // El defecto: la rama de externas hacía `continue` **antes** de evaluar `respect_nofollow`,
+    // que está activo por defecto. El caso real son los enlaces de spam de los comentarios de
+    // un WordPress, que llevan `rel="ugc nofollow"`: se les mandaba un HEAD con nuestro
+    // user-agent de bot a cada dominio de spam acumulado en años, y sus 404 se publicaban como
+    // hallazgos del sitio auditado.
+    let ajeno = ServidorDePruebas::arrancar_como_otro_host(&[
+        ("/spam", Respuesta::pagina("Spam", "<p>x</p>")),
+        ("/normal", Respuesta::pagina("Normal", "<p>x</p>")),
+    ])
+    .await;
+    let propio = ServidorDePruebas::arrancar(&[(
+        "/",
+        pagina_con(&format!(
+            "<a href=\"{spam}\" rel=\"ugc nofollow\">comentario</a> <a href=\"{normal}\">fuente</a>",
+            spam = ajeno.url_como_otro_host("/spam"),
+            normal = ajeno.url_como_otro_host("/normal"),
+        )),
+    )])
+    .await;
+
+    let tmp = Temporal::new("nofollow");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+
+    let outcome = crawlforge_core::engine::run(job, &tmp.store()).await.expect("rastrear");
+
+    assert_eq!(ajeno.peticiones("/spam"), 0, "al dominio de spam no se le pide nada");
+    assert_eq!(ajeno.peticiones("/normal"), 1, "y el enlace normal sí se comprueba");
+    assert_eq!(outcome.metrics.externals_checked, 1);
+    assert_eq!(
+        outcome.metrics.externals_unchecked, 1,
+        "la que no se comprueba se cuenta: nada queda en silencio"
+    );
+
+    // La fila se escribe igual —el informe necesita saber a dónde apunta el sitio— y dice por
+    // qué no se pidió.
+    let conn = abrir(&tmp.store());
+    assert_eq!(
+        estado_y_motivo(&conn, "/spam"),
+        Some(("skipped".to_string(), Some("nofollow".to_string())))
+    );
+    assert_eq!(estado_externa(&conn, "/spam"), Some(None), "sin estado, porque no se pidió");
+    assert_eq!(estado_externa(&conn, "/normal"), Some(Some(200)));
+}
+
+#[tokio::test]
+async fn una_externa_excluida_por_patron_no_se_pide() {
+    // `--exclude 'dominio\.com'` no impedía la petición: los patrones se evaluaban después del
+    // `continue` de las externas, así que excluían del rastreo algo que nunca se iba a
+    // rastrear y dejaban pasar lo único que sí se pedía.
+    let ajeno = ServidorDePruebas::arrancar_como_otro_host(&[
+        ("/privado/x", Respuesta::pagina("Privado", "<p>x</p>")),
+        ("/publico/y", Respuesta::pagina("Público", "<p>y</p>")),
+    ])
+    .await;
+    let propio = ServidorDePruebas::arrancar(&[(
+        "/",
+        pagina_con(&format!(
+            "<a href=\"{a}\">privado</a> <a href=\"{b}\">público</a>",
+            a = ajeno.url_como_otro_host("/privado/x"),
+            b = ajeno.url_como_otro_host("/publico/y"),
+        )),
+    )])
+    .await;
+
+    let tmp = Temporal::new("patron");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+    job.limits.exclude_patterns = vec!["/privado/".to_string()];
+
+    let outcome = crawlforge_core::engine::run(job, &tmp.store()).await.expect("rastrear");
+
+    assert_eq!(ajeno.peticiones("/privado/x"), 0, "lo excluido no se pide");
+    assert_eq!(ajeno.peticiones("/publico/y"), 1);
+    assert_eq!(outcome.metrics.externals_checked, 1);
+    assert_eq!(outcome.metrics.externals_unchecked, 1);
+
+    let conn = abrir(&tmp.store());
+    assert_eq!(
+        estado_y_motivo(&conn, "/privado/x"),
+        Some(("skipped".to_string(), Some("pattern".to_string())))
+    );
+}
+
+#[tokio::test]
+async fn un_host_ajeno_muerto_deja_de_sondearse_tras_tres_silencios() {
+    // Con una sonda en vuelo por host y un timeout de 10 s, cada URL única de un host caído
+    // paga el timeout entero: un dominio muerto enlazado desde 200 URLs añadía ~33 minutos al
+    // final del rastreo. Aquí el host está cerrado —la conexión se rechaza al instante— así
+    // que lo que se afirma es el recuento, no el tiempo.
+    let cerrado = puerto_cerrado();
+    let enlaces: String = (0..8)
+        .map(|i| format!("<a href=\"http://localhost:{cerrado}/pagina-{i}\">{i}</a> "))
+        .collect();
+    let propio = ServidorDePruebas::arrancar(&[("/", pagina_con(&enlaces))]).await;
+
+    let tmp = Temporal::new("muerto");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+
+    let outcome = crawlforge_core::engine::run(job, &tmp.store()).await.expect("rastrear");
+
+    assert_eq!(
+        outcome.metrics.externals_checked, 3,
+        "tres ausencias seguidas ya dicen lo que hay que saber del host"
+    );
+    assert_eq!(
+        outcome.metrics.externals_unchecked, 5,
+        "las que quedaban se cuentan como no comprobadas, no se olvidan"
+    );
+
+    // Las tres intentadas quedan con su error; las otras cinco, sin estado y sin error, que es
+    // lo que hace que una reanudación vuelva a intentarlas.
+    let conn = abrir(&tmp.store());
+    let con_error: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM urls WHERE is_internal = 0 AND error_kind IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("contar");
+    assert_eq!(con_error, 3);
+    let sin_tocar: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM urls
+             WHERE is_internal = 0 AND error_kind IS NULL AND status_code IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("contar");
+    assert_eq!(sin_tocar, 5);
+}
+
+#[tokio::test]
+async fn un_host_ajeno_que_pide_freno_deja_de_sondearse() {
+    // «Educado con quien no es nuestro»: la rama de sondas no miraba el estado de la respuesta
+    // ni el `Retry-After`, así que un host que contestaba 429 seguía recibiendo el resto de su
+    // cola. Un 429 es una petición explícita de que paremos.
+    let ajeno = ServidorDePruebas::arrancar_como_otro_host(&[
+        ("/a", {
+            let mut r = Respuesta::error(429);
+            r.headers.push(("Retry-After".to_string(), "120".to_string()));
+            r
+        }),
+        ("/b", Respuesta::pagina("B", "<p>b</p>")),
+        ("/c", Respuesta::pagina("C", "<p>c</p>")),
+        ("/d", Respuesta::pagina("D", "<p>d</p>")),
+    ])
+    .await;
+    let enlaces: String = ["/a", "/b", "/c", "/d"]
+        .iter()
+        .map(|r| format!("<a href=\"{}\">{r}</a> ", ajeno.url_como_otro_host(r)))
+        .collect();
+    let propio = ServidorDePruebas::arrancar(&[("/", pagina_con(&enlaces))]).await;
+
+    let tmp = Temporal::new("freno");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+
+    let outcome = crawlforge_core::engine::run(job, &tmp.store()).await.expect("rastrear");
+
+    assert_eq!(outcome.metrics.externals_checked, 1, "una sonda, un 429, se acabó");
+    assert_eq!(outcome.metrics.externals_unchecked, 3);
+    for ruta in ["/b", "/c", "/d"] {
+        assert_eq!(ajeno.peticiones(ruta), 0, "{ruta} no se pidió tras el 429");
+    }
+}
+
+#[tokio::test]
+async fn un_content_type_desmedido_no_engorda_el_fichero() {
+    // `resources.mime` y `urls.content_type` los escribe el servidor de enfrente. No es
+    // inyección —todo va por parámetros— pero varios KB por cada una de 10.000 externas
+    // engordan el fichero que se le entrega al cliente sin aportar nada.
+    let relleno = "a".repeat(8192);
+    let cdn = ServidorDePruebas::arrancar_como_otro_host(&[("/lib.css", {
+        let mut r = Respuesta::texto("body{}");
+        r.headers[0] = ("Content-Type".to_string(), format!("text/css; charset=utf-8; x={relleno}"));
+        r
+    })])
+    .await;
+    let propio = ServidorDePruebas::arrancar(&[(
+        "/",
+        pagina_con(&format!(
+            "<a href=\"{}\">hoja</a>",
+            cdn.url_como_otro_host("/lib.css")
+        )),
+    )])
+    .await;
+
+    let tmp = Temporal::new("mime-largo");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+
+    crawlforge_core::engine::run(job, &tmp.store()).await.expect("rastrear");
+
+    let conn = abrir(&tmp.store());
+    let (mime, content_type): (String, String) = conn
+        .query_row(
+            "SELECT r.mime, u.content_type FROM resources r JOIN urls u ON u.id = r.url_id
+             WHERE u.is_internal = 0 AND u.path = '/lib.css'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("la fila del recurso");
+    assert_eq!(mime.chars().count(), 255, "el mime se recorta: {} caracteres", mime.chars().count());
+    assert_eq!(content_type.chars().count(), 255, "y el content_type de la URL, igual");
+}
+
 #[tokio::test]
 async fn un_recurso_externo_comprobado_deja_su_fila_en_resources() {
     // Los recursos siguen la misma política interna/externa que los enlaces: un CSS en un

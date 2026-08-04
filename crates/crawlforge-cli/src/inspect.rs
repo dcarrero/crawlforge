@@ -147,13 +147,17 @@ struct UrlRow {
     redirect_to: Option<i64>,
     error_kind: Option<String>,
     error_message: Option<String>,
+    /// Externa o interna: decide cómo se lee un `skipped` — una externa con código **sí se
+    /// pidió** (sonda de estado), y decir de ella «excluida del rastreo» era falso.
+    is_internal: bool,
 }
 
 fn fetch_url_row(conn: &Connection, id: i64) -> Result<Option<UrlRow>> {
     let row = conn
         .query_row(
             "SELECT id, url, status_code, content_type, response_time_ms, depth, in_sitemap,
-                    crawl_state, exclusion_reason, redirect_to, error_kind, error_message
+                    crawl_state, exclusion_reason, redirect_to, error_kind, error_message,
+                    is_internal
              FROM urls WHERE id = ?1",
             [id],
             |r| {
@@ -170,6 +174,7 @@ fn fetch_url_row(conn: &Connection, id: i64) -> Result<Option<UrlRow>> {
                     redirect_to: r.get(9)?,
                     error_kind: r.get(10)?,
                     error_message: r.get(11)?,
+                    is_internal: r.get::<_, i64>(12)? != 0,
                 })
             },
         )
@@ -283,13 +288,20 @@ fn not_found_error(conn: &Connection, input: &str, lang: Lang) -> Result<String>
         let mut stmt = conn.prepare(
             "SELECT url FROM urls WHERE instr(url, ?1) > 0 ORDER BY length(url) LIMIT ?2",
         )?;
-        let parecidas: Vec<String> = stmt
+        let mut parecidas: Vec<String> = stmt
             .query_map(rusqlite::params![needle, MAX_SUGGESTIONS as i64], |r| {
                 r.get::<_, String>(0)
             })?
             .filter_map(std::result::Result::ok)
             .map(|u| sanitize(&u))
             .collect();
+        // El `instr` solo acierta si el tramo tecleado existe **exacto** dentro de alguna
+        // URL, y la errata humana típica —`/pagnia-10/` por `/pagina-10/`— no cumple eso
+        // nunca. El respaldo difuso cubre justo ese caso; se intenta segundo porque es más
+        // caro y porque cuando el exacto acierta, sus resultados son mejores.
+        if parecidas.is_empty() {
+            parecidas = fuzzy_suggestions(conn, &needle)?;
+        }
         if !parecidas.is_empty() {
             texto.push('\n');
             texto.push_str(&msg::inspect_closest(lang));
@@ -300,6 +312,62 @@ fn not_found_error(conn: &Connection, input: &str, lang: Lang) -> Result<String>
         }
     }
     Ok(texto)
+}
+
+/// Sugerencias por distancia de edición sobre el último tramo de cada ruta interna.
+///
+/// Es lo que cumple la promesa del manual («el error sugiere las URLs más parecidas»): la
+/// búsqueda exacta de arriba no dispara con una errata dentro del tramo. La pasada es O(n)
+/// sobre `urls`, cara a propósito de ser tolerable: vive solo en el camino del error, la
+/// cota de distancia descarta la mayoría de candidatas en la comparación de longitudes, y
+/// solo se miran las internas — sugerir la URL de otro dominio no acerca a nadie.
+fn fuzzy_suggestions(conn: &Connection, needle: &str) -> Result<Vec<String>> {
+    // Un tercio del tramo, mínimo 1: `pagnia-10` está a 2 de `pagina-10` (9 caracteres),
+    // y una cota mayor empezaría a sugerir cosas que no se parecen.
+    let max_distance = (needle.chars().count() / 3).max(1);
+    let needle_lower = needle.to_lowercase();
+    let mut stmt = conn.prepare("SELECT url FROM urls WHERE is_internal = 1")?;
+    let mut candidatas: Vec<(usize, String)> = Vec::new();
+    for url in stmt.query_map([], |r| r.get::<_, String>(0))?.filter_map(std::result::Result::ok) {
+        let segmento = suggestion_needle(&url).to_lowercase();
+        if let Some(d) = edit_distance_within(&needle_lower, &segmento, max_distance) {
+            candidatas.push((d, url));
+        }
+    }
+    // Las más cercanas primero; a igual distancia, la URL más corta (la menos anidada).
+    candidatas.sort_by(|a, b| {
+        a.0.cmp(&b.0).then_with(|| a.1.len().cmp(&b.1.len())).then_with(|| a.1.cmp(&b.1))
+    });
+    candidatas.truncate(MAX_SUGGESTIONS);
+    Ok(candidatas.into_iter().map(|(_, u)| sanitize(&u)).collect())
+}
+
+/// Distancia de edición entre `a` y `b` si no supera `max`; `None` en cuanto la supera.
+///
+/// La cota es lo que hace viable la pasada completa: la diferencia de longitudes descarta
+/// sin calcular nada, y el mínimo de cada fila corta el cálculo en cuanto ya no puede bajar.
+fn edit_distance_within(a: &str, b: &str, max: usize) -> Option<usize> {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > max {
+        return None;
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr: Vec<usize> = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        curr[0] = i;
+        let mut row_min = curr[0];
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+            row_min = row_min.min(curr[j]);
+        }
+        if row_min > max {
+            return None;
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    (prev[b.len()] <= max).then_some(prev[b.len()])
 }
 
 /// Lo más específico de lo tecleado: el último tramo de la ruta, o el host, o todo.
@@ -412,19 +480,23 @@ fn status_section(w: &mut Writer<'_>, row: &UrlRow, lang: Lang) -> Result<()> {
     let si_no = if row.in_sitemap { msg::word_yes(lang) } else { msg::word_no(lang) };
     w.kv(&msg::label_in_sitemap(lang), &si_no)?;
 
-    // El estado solo se nombra cuando cuenta algo: 'done' es lo normal y sería ruido.
+    // El estado solo se nombra cuando cuenta algo: 'done' es lo normal y sería ruido. Y se
+    // lee según lo que la fila dice de verdad: una externa con código o con error de sonda
+    // **sí se pidió**, así que «excluida del rastreo» era mentira, el `(-)` de una razón
+    // vacía era ruido y el token `skipped` se colaba sin traducir (revisión §3).
     match row.crawl_state.as_str() {
         "done" => {}
-        "pending" => w.kv(
-            &msg::label_crawl_state(lang),
-            &format!("pending — {}", msg::state_note_pending(lang)),
-        )?,
+        "pending" => w.kv(&msg::label_crawl_state(lang), &msg::state_note_pending(lang))?,
         "excluded" | "skipped" => {
-            let reason = row.exclusion_reason.as_deref().unwrap_or("-");
-            w.kv(
-                &msg::label_crawl_state(lang),
-                &format!("{} — {}", row.crawl_state, msg::state_note_excluded(lang, reason)),
-            )?;
+            let probed = row.status_code.is_some() || row.error_kind.is_some();
+            let texto = match &row.exclusion_reason {
+                // El motivo (`robots`, `pattern`) es un valor de columna y no se traduce.
+                Some(reason) => msg::state_note_excluded(lang, sanitize(reason)),
+                None if !row.is_internal && probed => msg::state_note_external_checked(lang),
+                None if !row.is_internal => msg::state_note_external_unchecked(lang),
+                None => msg::state_note_out_of_scope(lang),
+            };
+            w.kv(&msg::label_crawl_state(lang), &texto)?;
         }
         "error" => {
             let detalle = match (&row.error_kind, &row.error_message) {
@@ -435,7 +507,7 @@ fn status_section(w: &mut Writer<'_>, row: &UrlRow, lang: Lang) -> Result<()> {
             };
             w.kv(
                 &msg::label_crawl_state(lang),
-                &format!("error — {}", msg::state_note_error(lang, detalle)),
+                &msg::state_note_error(lang, detalle),
             )?;
         }
         otro => w.kv(&msg::label_crawl_state(lang), &sanitize(otro))?,
@@ -608,7 +680,7 @@ fn inlinks_section(
     }
     let desglose = regiones
         .iter()
-        .map(|(r, n, _)| format!("{} {}", sanitize(r), i18n::count(lang, *n)))
+        .map(|(r, n, _)| format!("{} {}", region_word(r, lang), i18n::count(lang, *n)))
         .collect::<Vec<_>>()
         .join(" · ");
     w.note(&msg::inlinks_by_region(lang, desglose, i18n::count(lang, nofollow)))?;
@@ -692,7 +764,7 @@ fn print_link_lines(
         let texto = match kind {
             LinkListKind::Inlinks => format!(
                 "{:<8} {ancla}{marcas} — {}",
-                sanitize(&linea.region),
+                region_word(&linea.region, lang),
                 sanitize(&linea.url)
             ),
             LinkListKind::Outlinks => {
@@ -729,12 +801,7 @@ fn outlinks_section(
     let internos: i64 = cuentas.iter().filter(|(i, _)| *i != 0).map(|(_, n)| n).sum();
     let externos: i64 = cuentas.iter().filter(|(i, _)| *i == 0).map(|(_, n)| n).sum();
 
-    w.section(&msg::outlinks_title(
-        lang,
-        i18n::count(lang, internos + externos),
-        i18n::count(lang, internos),
-        i18n::count(lang, externos),
-    ))?;
+    w.section(&msg::outlinks_title(lang, internos + externos, internos, externos))?;
 
     // Deduplicado por destino y con los rotos primero: el estado del destino es la columna
     // que convierte esta lista en el triaje de enlaces rotos de la página.
@@ -833,7 +900,7 @@ fn image_usage_section(
         return Ok(());
     }
     w.section(&msg::image_usage_title(lang))?;
-    w.note(&msg::image_usage_line(lang, i18n::count(lang, veces), i18n::count(lang, paginas)))?;
+    w.note(&msg::image_usage_line(lang, veces, paginas))?;
     let mut stmt = conn.prepare(
         "SELECT u.url, COUNT(*) FROM images i JOIN urls u ON u.id = i.page_url_id
          WHERE i.src_url_id = ?1 GROUP BY i.page_url_id ORDER BY u.url LIMIT ?2",
@@ -858,6 +925,16 @@ fn image_usage_section(
 /// confiable y una URL fabricada puede traer secuencias de escape (revisión §1.7d).
 fn sanitize(s: &str) -> String {
     crate::audit_report::strip_control_chars(s)
+}
+
+/// Una región para pantalla. `main`/`nav`/`footer` son identificadores del documento y no se
+/// traducen; `unknown` es el relleno de «no se supo», que en español se colaba en inglés.
+fn region_word(region: &str, lang: Lang) -> String {
+    if region == "unknown" {
+        msg::region_unknown(lang)
+    } else {
+        sanitize(region)
+    }
 }
 
 /// Un ancla lista para pantalla: sin caracteres de control, sin saltos, y recortada — más
@@ -934,6 +1011,8 @@ mod tests {
         url(6, "https://ejemplo.es/logo.png", 1, "done", Some(200));
         url(7, "https://ejemplo.es/foto.jpg", 1, "done", Some(200));
         url(8, "https://ejemplo.es/pendiente", 1, "pending", None);
+        // Una externa cuyo estado sí se sondeó: tiene código y tiempo de respuesta.
+        url(9, "https://externo.com/rota.html", 0, "skipped", Some(404));
         // Las 30 páginas de archivo que enlazan al blog desde el pie: el ruido de plantilla.
         for i in 0..30 {
             url(100 + i, &format!("https://ejemplo.es/archivo/p{i:02}/"), 1, "done", Some(200));
@@ -1202,7 +1281,8 @@ mod tests {
         let store = store_de_prueba("uso-imagen");
         let s = ficha(&store, "https://ejemplo.es/logo.png");
         assert!(s.contains("Used as an image"), "{s}");
-        assert!(s.contains("embedded 1 times on 1 pages"), "{s}");
+        // Singular resolved as singular: "1 times on 1 pages" was the review's plural bug.
+        assert!(s.contains("embedded 1 time on 1 page"), "{s}");
         assert!(s.contains("https://ejemplo.es/blog/"), "who uses it: {s}");
     }
 
@@ -1210,7 +1290,6 @@ mod tests {
     fn una_url_pendiente_dice_que_nunca_se_pidio() {
         let store = store_de_prueba("pendiente");
         let s = ficha(&store, "https://ejemplo.es/pendiente");
-        assert!(s.contains("pending"), "{s}");
         assert!(s.contains("never fetched"), "{s}");
         // Y sus entrantes se enseñan igual: es justo lo que explica por qué se descubrió.
         assert!(s.contains("\"Próximamente\""), "{s}");
@@ -1255,6 +1334,87 @@ mod tests {
         // Lo que es dato no se traduce: URLs, regiones, IDs de regla.
         assert!(s.contains("footer 31"), "{s}");
         assert!(s.contains("META-DESC-MISSING"), "{s}");
+    }
+
+    // ── El estado de rastreo se lee según lo que la fila dice (revisión §3) ──
+
+    #[test]
+    fn una_externa_comprobada_no_dice_que_fue_excluida() {
+        // The row has a status code and a response time: the URL WAS requested. Saying
+        // "excluded from the crawl (-)" was false, printed an empty reason, and leaked the
+        // raw 'skipped' token into the Spanish output.
+        let store = store_de_prueba("externa-comprobada");
+        let s = ficha(&store, "https://externo.com/rota.html");
+        assert!(s.contains("404"), "{s}");
+        assert!(s.contains("status checked, content not audited"), "{s}");
+        assert!(!s.contains("excluded from the crawl"), "{s}");
+        assert!(!s.contains("(-)"), "an empty reason is not printed: {s}");
+
+        let es = render_card(
+            &store,
+            "https://externo.com/rota.html",
+            ListLimit::N(20),
+            "terminal",
+            Lang::Es,
+        )
+        .expect("the card must render");
+        assert!(es.contains("estado comprobado, contenido no auditado"), "{es}");
+        assert!(!es.contains("skipped"), "the raw token does not leak into Spanish: {es}");
+        assert!(!es.contains("excluida del rastreo"), "{es}");
+    }
+
+    #[test]
+    fn una_externa_sin_sondear_dice_que_nunca_se_pidio() {
+        let store = store_de_prueba("externa-sin-sondear");
+        let s = ficha(&store, "https://externo.com/");
+        assert!(s.contains("external URL — never requested"), "{s}");
+        assert!(!s.contains("excluded from the crawl"), "{s}");
+    }
+
+    #[test]
+    fn el_espanol_de_la_ficha_traduce_region_y_resuelve_el_plural() {
+        // "Por región: unknown" and "1 externos" were the Spanish leftovers of the review.
+        let store = store_de_prueba("plural-es");
+        let s = render_card(&store, "https://ejemplo.es/", ListLimit::N(20), "terminal", Lang::Es)
+            .expect("the card must render");
+        assert!(s.contains("(3: 2 internos, 1 externo)"), "singular resolved: {s}");
+        assert_eq!(region_word("unknown", Lang::Es), "desconocida");
+        assert_eq!(region_word("main", Lang::Es), "main", "real regions are identifiers");
+        assert_eq!(region_word("unknown", Lang::En), "unknown");
+    }
+
+    // ── Las sugerencias difusas del error (revisión §7) ──────────────────────
+
+    #[test]
+    fn una_errata_dentro_del_tramo_sigue_sugiriendo() {
+        // The manual promises the error suggests the closest URLs, but `instr` only fired
+        // when the typed segment existed verbatim somewhere. `/contcato` for `/contacto`
+        // is the human typo, and it suggested nothing.
+        let store = store_de_prueba("errata");
+        let err = render_card(&store, "/contcato", ListLimit::N(20), "terminal", Lang::En)
+            .expect_err("not there");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("closest"), "{msg}");
+        assert!(msg.contains("https://ejemplo.es/contacto"), "{msg}");
+    }
+
+    #[test]
+    fn las_sugerencias_difusas_no_ofrecen_externas() {
+        // Suggesting another domain's URL brings nobody closer to their own site.
+        let store = store_de_prueba("difusa-externa");
+        let err = render_card(&store, "/rota.htlm", ListLimit::N(20), "terminal", Lang::En)
+            .expect_err("not there");
+        let msg = format!("{err:#}");
+        assert!(!msg.contains("externo.com"), "{msg}");
+    }
+
+    #[test]
+    fn la_distancia_de_edicion_respeta_su_cota() {
+        assert_eq!(edit_distance_within("pagnia-10", "pagina-10", 3), Some(2));
+        assert_eq!(edit_distance_within("contacto", "contacto", 2), Some(0));
+        assert_eq!(edit_distance_within("contcato", "contacto", 2), Some(2));
+        assert_eq!(edit_distance_within("abc", "xyz", 2), None, "over the cap is None");
+        assert_eq!(edit_distance_within("a", "abcdefg", 2), None, "length gap alone rejects");
     }
 
     // ── Guardas de no regresión ──────────────────────────────────────────────

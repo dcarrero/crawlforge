@@ -197,6 +197,113 @@ pub fn is_crawlable_scheme(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
 }
 
+/// Is this a host we are willing to ask for on the user's behalf?
+///
+/// The engine only crawls the audited site, but the external status probe
+/// (`CrawlLimits::check_external`, on by default) sends a request to an address **the audited
+/// site chose**. A page serving `<a href="http://169.254.169.254/latest/meta-data/">` would
+/// otherwise make the tool ask the user's own network for it, and what comes back —status,
+/// response time and the raw `error_message`, which tells *connection refused* apart from
+/// *timeout*— lands in `urls`, inside a file whose whole point is being sent to the client.
+/// That is a map of the consultant's internal network drawn by a third party.
+///
+/// It is the same perimeter the sitemap path already has (see `discover_sitemap_urls`),
+/// reached through the other door.
+///
+/// # This is a lexical screen and nothing more
+///
+/// It decides on the **parsed** host, so every spelling of an address is covered: `url`
+/// canonicalises `http://2130706433/` to `127.0.0.1` and `http://[::ffff:127.0.0.1]/` to its
+/// mapped form before this function ever sees them, and there is a test for it.
+///
+/// What it does **not** do is resolve names. A host called `intranet.cliente.com` whose DNS
+/// answers `10.0.0.5` goes straight through, and so does any name pointed at a private address
+/// on purpose. Closing that needs the crawler to own its resolver and check the address it
+/// actually dialled —including on every redirect— which is a different piece of work. Do not
+/// read this function as more protection than it gives.
+pub fn is_probeable_host(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => is_public_ipv4(ip),
+        Some(url::Host::Ipv6(ip)) => is_public_ipv6(ip),
+        Some(url::Host::Domain(name)) => is_public_domain(name),
+        // No authority at all: there is nothing to ask.
+        None => false,
+    }
+}
+
+fn is_public_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    let [a, b, _, _] = ip.octets();
+    !(a == 0                                  // 0.0.0.0/8, «this network»
+        || ip.is_loopback()                   // 127/8
+        || ip.is_private()                    // 10/8, 172.16/12, 192.168/16
+        || ip.is_link_local()                 // 169.254/16 — where cloud metadata lives
+        || (a == 100 && (64..128).contains(&b)) // 100.64/10, carrier-grade NAT
+        || ip.is_broadcast()
+        || a >= 240) // 240/4, reserved
+}
+
+fn is_public_ipv6(ip: std::net::Ipv6Addr) -> bool {
+    // An IPv4-mapped address is an IPv4 address written in IPv6: it decides as one, or
+    // `::ffff:127.0.0.1` would be a way around the screen.
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return is_public_ipv4(v4);
+    }
+    let first = ip.segments()[0];
+    !(ip.is_loopback()                // ::1
+        || ip.is_unspecified()        // ::
+        || first & 0xfe00 == 0xfc00   // fc00::/7, unique local
+        || first & 0xffc0 == 0xfe80) // fe80::/10, link-local unicast
+}
+
+/// Is this the cloud metadata endpoint — the one address that is screened **always**?
+///
+/// [`is_probeable_host`] is only consulted when the audited site is public, and the reasoning
+/// for that is sound: auditing an `astro dev` on `localhost` or a client's staging on the office
+/// LAN means whoever launched the crawl is already inside that network. Screening there protects
+/// nobody and breaks a real use case.
+///
+/// This address is the exception, and the case that breaks the reasoning is concrete: a crawl of
+/// `http://localhost:4321/` **from a cloud runner in CI**. The seed is local, so the screen is
+/// off, and `169.254.169.254` answers with the instance's IAM credentials. Nothing legitimate
+/// ever links there, so screening it costs nothing and closes the highest-value target in the
+/// whole range.
+///
+/// The whole of 169.254/16 is screened and not just the single address: the same link-local
+/// range holds the metadata endpoints of every provider, and enumerating them by address is a
+/// list that goes stale.
+fn is_cloud_metadata(name_or_ip: &Url) -> bool {
+    match name_or_ip.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_link_local(),
+        Some(url::Host::Ipv6(ip)) => {
+            ip.to_ipv4_mapped().is_some_and(|v4| v4.is_link_local())
+                // fd00:ec2::254, the IPv6 metadata address on AWS.
+                || ip.segments()[0] == 0xfd00 && ip.segments()[1] == 0x0ec2
+        }
+        _ => false,
+    }
+}
+
+/// Should this URL be left unprobed, given whether the audited site is public?
+///
+/// The two halves are separate on purpose: the network screen is conditional and defensible,
+/// the metadata screen is not negotiable. See [`is_cloud_metadata`].
+pub fn is_probeable(url: &Url, screen_local_network: bool) -> bool {
+    if is_cloud_metadata(url) {
+        return false;
+    }
+    !screen_local_network || is_probeable_host(url)
+}
+
+fn is_public_domain(name: &str) -> bool {
+    // `url` already lowercases the host of an http(s) URL; the trailing dot of an absolute
+    // name (`ejemplo.es.`) it does keep.
+    let name = name.trim_end_matches('.').to_ascii_lowercase();
+    !(name == "localhost"
+        || name.ends_with(".localhost")
+        || name.ends_with(".local")
+        || name.ends_with(".internal"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,5 +589,109 @@ mod tests {
             assert!(!is_crawlable_scheme(&u), "{s} no debería rastrearse");
         }
         assert!(is_crawlable_scheme(&Url::parse("https://ejemplo.es").expect("válida")));
+    }
+
+    // --- The perimeter of the external probe ---
+
+    fn probeable(s: &str) -> bool {
+        is_probeable_host(&Url::parse(s).expect("test URL"))
+    }
+
+    #[test]
+    fn a_public_host_is_probeable() {
+        for s in [
+            "https://ejemplo.es/guia",
+            "http://www.wikipedia.org/",
+            "https://8.8.8.8/",
+            "https://[2606:4700:4700::1111]/",
+            "https://xn--diseo-rta.es/",
+            // A name ending in something that merely *contains* a blocked suffix is public.
+            "https://milocal.es/",
+            "https://internal-affairs.es/",
+        ] {
+            assert!(probeable(s), "{s} should be probeable");
+        }
+    }
+
+    #[test]
+    fn the_probe_refuses_addresses_of_the_users_own_network() {
+        for s in [
+            "http://127.0.0.1:8080/panel",
+            "http://169.254.169.254/latest/meta-data/", // cloud metadata
+            "http://10.0.0.5/",
+            "http://172.16.3.4/",
+            "http://192.168.1.1/",
+            "http://0.0.0.0/",
+            "http://100.64.0.1/",
+            "http://[::1]:9200/",
+            "http://[fe80::1]/",
+            "http://[fd00::1]/",
+            "http://localhost:5432/",
+            "http://nas.local/",
+            "http://api.internal/",
+            "http://db.localhost/",
+            // Loopback written as IPv6: the host keeps this spelling, so the screen has to
+            // look through the mapping instead of at the text.
+            "http://[::ffff:127.0.0.1]/",
+        ] {
+            assert!(!probeable(s), "{s} must not be asked for");
+        }
+    }
+
+    #[test]
+    fn the_screen_decides_on_the_parsed_host_and_not_on_the_text() {
+        // `url` canonicalises every spelling of an IPv4 address, so a filter written against
+        // the raw text —«does it start with 127.»— would let all of these through.
+        for (raw, canonical) in [
+            ("http://2130706433/", "127.0.0.1"),
+            ("http://0x7f.0.0.1/", "127.0.0.1"),
+            ("http://017700000001/", "127.0.0.1"),
+            ("http://127.1/", "127.0.0.1"),
+        ] {
+            let url = Url::parse(raw).expect("test URL");
+            assert_eq!(
+                url.host_str(),
+                Some(canonical),
+                "{raw} should already reach us as {canonical}"
+            );
+            assert!(!is_probeable_host(&url), "{raw} is {canonical} and must not be asked for");
+        }
+    }
+
+    #[test]
+    fn the_trailing_dot_of_an_absolute_name_does_not_get_around_the_screen() {
+        assert!(!probeable("http://localhost./"));
+        assert!(!probeable("http://nas.local./"));
+    }
+
+    /// Auditing a local site turns the network screen off — that is deliberate — but the cloud
+    /// metadata endpoint stays screened regardless. The case is a crawl of `localhost` from a
+    /// cloud runner in CI: the seed is local, the screen is off, and that address answers with
+    /// the instance's credentials.
+    #[test]
+    fn the_metadata_endpoint_is_screened_even_when_the_screen_is_off() {
+        let meta = Url::parse("http://169.254.169.254/latest/meta-data/").expect("parse");
+        assert!(!is_probeable(&meta, true), "with the screen on");
+        assert!(!is_probeable(&meta, false), "and with it off, which is the point");
+
+        // Written as an integer, which is how it slips past a text-based filter.
+        let entero = Url::parse("http://2852039166/").expect("parse");
+        assert_eq!(entero.host_str(), Some("169.254.169.254"), "url canonicalises it");
+        assert!(!is_probeable(&entero, false));
+
+        // And the IPv6 address AWS answers on.
+        let v6 = Url::parse("http://[fd00:ec2::254]/").expect("parse");
+        assert!(!is_probeable(&v6, false));
+    }
+
+    /// The rest of the local network keeps working when the audited site is local: that is the
+    /// `astro dev` and the client's staging, and screening there protects nobody.
+    #[test]
+    fn auditing_a_local_site_still_reaches_the_rest_of_its_network() {
+        for url in ["http://localhost:4321/", "http://192.168.1.10/", "http://10.0.0.5/"] {
+            let u = Url::parse(url).expect("parse");
+            assert!(is_probeable(&u, false), "{url} should be reachable with the screen off");
+            assert!(!is_probeable(&u, true), "{url} should be screened when the site is public");
+        }
     }
 }

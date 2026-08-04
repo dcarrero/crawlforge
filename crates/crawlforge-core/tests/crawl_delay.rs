@@ -130,6 +130,102 @@ async fn un_crawl_delay_mantiene_una_sola_peticion_en_vuelo() {
 }
 
 #[tokio::test]
+async fn un_host_con_crawl_delay_no_esconde_la_cola_de_los_demas() {
+    // El defecto que este test fija, y que el de abajo **no cazaba**: el planificador retenía
+    // las URLs de hosts saturados en un búfer de 200 y, una vez lleno, dejaba de mirar el
+    // frontier. Con `force_serial` un host con `Crawl-delay` queda a una petición en vuelo y
+    // llena ese búfer enseguida, así que todo lo que estuviera detrás —incluidos hosts libres—
+    // dejaba de despacharse. Reproducido: 250 URLs del host lento por delante de 5 del libre,
+    // y a los veinte segundos el libre seguía a cero de cinco.
+    //
+    // `el_crawl_delay_de_un_host_no_frena_a_los_demas` usa seis URLs y nunca llena el búfer:
+    // pasaba con el fallo puesto. Este necesita pasar de doscientas para significar algo.
+    let lento = ServidorDePruebas::arrancar_con_puerto(|_| {
+        let mut rutas = vec![(
+            "/robots.txt".to_string(),
+            Respuesta::texto("User-agent: *\nCrawl-delay: 1\n"),
+        )];
+        for i in 0..250 {
+            rutas.push((format!("/lento-{i}"), Respuesta::pagina("Lento", "<p>x</p>")));
+        }
+        rutas
+    })
+    .await;
+    let rapido = ServidorDePruebas::arrancar_como_otro_host_con_puerto(|_| {
+        (0..5)
+            .map(|i| (format!("/libre-{i}"), Respuesta::pagina("Libre", "<p>x</p>")))
+            .collect()
+    })
+    .await;
+
+    // Las 250 del host lento van **delante** en la lista: es el orden en que el frontier las
+    // sirve, y por tanto el que enterraba a las cinco de detrás.
+    let mut urls: Vec<String> = (0..250).map(|i| lento.url(&format!("/lento-{i}"))).collect();
+    urls.extend((0..5).map(|i| rapido.url_como_otro_host(&format!("/libre-{i}"))));
+
+    let tmp = Temporal::new("hambre");
+    let mut job = CrawlJob::http(lento.base());
+    job.mode = CrawlMode::List { urls };
+    job.discover_sitemaps = false;
+    // El presupuesto de tiempo acota el test: el host lento tardaría 250 segundos en drenar,
+    // y lo que se afirma es que el libre no tiene que esperar a que lo haga.
+    job.limits.max_duration = Some(Duration::from_secs(3));
+
+    engine::run(job, &tmp.store()).await.expect("rastrear");
+
+    for i in 0..5 {
+        let ruta = format!("/libre-{i}");
+        assert_eq!(
+            rapido.peticiones(&ruta),
+            1,
+            "{ruta} no llegó a pedirse: el host libre quedó enterrado detrás del lento"
+        );
+    }
+}
+
+#[tokio::test]
+async fn el_robots_txt_de_un_host_se_descarga_una_sola_vez() {
+    // La caché era *check-then-fetch* sin puerta: las N tareas de la primera ola de un host
+    // fallaban el `get` a la vez y las N descargaban el fichero. Medido en un rastreo real:
+    // 122 peticiones para 25 hosts, 4,9x — exactamente la concurrencia por host.
+    //
+    // Vive en este fichero porque es el mismo problema por otro lado: esa ráfaga simultánea de
+    // N peticiones es justo la que el `Crawl-delay` existe para evitar, y ocurre **antes** de
+    // poder saber que el host lo declara.
+    let mut rutas = vec![(
+        "/robots.txt".to_string(),
+        // El fichero tarda: sin la puerta, las tareas de la primera ola pasan por el `get`
+        // mientras la primera descarga sigue en vuelo, y todas piden.
+        Respuesta::texto("User-agent: *\nDisallow: /privado/\n")
+            .con_retardo(Duration::from_millis(200)),
+    )];
+    for i in 0..12 {
+        rutas.push((format!("/p{i}"), Respuesta::pagina("P", "<p>x</p>")));
+    }
+    let servidor = ServidorDePruebas::arrancar_con_puerto(|_| rutas).await;
+
+    let tmp = Temporal::new("robots-single-flight");
+    let mut job = CrawlJob::http(servidor.base());
+    // Modo lista, y no una semilla que enlaza: con una sola semilla no hay primera ola —la
+    // portada se pide sola y para cuando se descubren sus enlaces el fichero ya está en la
+    // caché—. La ráfaga aparece cuando el motor despacha `concurrency` URLs del mismo host de
+    // golpe, que es lo que pasa en un rastreo de lista y en uno de cartera: ahí se midieron
+    // las 122 peticiones para 25 hosts.
+    job.mode = CrawlMode::List {
+        urls: (0..12).map(|i| servidor.url(&format!("/p{i}"))).collect(),
+    };
+    job.discover_sitemaps = false;
+
+    let outcome = engine::run(job, &tmp.store()).await.expect("rastrear");
+    assert_eq!(outcome.metrics.urls_fetched, 12, "la lista entera");
+    assert_eq!(
+        servidor.peticiones("/robots.txt"),
+        1,
+        "«se descarga una vez por host» tiene que ser verdad, no una promesa de la doc"
+    );
+}
+
+#[tokio::test]
 async fn el_crawl_delay_de_un_host_no_frena_a_los_demas() {
     // Dos hosts en el mismo rastreo: `127.0.0.1` declara Crawl-delay y `localhost` no. El
     // lento se serializa; el rápido conserva la concurrencia del usuario. Sin esta propiedad,

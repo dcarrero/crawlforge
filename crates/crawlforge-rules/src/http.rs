@@ -82,12 +82,14 @@ pub static HTTP_404_EXTERNAL: RuleMeta = RuleMeta {
     scope: Scope::Site,
     name_es: "Enlace externo roto",
     name_en: "Broken external link",
-    desc_es: "El sitio enlaza a una URL de otro dominio que ya devuelve 4xx. No penaliza como un \
-              404 propio, pero manda al visitante a una página de error y envejece el contenido: \
-              una guía llena de enlaces muertos deja de parecer mantenida.",
-    desc_en: "The site links to a URL on another domain that now returns 4xx. It does not hurt \
-              like a 404 of your own, but it sends the visitor to an error page and ages the \
-              content: a guide full of dead links stops looking maintained.",
+    desc_es: "El sitio enlaza a una URL de otro dominio que ya no existe: responde 404 o 410, o \
+              su dominio no resuelve. No penaliza como un 404 propio, pero manda al visitante \
+              a una página de error y envejece el contenido: una guía llena de enlaces muertos \
+              deja de parecer mantenida.",
+    desc_en: "The site links to a URL on another domain that is gone: it answers 404 or 410, or \
+              its domain does not resolve. It does not hurt like a 404 of your own, but it \
+              sends the visitor to an error page and ages the content: a guide full of dead \
+              links stops looking maintained.",
     references: &[],
 };
 
@@ -354,10 +356,19 @@ fn is_plain_http(href: &str) -> bool {
 
 // ---------------------------------------------------------------- Site rules
 
-/// An internal page of the site returns 4xx and internal links point at it.
+/// An internal page of the site returns 4xx and internal `<a>` links point at it.
 ///
 /// The finding is recorded **on the destination page**, with the count of pages linking to it:
 /// that is what needs fixing, and the detail says how much damage it does.
+///
+/// **Only `element = 'a'` counts**, and it is not an optimization: the parser writes `<img>`,
+/// `<script>`, `<link rel=stylesheet>`, `<iframe>` and `<form>` into `links` too, and without
+/// the filter a broken stylesheet came out twice — as `ASSET-BROKEN` (`high`) *and* as this
+/// rule (`critical`), whose description ("leaves the visitor on an error page") is false for a
+/// resource nobody navigates to. On a real crawl with 2,193 broken images that was 2,193
+/// spurious criticals. Broken resources have their own rules (`ASSET-BROKEN`,
+/// `ASSET-IMG-BROKEN`); a broken `<iframe>`/`<form>` target has none today, which is a smaller
+/// and honest gap — better than the same file carrying two contradictory severities.
 pub struct Http404Internal;
 
 impl SiteRule for Http404Internal {
@@ -371,6 +382,7 @@ impl SiteRule for Http404Internal {
              FROM urls u
              JOIN links l ON l.to_url_id = u.id
              WHERE u.is_internal = 1 AND u.status_code >= 400 AND u.status_code < 500
+               AND l.element = 'a'
              GROUP BY u.id",
         )?;
 
@@ -399,18 +411,32 @@ impl SiteRule for Http404Internal {
     }
 }
 
-/// A URL on another domain that the site links to returns 4xx.
+/// A URL on another domain that the site links to is gone: 404, 410, or a dead domain.
 ///
-/// Same criterion as [`Http404Internal`] —4xx only, not 5xx— and for the same reason: someone
-/// else's 5xx is almost always a temporary problem on their server, and reporting it would make
-/// the report change from one crawl to the next without anyone having touched anything.
+/// **Only the codes the probe can vouch for assert "broken"** — see
+/// [`crate::sql_external_gone`] for the full list of what is excluded and why. The short
+/// version: the probe is a bot `HEAD` from a datacenter IP, which is exactly what Cloudflare,
+/// Akamai and DataDome answer with 401, 403 or 429 while the page opens fine in a browser.
+/// Reporting those would have called Medium profiles and paywalled newspapers "broken" on the
+/// very first real crawl. It is the same reasoning that keeps someone else's 5xx out: a code
+/// that judges the request or the moment, not the resource, cannot back the claim this rule
+/// makes. Those rows keep their status in `urls` — nothing is lost, the rule just does not
+/// turn them into an accusation it cannot sustain.
 ///
-/// It needs the engine to have checked the status of the external URL, which it does by default
-/// since 2026-08-04 (`check_external`: a `HEAD` probe, once per distinct URL). When that check is
-/// off, or when the probe never completed, the row keeps a null `status_code` and the rule finds
-/// nothing — the correct behaviour, and the reason the query filters on the status rather than
-/// assuming it: no data is not the same as a healthy link, and saying otherwise would be lying
-/// by omission.
+/// **A DNS resolution failure does count** (`error_kind = 'dns'`, null status): the domain not
+/// resolving is the number-one form of link rot, and a browser visit fails exactly like the
+/// probe did. The other `error_kind`s — `timeout`, `connection`, `tls`, `toolarge` — stay
+/// silent: they are transient or say nothing about the link being gone.
+///
+/// **Only `element = 'a'` counts**, same as [`Http404Internal`] and for the same reason: a
+/// hotlinked external image or script in `links` is not a link the visitor clicks, and mixing
+/// them here produced duplicate findings with contradictory severities.
+///
+/// It needs the engine to have checked the external URL, which it does by default since
+/// 2026-08-04 (`check_external`: a `HEAD` probe, once per distinct URL). When that check is
+/// off, or when the probe never completed, the row keeps a null `status_code`, no `error_kind`
+/// worth asserting on, and the rule finds nothing — no data is not the same as a healthy link,
+/// and saying otherwise would be lying by omission.
 pub struct Http404External;
 
 impl SiteRule for Http404External {
@@ -419,34 +445,47 @@ impl SiteRule for Http404External {
     }
 
     fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
-        let mut stmt = conn.prepare(
-            "SELECT u.url_hash, u.url, u.status_code, COUNT(DISTINCT l.from_url_id) AS inlinks
+        let sql = format!(
+            "SELECT u.url_hash, u.url, u.status_code, u.error_kind,
+                    COUNT(DISTINCT l.from_url_id) AS inlinks
              FROM urls u
              JOIN links l ON l.to_url_id = u.id
-             WHERE u.is_internal = 0 AND u.status_code >= 400 AND u.status_code < 500
+             WHERE u.is_internal = 0 AND l.element = 'a'
+               AND ({estado_roto}
+                    OR (u.status_code IS NULL AND u.error_kind = 'dns'))
              GROUP BY u.id",
-        )?;
+            estado_roto = crate::sql_external_gone("u.status_code"),
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
+                r.get::<_, Option<i64>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, i64>(4)?,
             ))
         })?;
 
         let mut out = Vec::new();
         for row in rows {
-            let (hash, url, status, inlinks) = row?;
-            out.push((
-                Some(hash),
-                Issue::new(&HTTP_404_EXTERNAL).with_detail(serde_json::json!({
+            let (hash, url, status, error_kind, inlinks) = row?;
+            let detail = match status {
+                Some(status) => serde_json::json!({
                     "url": url,
                     "status_code": status,
                     "linked_from": inlinks
-                })),
-            ));
+                }),
+                // The dns branch: no status ever arrived, the finding rests on the domain not
+                // resolving, and the detail says so instead of faking a code.
+                None => serde_json::json!({
+                    "url": url,
+                    "reason": error_kind,
+                    "linked_from": inlinks
+                }),
+            };
+            out.push((Some(hash), Issue::new(&HTTP_404_EXTERNAL).with_detail(detail)));
         }
         Ok(out)
     }
@@ -1028,15 +1067,36 @@ mod tests {
         internal: bool,
         status: Option<i64>,
         redirect_to: Option<i64>,
+        error_kind: Option<&'a str>,
     }
 
     impl<'a> Fila<'a> {
         fn interna(id: i64, url: &'a str, status: i64) -> Self {
-            Self { id, url, internal: true, status: Some(status), redirect_to: None }
+            Self {
+                id,
+                url,
+                internal: true,
+                status: Some(status),
+                redirect_to: None,
+                error_kind: None,
+            }
         }
 
         fn externa(id: i64, url: &'a str, status: Option<i64>) -> Self {
-            Self { id, url, internal: false, status, redirect_to: None }
+            Self { id, url, internal: false, status, redirect_to: None, error_kind: None }
+        }
+
+        /// An external URL whose probe failed: no status, only the failure kind, exactly as
+        /// `engine::external_check_failed_row` leaves it.
+        fn externa_fallida(id: i64, url: &'a str, kind: &'a str) -> Self {
+            Self {
+                id,
+                url,
+                internal: false,
+                status: None,
+                redirect_to: None,
+                error_kind: Some(kind),
+            }
         }
 
         fn hacia(mut self, destino: i64) -> Self {
@@ -1054,8 +1114,9 @@ mod tests {
         };
         conn.execute(
             "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
-                               crawl_state, status_code, redirect_to, redirect_chain_len)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,0,'done',?8,?9,0)",
+                               crawl_state, status_code, redirect_to, redirect_chain_len,
+                               error_kind)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,0,'done',?8,?9,0,?10)",
             params![
                 f.id,
                 f.url,
@@ -1065,16 +1126,21 @@ mod tests {
                 path,
                 f.internal as i64,
                 f.status,
-                f.redirect_to
+                f.redirect_to,
+                f.error_kind
             ],
         )
         .expect("insert url");
     }
 
     fn enlazar(conn: &Connection, desde: i64, hacia: i64) {
+        enlazar_como(conn, desde, hacia, "a");
+    }
+
+    fn enlazar_como(conn: &Connection, desde: i64, hacia: i64, element: &str) {
         conn.execute(
-            "INSERT INTO links (from_url_id, to_url_id, element) VALUES (?1, ?2, 'a')",
-            params![desde, hacia],
+            "INSERT INTO links (from_url_id, to_url_id, element) VALUES (?1, ?2, ?3)",
+            params![desde, hacia, element],
         )
         .expect("insert link");
     }
@@ -1140,6 +1206,120 @@ mod tests {
         let conn = db();
         insertar(&conn, Fila::externa(1, "https://otro.example/muerta", Some(410)));
         assert!(Http404External.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn a_410_is_a_broken_external_link() {
+        // Non-regression guard: 410 is the origin stating "gone", even more explicitly than a
+        // 404, and it must keep firing after narrowing the asserted codes.
+        let conn = db();
+        insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
+        insertar(&conn, Fila::externa(2, "https://otro.example/retirada", Some(410)));
+        enlazar(&conn, 1, 2);
+
+        assert_eq!(Http404External.evaluate(&conn).expect("evaluate").len(), 1);
+    }
+
+    #[test]
+    fn a_bot_wall_status_is_not_a_broken_external_link() {
+        // Proves the fix. Cloudflare, Akamai and DataDome answer the probe's bot HEAD with
+        // 401/403/429 while the page opens fine in a browser — measured against medium.com
+        // (403), wsj.com (401) and ft.com (403) with the probe's own method and user-agent.
+        // Calling those "broken" would be false on the very first real crawl. Same reasoning
+        // as the excluded foreign 5xx; the full list lives in `sql_external_gone`.
+        for status in [401, 403, 407, 429, 451] {
+            let conn = db();
+            insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
+            insertar(&conn, Fila::externa(2, "https://otro.example/paywall", Some(status)));
+            enlazar(&conn, 1, 2);
+
+            assert!(
+                Http404External.evaluate(&conn).expect("evaluate").is_empty(),
+                "a {status} from a host we do not control proves nothing about the link"
+            );
+        }
+    }
+
+    #[test]
+    fn a_400_is_not_asserted_as_broken_either() {
+        // Deliberate: a 400 to a bodyless bot HEAD frequently judges the request, not the
+        // resource — servers that dislike HEAD answer 400/405 while a browser GET succeeds.
+        // Only 404 and 410 state that the resource itself is gone.
+        for status in [400, 405, 406, 418] {
+            let conn = db();
+            insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
+            insertar(&conn, Fila::externa(2, "https://otro.example/rara", Some(status)));
+            enlazar(&conn, 1, 2);
+
+            assert!(
+                Http404External.evaluate(&conn).expect("evaluate").is_empty(),
+                "a {status} judges the request, not the resource"
+            );
+        }
+    }
+
+    #[test]
+    fn a_domain_that_does_not_resolve_is_a_broken_external_link() {
+        // Proves the fix. NXDOMAIN is the number-one form of link rot — and a security smell,
+        // because dead domains get re-registered. The visitor's browser fails exactly like the
+        // probe did, so this the rule *can* assert, unlike a wall's 403.
+        let conn = db();
+        insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
+        insertar(
+            &conn,
+            Fila::externa_fallida(2, "https://dominio-que-cerro.example/post", "dns"),
+        );
+        enlazar(&conn, 1, 2);
+
+        let hallazgos = Http404External.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1);
+        assert_eq!(hallazgos[0].1.rule_id, "HTTP-404-EXTERNAL");
+        let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
+        assert!(detalle.contains("\"reason\":\"dns\""), "unexpected detail: {detalle}");
+        assert!(!detalle.contains("status_code"), "there is no status to report: {detalle}");
+    }
+
+    #[test]
+    fn a_transient_probe_failure_is_not_a_broken_external_link() {
+        // Guard: only DNS asserts. A timeout, a refused connection or a TLS handshake failure
+        // is transient or observer-dependent, and no data is not a finding.
+        for kind in ["timeout", "connection", "tls", "toolarge"] {
+            let conn = db();
+            insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
+            insertar(&conn, Fila::externa_fallida(2, "https://otro.example/lenta", kind));
+            enlazar(&conn, 1, 2);
+
+            assert!(
+                Http404External.evaluate(&conn).expect("evaluate").is_empty(),
+                "a '{kind}' failure says nothing about the link being gone"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broken_resource_is_not_a_broken_link() {
+        // Proves the fix for the duplicate-findings defect: the parser writes stylesheets,
+        // scripts, images and iframes into `links` too, and without the `element = 'a'` filter
+        // a broken CSS was reported both as ASSET-BROKEN (high) and as HTTP-404-INTERNAL
+        // (critical) — two severities for one file, and the critical description ("leaves the
+        // visitor on an error page") is false for a resource nobody navigates to.
+        for element in ["link", "script", "img", "iframe"] {
+            let conn = db();
+            insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
+            insertar(&conn, Fila::interna(2, "https://ejemplo.es/estilo.css", 404));
+            insertar(&conn, Fila::externa(3, "https://cdn.example/lib.js", Some(404)));
+            enlazar_como(&conn, 1, 2, element);
+            enlazar_como(&conn, 1, 3, element);
+
+            assert!(
+                Http404Internal.evaluate(&conn).expect("evaluate").is_empty(),
+                "a broken <{element}> resource is ASSET territory, not a broken internal link"
+            );
+            assert!(
+                Http404External.evaluate(&conn).expect("evaluate").is_empty(),
+                "a broken <{element}> resource is ASSET territory, not a broken external link"
+            );
+        }
     }
 
     // --- HTTP-REDIRECT-CHAIN ---

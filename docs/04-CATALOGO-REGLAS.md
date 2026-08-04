@@ -99,12 +99,19 @@ where it is read. The alternative, which is what Screaming Frog does, would be t
 blocked URLs that are linked internally; that changes the crawler's behavior and was rejected: how
 the engine crawls is not touched to make a rule's scope fit.
 
+**Since 2026-08-04 the robots mark is read through both of its doors.** With `--ignore-robots`
+everything gets crawled, so no row is ever `excluded` and the mark moves to
+`pages.indexability_reason='robots'` on the downloaded page's own row. `INDEX-ROBOTS-BLOCKED` and
+`INDEX-BLOCKED-IN-SITEMAP` accept either mark: before that, the flag meant to see what Google
+cannot silenced both rules completely — a site linking a forbidden URL was a `critical` in a
+normal crawl and zero findings with the flag on.
+
 ## 3. Status codes and redirects (`HTTP`)
 
 | ID | Sev. | Scope | Tier | Condition |
 |---|---|---|---|---|
-| `HTTP-404-INTERNAL` | critical | site | free | Internal link to a URL that returns 404 |
-| `HTTP-404-EXTERNAL` | medium | site | free | Broken external link |
+| `HTTP-404-INTERNAL` | critical | site | free | Internal `<a>` link to a URL that returns 4xx |
+| `HTTP-404-EXTERNAL` | medium | site | free | External `<a>` link whose URL is gone: 404, 410, or its domain does not resolve |
 | `HTTP-5XX` | critical | page | free | 5xx response |
 | `HTTP-REDIRECT-CHAIN` | high | site | free | Redirect chain of 2 or more hops |
 | `HTTP-REDIRECT-LOOP` | critical | site | free | Redirect loop |
@@ -117,6 +124,25 @@ the engine crawls is not touched to make a rule's scope fit.
 | `HTTP-NO-COMPRESSION` | medium | page | pro | No `Content-Encoding: gzip/br` on HTML |
 | `HTTP-NO-CACHE-HEADERS` | low | page | pro | Static resources without `Cache-Control` |
 | `HTTP-SOFT-404` | high | site | pro | Returns 200 but the content indicates an error (heuristic: few words + text pattern) |
+
+**What a bot probe can assert about someone else's URL (2026-08-04):** the external check is a
+`HEAD` with a bot user-agent, which is exactly what Cloudflare, Akamai and DataDome answer with
+401, 403 or 429 while the page opens fine in a browser (verified against medium.com → 403,
+wsj.com → 401, ft.com → 403 with the probe's own method and user-agent). So on external targets
+only **404 and 410** — plus a domain that does not resolve (`error_kind='dns'`) — assert
+"broken"; 401, 403, 407, 429, 451 and request-judging codes like 400/405 stay out, for the same
+reason someone else's 5xx was already excluded. The criterion is shared
+(`crawlforge_rules::sql_external_gone`) by `HTTP-404-EXTERNAL`, `ASSET-IMG-BROKEN`,
+`ASSET-BROKEN`, `CANON-TO-4XX` and `HREFLANG-TO-4XX`; internal URLs, crawled with real requests
+against a host the user controls, keep their full error ranges.
+
+**Both 404 rules read `<a>` links only (2026-08-04):** the parser also writes `<img>`, `<script>`,
+`<link rel=stylesheet>`, `<iframe>` and `<form>` into `links`, and without the `element = 'a'`
+filter a broken stylesheet came out both as `ASSET-BROKEN` (high) and as `HTTP-404-INTERNAL`
+(critical) — the same file with two severities, and the critical description ("leaves the visitor
+on an error page") is false for a resource nobody navigates to. Broken resources belong to the
+`ASSET` rules; a broken `<iframe>`/`<form>` target currently has no rule, which is a known,
+smaller gap.
 
 ## 4. Titles and meta descriptions (`META`)
 
@@ -145,7 +171,7 @@ characters, and it matters even more in Spanish because the words are longer.
 | `CANON-MISSING` | medium | page | free | Indexable page without a canonical |
 | `CANON-MULTIPLE` | high | page | free | More than one `link rel=canonical` |
 | `CANON-RELATIVE` | medium | page | free | Canonical is a relative URL |
-| `CANON-TO-4XX` | critical | site | free | Canonical points to a URL with an error |
+| `CANON-TO-4XX` | critical | site | free | Canonical points to a URL with an error (foreign targets: 404/410 only, see §3 note) |
 | `CANON-TO-REDIRECT` | high | site | free | Canonical points to a redirect |
 | `CANON-TO-NOINDEX` | critical | site | free | Canonical points to a page with `noindex` |
 | `CANON-CHAIN` | high | site | free | A canonicalizes to B, and B canonicalizes to C |
@@ -173,11 +199,11 @@ characters, and it matters even more in Spanish because the words are longer.
 |---|---|---|---|---|
 | `ASSET-IMG-NO-ALT` | high | page | free | `<img>` without an `alt` attribute |
 | `ASSET-IMG-EMPTY-ALT-LINK` | high | page | free | Image with `alt=""` inside a link with no other text |
-| `ASSET-IMG-BROKEN` | high | site | free | Image that returns 4xx/5xx |
+| `ASSET-IMG-BROKEN` | high | site | free | Image that returns 4xx/5xx (own host) or 404/410 (foreign host, see §3 note) |
 | `ASSET-IMG-HEAVY` | medium | site | free | Image > 200 KB |
 | `ASSET-IMG-LEGACY-FORMAT` | low | page | pro | JPEG/PNG without a WebP/AVIF alternative |
 | `ASSET-IMG-NO-DIMENSIONS` | medium | page | pro | No `width`/`height` (causes CLS) |
-| `ASSET-BROKEN` | high | site | free | CSS or JS that returns 4xx/5xx |
+| `ASSET-BROKEN` | high | site | free | CSS or JS that returns 4xx/5xx (own host) or 404/410 (foreign host, see §3 note) |
 
 **Scope correction (2026-07-30):** `ASSET-IMG-HEAVY` was listed as `page` and it is `site`. An
 image's weight is not in the HTML —`width` and `height` declare layout, not bytes— so it cannot be
@@ -196,7 +222,7 @@ project).
 | `HREFLANG-NO-SELF` | high | page | free | hreflang set without a reference to itself |
 | `HREFLANG-NOT-RECIPROCAL` | high | site | free | A points to B, B does not point to A |
 | `HREFLANG-INVALID-CODE` | high | page | free | Language or region code invalid per ISO 639-1 / 3166-1 |
-| `HREFLANG-TO-4XX` | critical | site | free | hreflang points to a URL with an error |
+| `HREFLANG-TO-4XX` | critical | site | free | hreflang points to a URL with a 4xx (foreign targets: 404/410 only, see §3 note) |
 | `HREFLANG-TO-NOINDEX` | critical | site | pro | hreflang points to a non-indexable page |
 | `HREFLANG-CONFLICT-CANONICAL` | high | site | pro | hreflang and canonical contradict each other |
 | `HREFLANG-NO-XDEFAULT` | low | site | pro | Multilingual set without `x-default` |

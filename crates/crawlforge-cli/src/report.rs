@@ -74,34 +74,53 @@ pub fn print_brief_resumed(outcome: &CrawlOutcome) {
 }
 
 fn print_truncation(outcome: &CrawlOutcome, lang: Lang) {
+    for linea in truncation_lines(outcome, lang) {
+        match linea {
+            Some(texto) => println!("  {texto}"),
+            None => println!(),
+        }
+    }
+}
+
+/// Las líneas de [`print_truncation`], separadas para poder afirmarlas en tests: `None` es
+/// una línea en blanco, `Some` va con la sangría del resumen.
+fn truncation_lines(outcome: &CrawlOutcome, lang: Lang) -> Vec<Option<String>> {
+    let mut out = Vec::new();
     match outcome.truncated {
         // `ListMode` no es un corte: el rastreo auditó su lista entera. Decir «truncado»
         // aquí sería mentir; lo que hay que decir es que las reglas de grafo completo no
         // se evalúan sobre un conjunto que no es el sitio.
         Some(TruncationReason::ListMode) => {
-            println!();
-            println!("  {}", msg::crawl_list_mode_note(lang));
+            out.push(None);
+            out.push(Some(msg::crawl_list_mode_note(lang)));
         }
         Some(reason) => {
-            println!();
+            out.push(None);
             // El motivo (`max_urls`, `max_duration`) es un identificador de configuración y
             // no se traduce: es literalmente el nombre del límite que lo causó.
-            println!("  {}", msg::crawl_truncated(lang, reason.as_str()));
+            out.push(Some(msg::crawl_truncated(lang, reason.as_str())));
         }
         None => {}
+    }
+    // La comprobación de externas se dice también cuando fue bien: es tiempo del rastreo
+    // que el cierre atribuía en silencio a las páginas del sitio, y en un WordPress con
+    // cientos de externas lentas era «el rastreo se muere» sin ninguna pista (revisión §4).
+    if outcome.metrics.externals_checked > 0 {
+        out.push(Some(msg::external_checked_note(
+            lang,
+            i18n::group_thousands(lang, outcome.metrics.externals_checked),
+        )));
     }
     // Alcanzar `max_external` **no** es un truncado del rastreo (no toca `crawl_meta.truncated`
     // ni apaga ninguna regla), pero sí deja enlaces sin comprobar y hay que decir cuántos.
     if outcome.metrics.externals_unchecked > 0 {
-        println!();
-        println!(
-            "  {}",
-            msg::external_unchecked(
-                lang,
-                i18n::group_thousands(lang, outcome.metrics.externals_unchecked)
-            )
-        );
+        out.push(None);
+        out.push(Some(msg::external_unchecked(
+            lang,
+            i18n::group_thousands(lang, outcome.metrics.externals_unchecked),
+        )));
     }
+    out
 }
 
 /// Métricas de motor. **En inglés a propósito**: es salida de desarrollo detrás de `--bench`,
@@ -198,6 +217,45 @@ fn print_check(label: &str, ok: bool, detail: &str) {
     println!("  {:<18} {}  {detail}", label, if ok { "PASS" } else { "FAIL" });
 }
 
+/// Abre el resumen de un fichero con lo que el propio fichero dice de su completitud:
+/// truncado, modo lista, externas apagadas o sin comprobar. Es la mitad `report` del aviso
+/// que el `crawl` ya daba y que se perdía en cuanto el fichero viajaba (revisión §1).
+pub fn print_store_notes(store: &Path, lang: Lang) -> Result<()> {
+    let conn = Connection::open_with_flags(
+        store,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )?;
+    let notes = crawlforge_cli::audit_report::store_notes(&conn)?;
+    for linea in store_note_lines(&notes, lang) {
+        println!("{linea}");
+    }
+    Ok(())
+}
+
+/// Las líneas de [`print_store_notes`], separadas para poder afirmarlas en tests.
+///
+/// Reutiliza las cadenas del `crawl` a propósito: el aviso del modo lista ya existía allí y
+/// era bueno; dos textos distintos para el mismo hecho acabarían diciendo cosas distintas.
+fn store_note_lines(
+    notes: &crawlforge_cli::audit_report::StoreNotes,
+    lang: Lang,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if notes.truncated {
+        match notes.truncated_reason.as_deref() {
+            Some("list_mode") => out.push(msg::crawl_list_mode_note(lang)),
+            reason => out.push(msg::crawl_truncated(lang, reason.unwrap_or("?"))),
+        }
+    }
+    if let Some(nota) = notes.silenced_rules_note(lang) {
+        out.push(nota);
+    }
+    if let Some(nota) = notes.external_note(lang) {
+        out.push(nota);
+    }
+    out
+}
+
 /// Cómo respondieron (o no) las URLs de un rastreo.
 ///
 /// Separa dos cosas que la salida mezclaba bajo «sin respuesta» y que no se parecen en nada:
@@ -206,12 +264,18 @@ fn print_check(label: &str, ok: bool, detail: &str) {
 /// rastreo truncado las segundas se contaban como si hubieran fallado, y 82 URLs «sin
 /// respuesta» acusaban a un servidor al que no se había preguntado.
 struct ResponseBreakdown {
-    /// Recuento por familia de código (`2xx`…`5xx`), solo de URLs que respondieron.
-    groups: Vec<(String, i64)>,
+    /// Recuento por familia de código (`2xx`…`5xx`) de URLs que respondieron, con las
+    /// internas y las externas **por separado**: un 404 ajeno no es un error del sitio
+    /// auditado, y sumarlos hacía que «4xx 14» no cuadrara con ningún otro número del
+    /// informe. Cada tupla es `(familia, internas, externas)`.
+    groups: Vec<(String, i64, i64)>,
     /// Peticiones hechas que no obtuvieron código de estado (`crawl_state = 'error'`).
     no_response: i64,
     /// URLs descubiertas y nunca pedidas (`crawl_state = 'pending'`).
     never_requested: i64,
+    /// Internas `skipped` sin motivo de exclusión ni respuesta: fuera del alcance del
+    /// rastreo. Es lo que en modo lista explica «URLs 21» cuando la lista traía 5.
+    out_of_scope: i64,
 }
 
 fn response_breakdown(conn: &Connection) -> Result<ResponseBreakdown> {
@@ -221,12 +285,13 @@ fn response_breakdown(conn: &Connection) -> Result<ResponseBreakdown> {
                     WHEN status_code < 400 THEN '3xx'
                     WHEN status_code < 500 THEN '4xx'
                     ELSE '5xx' END AS grupo,
-                COUNT(*)
+                COUNT(*) FILTER (WHERE is_internal = 1),
+                COUNT(*) FILTER (WHERE is_internal = 0)
          FROM urls WHERE status_code IS NOT NULL
          GROUP BY grupo ORDER BY grupo",
     )?;
-    let groups: Vec<(String, i64)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+    let groups: Vec<(String, i64, i64)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<_>>()?;
 
     let no_response: i64 = conn.query_row(
@@ -239,8 +304,15 @@ fn response_breakdown(conn: &Connection) -> Result<ResponseBreakdown> {
         [],
         |r| r.get(0),
     )?;
+    let out_of_scope: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM urls
+         WHERE is_internal = 1 AND crawl_state = 'skipped'
+           AND status_code IS NULL AND exclusion_reason IS NULL AND error_kind IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
 
-    Ok(ResponseBreakdown { groups, no_response, never_requested })
+    Ok(ResponseBreakdown { groups, no_response, never_requested, out_of_scope })
 }
 
 /// Resume el contenido de un fichero de rastreo, en el idioma pedido.
@@ -285,8 +357,18 @@ pub fn print_summary(store: &Path, lang: Lang) -> Result<()> {
     if !breakdown.groups.is_empty() || breakdown.no_response > 0 {
         println!();
         println!("  {}", msg::heading_status_codes(lang));
-        for (grupo, cuantas) in &breakdown.groups {
-            println!("    {grupo:<16} {:>10}", n(*cuantas));
+        for (grupo, internas, externas) in &breakdown.groups {
+            // Las externas comprobadas se etiquetan aparte: un 404 ajeno no es un error del
+            // sitio auditado, y mezclado hacía que este recuento no cuadrara con ningún otro.
+            if *externas > 0 {
+                println!(
+                    "    {grupo:<16} {:>10}  ({})",
+                    n(*internas),
+                    msg::note_external_status(lang, *externas)
+                );
+            } else {
+                println!("    {grupo:<16} {:>10}", n(*internas));
+            }
         }
         if breakdown.no_response > 0 {
             println!(
@@ -305,6 +387,18 @@ pub fn print_summary(store: &Path, lang: Lang) -> Result<()> {
             msg::label_never_requested(lang),
             n(breakdown.never_requested),
             msg::note_never_requested(lang)
+        );
+    }
+    if breakdown.out_of_scope > 0 {
+        // También sin preguntar, pero por diseño y no por un corte: los enlaces que en modo
+        // lista apuntan fuera de la lista. Sin esta línea, «URLs 21» con una lista de 5 es
+        // un misterio que el usuario resuelve con SQL.
+        println!();
+        println!(
+            "  {:<19}{:>12}  {}",
+            msg::label_out_of_scope(lang),
+            n(breakdown.out_of_scope),
+            msg::note_out_of_scope(lang)
         );
     }
 
@@ -592,12 +686,12 @@ pub fn print_rule_urls(store: &Path, rule: &str, lang: Lang) -> Result<()> {
         store,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )?;
-    print!("{}", rule_urls_text(&conn, rule, lang)?);
+    print!("{}", rule_urls_text(&conn, store, rule, lang)?);
     Ok(())
 }
 
 /// La lógica de [`print_rule_urls`], separada para poder afirmar la salida en tests.
-fn rule_urls_text(conn: &Connection, rule: &str, lang: Lang) -> Result<String> {
+fn rule_urls_text(conn: &Connection, store: &Path, rule: &str, lang: Lang) -> Result<String> {
     use std::fmt::Write;
     let strip = crawlforge_cli::audit_report::strip_control_chars;
 
@@ -689,7 +783,9 @@ fn rule_urls_text(conn: &Connection, rule: &str, lang: Lang) -> Result<String> {
             )
             .optional()?;
         if let Some(detalle) = detalle {
-            let mut causa = strip(&detalle);
+            // El detalle se humaniza antes de imprimirse: `missing: og:title, og:image` y no
+            // el volcado `{"missing":[…]}` dentro de un informe en prosa (revisión §8).
+            let mut causa = strip(&humanize_detail(&detalle));
             if causa.chars().count() > 200 {
                 causa = causa.chars().take(200).collect::<String>() + "…";
             }
@@ -737,7 +833,67 @@ fn rule_urls_text(conn: &Connection, rule: &str, lang: Lang) -> Result<String> {
             }
         }
     }
+
+    // El paso siguiente de las reglas HTTP: la URL listada es el destino roto, pero el
+    // arreglo vive en la página que lo enlaza, y ese dato lo da `inspect`. Con el comando
+    // listo para copiar, como el resto de cortes de la herramienta (revisión §6).
+    if rule.starts_with("HTTP-") {
+        let ejemplo: Option<String> = conn
+            .query_row(
+                "SELECT u.url FROM issues i JOIN urls u ON u.id = i.url_id
+                 WHERE i.rule_id = ?1 ORDER BY u.url LIMIT 1",
+                [&rule],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(url) = ejemplo {
+            writeln!(s)?;
+            writeln!(s, "{}", msg::hint_who_links(lang))?;
+            writeln!(s, "    crawlforge inspect {} '{}'", store.display(), strip(&url))?;
+        }
+    }
     Ok(s)
+}
+
+/// Un `detail_json` en palabras: `{"missing":["og:title"],"present":[]}` →
+/// `missing: og:title`. Las claves son identificadores y no se traducen; lo que se elimina
+/// es la sintaxis JSON, que en un informe en prosa es ruido. Si el detalle no es un objeto
+/// JSON, se devuelve tal cual: enseñar el dato crudo es mejor que ocultarlo.
+fn humanize_detail(raw: &str) -> String {
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(raw)
+    else {
+        return raw.to_string();
+    };
+    let partes: Vec<String> = map
+        .iter()
+        .filter_map(|(k, v)| humanize_json_value(v).map(|texto| format!("{k}: {texto}")))
+        .collect();
+    if partes.is_empty() {
+        raw.to_string()
+    } else {
+        partes.join(" · ")
+    }
+}
+
+/// El valor de una clave del detalle, en texto plano. `None` para lo que no aporta nada en
+/// un titular: nulos y listas vacías (el `"present":[]` de Open Graph).
+fn humanize_json_value(v: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    match v {
+        Value::Null => None,
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::String(s) => Some(s.clone()),
+        Value::Array(a) if a.is_empty() => None,
+        Value::Array(a) => Some(
+            a.iter()
+                .map(|x| humanize_json_value(x).unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        // Un objeto anidado se deja en JSON: inventarle una prosa sería mentir mejor.
+        Value::Object(_) => Some(v.to_string()),
+    }
 }
 
 /// Decide si un rastreo terminó sin nada que auditar, y con qué mensaje decírselo al usuario.
@@ -1055,25 +1211,28 @@ mod tests {
         let conn = Connection::open(&path).expect("create the file");
         conn.execute_batch(
             "CREATE TABLE urls (url TEXT, status_code INTEGER, crawl_state TEXT,
-                                error_kind TEXT, is_internal INTEGER);",
+                                error_kind TEXT, exclusion_reason TEXT, is_internal INTEGER);",
         )
         .expect("create the table");
-        let filas: &[(&str, Option<i64>, &str)] = &[
-            ("https://e.es/", Some(200), "done"),
-            ("https://e.es/a", Some(200), "done"),
-            ("https://e.es/rota", Some(404), "done"),
+        let filas: &[(&str, Option<i64>, &str, i64)] = &[
+            ("https://e.es/", Some(200), "done", 1),
+            ("https://e.es/a", Some(200), "done", 1),
+            ("https://e.es/rota", Some(404), "done", 1),
             // Petición hecha que falló sin código: esto sí es «sin respuesta».
-            ("https://e.es/caida", None, "error"),
+            ("https://e.es/caida", None, "error", 1),
             // Descubiertas y nunca pedidas: el rastreo se detuvo antes.
-            ("https://e.es/p1", None, "pending"),
-            ("https://e.es/p2", None, "pending"),
-            ("https://e.es/p3", None, "pending"),
+            ("https://e.es/p1", None, "pending", 1),
+            ("https://e.es/p2", None, "pending", 1),
+            ("https://e.es/p3", None, "pending", 1),
+            // Externas sondeadas: su 404 no es un error del sitio auditado.
+            ("https://otro.com/ok", Some(200), "skipped", 0),
+            ("https://otro.com/rota", Some(404), "skipped", 0),
         ];
-        for (url, status, state) in filas {
+        for (url, status, state, interna) in filas {
             conn.execute(
                 "INSERT INTO urls (url, status_code, crawl_state, is_internal)
-                 VALUES (?1, ?2, ?3, 1)",
-                rusqlite::params![url, status, state],
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![url, status, state, interna],
             )
             .expect("insert url");
         }
@@ -1090,9 +1249,39 @@ mod tests {
 
         let b = response_breakdown(&conn).expect("break down");
 
-        assert_eq!(b.groups, vec![("2xx".to_string(), 2), ("4xx".to_string(), 1)]);
+        // Each family splits internal from external: a foreign 404 must not inflate the
+        // audited site's error count (review item 2).
+        assert_eq!(
+            b.groups,
+            vec![("2xx".to_string(), 2, 1), ("4xx".to_string(), 1, 1)],
+            "internal and external counted apart"
+        );
         assert_eq!(b.no_response, 1, "only the request that actually failed");
         assert_eq!(b.never_requested, 3, "pending rows go apart, not as failures");
+        assert_eq!(b.out_of_scope, 0, "no skipped internal rows in this crawl");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lo_saltado_sin_motivo_se_cuenta_como_fuera_del_alcance() {
+        // List mode records links pointing outside the list as internal 'skipped' rows with
+        // no exclusion reason. Without this bucket, "URLs 21" from a 5-URL list was a
+        // mystery the user had to solve with SQL (review item 8).
+        let dir = std::env::temp_dir().join(format!("cf-breakdown-scope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the directory");
+        let store = store_with_states(&dir);
+        let conn = Connection::open(&store).expect("open");
+        conn.execute_batch(
+            "INSERT INTO urls (url, status_code, crawl_state, is_internal)
+             VALUES ('https://e.es/fuera-1', NULL, 'skipped', 1),
+                    ('https://e.es/fuera-2', NULL, 'skipped', 1);",
+        )
+        .expect("insert skipped rows");
+
+        let b = response_breakdown(&conn).expect("break down");
+        assert_eq!(b.out_of_scope, 2, "internal skipped rows without a reason are out of scope");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1106,14 +1295,15 @@ mod tests {
         let conn = Connection::open(&path).expect("create");
         conn.execute_batch(
             "CREATE TABLE urls (url TEXT, status_code INTEGER, crawl_state TEXT,
-                                error_kind TEXT, is_internal INTEGER);
-             INSERT INTO urls VALUES ('https://e.es/', 200, 'done', NULL, 1);",
+                                error_kind TEXT, exclusion_reason TEXT, is_internal INTEGER);
+             INSERT INTO urls VALUES ('https://e.es/', 200, 'done', NULL, NULL, 1);",
         )
         .expect("create the table");
 
         let b = response_breakdown(&conn).expect("break down");
         assert_eq!(b.never_requested, 0);
         assert_eq!(b.no_response, 0);
+        assert_eq!(b.out_of_scope, 0);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1443,7 +1633,7 @@ mod tests {
         con_hallazgos_de_profundidad(&store);
         let conn = Connection::open(&store).expect("open");
 
-        let texto = rule_urls_text(&conn, "INDEX-DEEP-PAGE", Lang::En).expect("list");
+        let texto = rule_urls_text(&conn, &store, "INDEX-DEEP-PAGE", Lang::En).expect("list");
         assert!(texto.contains("30 affected URLs"), "{texto}");
         let urls: Vec<&str> = texto.lines().filter(|l| l.contains("https://")).collect();
         assert_eq!(urls.len(), 30, "all URLs are listed, no cutoff: {texto}");
@@ -1464,7 +1654,7 @@ mod tests {
         let store = store_con_plantilla(&dir);
         let conn = Connection::open(&store).expect("open");
 
-        let texto = rule_urls_text(&conn, "ASSET-IMG-EMPTY-ALT-LINK", Lang::En).expect("list");
+        let texto = rule_urls_text(&conn, &store, "ASSET-IMG-EMPTY-ALT-LINK", Lang::En).expect("list");
         for i in 0..38 {
             assert!(texto.contains(&format!("https://e.es/p{i:02}")), "missing p{i:02}:\n{texto}");
         }
@@ -1484,7 +1674,7 @@ mod tests {
         let store = store_con_plantilla(&dir);
         let conn = Connection::open(&store).expect("open");
 
-        let texto = rule_urls_text(&conn, "asset-img-empty-alt-link", Lang::Es).expect("list");
+        let texto = rule_urls_text(&conn, &store, "asset-img-empty-alt-link", Lang::Es).expect("list");
         assert!(texto.contains("38 URLs afectadas"), "{texto}");
         assert!(texto.contains("Grupo de plantilla — 35 páginas"), "{texto}");
 
@@ -1497,7 +1687,7 @@ mod tests {
         let store = store_con_plantilla(&dir);
         let conn = Connection::open(&store).expect("open");
 
-        let err = rule_urls_text(&conn, "NO-EXISTE", Lang::En).expect_err("not a rule");
+        let err = rule_urls_text(&conn, &store, "NO-EXISTE", Lang::En).expect_err("not a rule");
         assert!(err.to_string().contains("crawlforge rules"), "{err}");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1509,8 +1699,192 @@ mod tests {
         let store = store_con_plantilla(&dir);
         let conn = Connection::open(&store).expect("open");
 
-        let texto = rule_urls_text(&conn, "HTTP-404-INTERNAL", Lang::En).expect("a catalog rule");
+        let texto = rule_urls_text(&conn, &store, "HTTP-404-INTERNAL", Lang::En).expect("a catalog rule");
         assert!(texto.contains("No findings for HTTP-404-INTERNAL"), "{texto}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn el_resumen_del_rastreo_dice_cuantas_externas_se_comprobaron() {
+        // Review item 4: the external probe stole crawl seconds without ever being named.
+        // The closing summary must say how many externals were checked even when all went
+        // fine, not only when the cap cut the list short.
+        let outcome = CrawlOutcome {
+            crawl_id: "x".into(),
+            store_path: std::path::PathBuf::from("c.sqlite"),
+            metrics: CrawlMetrics { externals_checked: 214, ..Default::default() },
+            truncated: None,
+            interrupted: false,
+            wal_kept: false,
+        };
+        let texto: Vec<String> =
+            truncation_lines(&outcome, Lang::En).into_iter().flatten().collect();
+        assert_eq!(texto, vec!["214 external links checked."]);
+
+        let es: Vec<String> =
+            truncation_lines(&outcome, Lang::Es).into_iter().flatten().collect();
+        assert_eq!(es, vec!["214 enlaces externos comprobados."]);
+
+        // And with nothing checked, no noise.
+        let callado = CrawlOutcome {
+            crawl_id: "x".into(),
+            store_path: std::path::PathBuf::from("c.sqlite"),
+            metrics: CrawlMetrics::default(),
+            truncated: None,
+            interrupted: false,
+            wal_kept: false,
+        };
+        assert!(truncation_lines(&callado, Lang::En).is_empty());
+    }
+
+    // ── El fichero cuenta su propia completitud (`report`, revisión §1) ──────
+
+    /// Un rastreo con el esquema real, con la meta y las externas que se pidan.
+    fn store_para_notas(
+        nombre: &str,
+        truncated: bool,
+        reason: Option<&str>,
+        check_external: bool,
+        externas_sin_comprobar: usize,
+    ) -> std::path::PathBuf {
+        let dir = dir_de_prueba(nombre);
+        let path = dir.join("notas.sqlite");
+        let conn = crate::test_schema::crawl_file(&path);
+        let mut job = crawlforge_core::job::CrawlJob::http("https://ejemplo.es/");
+        job.limits.check_external = check_external;
+        let config = serde_json::to_string(&job).expect("serialize the config");
+        conn.execute(
+            "INSERT INTO crawl_meta (id, project_id, project_name, base_url, mode, started_at,
+                                     status, config_json, core_version, rules_version,
+                                     tier_at_runtime, truncated, truncated_reason)
+             VALUES ('x','p','P','https://ejemplo.es/','http',datetime('now'),'done',?1,
+                     '0','0','free', ?2, ?3)",
+            rusqlite::params![config, truncated as i64, reason],
+        )
+        .expect("insert crawl_meta");
+        conn.execute(
+            "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
+                               crawl_state, status_code)
+             VALUES (1,'https://ejemplo.es/',1,'https','ejemplo.es','/',1,0,'done',200)",
+            [],
+        )
+        .expect("seed url");
+        for i in 0..externas_sin_comprobar {
+            conn.execute(
+                "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal,
+                                   in_sitemap, crawl_state)
+                 VALUES (?1, ?2, ?1, 'https', 'otro.com', '/', 0, 0, 'skipped')",
+                rusqlite::params![i as i64 + 10, format!("https://otro.com/{i}")],
+            )
+            .expect("unchecked external");
+        }
+        path
+    }
+
+    fn notas(path: &std::path::Path, lang: Lang) -> Vec<String> {
+        let conn = Connection::open(path).expect("open");
+        let notes = crawlforge_cli::audit_report::store_notes(&conn).expect("read the notes");
+        store_note_lines(&notes, lang)
+    }
+
+    #[test]
+    fn el_resumen_de_un_fichero_truncado_lo_dice_y_nombra_las_reglas_calladas() {
+        // Review item 1: the truncation warning only existed in the `crawl` output, and the
+        // file travels — tomorrow's report, or a colleague's, lied by omission.
+        let path = store_para_notas("truncado", true, Some("max_urls"), true, 0);
+        let lineas = notas(&path, Lang::En);
+        let texto = lineas.join("\n");
+        assert!(texto.contains("truncated by max_urls"), "{texto}");
+        assert!(
+            texto.contains("INDEX-ORPHAN-PAGE"),
+            "the silenced rules are named, not alluded to: {texto}"
+        );
+
+        let es = notas(&path, Lang::Es).join("\n");
+        assert!(es.contains("truncado por max_urls"), "{es}");
+        assert!(es.contains("no se evaluaron"), "{es}");
+    }
+
+    #[test]
+    fn el_resumen_de_un_modo_lista_reutiliza_el_aviso_del_crawl() {
+        // The list-mode notice already existed in `crawl` and was good: `report` must say
+        // the same thing with the same string, not a second wording of the same fact.
+        let path = store_para_notas("notas-lista", true, Some("list_mode"), true, 0);
+        let lineas = notas(&path, Lang::En);
+        assert_eq!(lineas, vec![msg::crawl_list_mode_note(Lang::En)]);
+        assert!(!lineas.join("\n").contains("truncated"), "a list crawl was not cut short");
+    }
+
+    #[test]
+    fn el_resumen_distingue_externas_apagadas_de_externas_sin_mirar() {
+        // With the check off, "no broken external links" must not read as "none exist".
+        let apagadas = store_para_notas("ext-off", false, None, false, 3);
+        let texto = notas(&apagadas, Lang::En).join("\n");
+        assert!(texto.contains("--no-external-check"), "{texto}");
+        assert!(texto.contains("does not mean there are none"), "{texto}");
+
+        // With the check on and leftovers, the cap is the cause and the fix is named.
+        let tope = store_para_notas("ext-cap", false, None, true, 3);
+        let texto = notas(&tope, Lang::En).join("\n");
+        assert!(texto.contains("max_external cap"), "{texto}");
+        assert!(texto.contains("--max-external"), "{texto}");
+
+        // With the check on inside a truncated crawl, blaming the cap would be a guess.
+        let cortado = store_para_notas("ext-cut", true, Some("max_urls"), true, 3);
+        let texto = notas(&cortado, Lang::En).join("\n");
+        assert!(texto.contains("never checked"), "{texto}");
+        assert!(!texto.contains("max_external cap"), "{texto}");
+    }
+
+    #[test]
+    fn un_rastreo_completo_no_abre_con_ningun_aviso() {
+        let path = store_para_notas("completo", false, None, true, 0);
+        assert!(notas(&path, Lang::En).is_empty(), "a clean crawl opens clean");
+    }
+
+    // ── La causa humanizada y el paso siguiente de `--rule` ──────────────────
+
+    #[test]
+    fn la_causa_de_un_grupo_se_lee_en_palabras_y_no_en_json() {
+        // Review item 8: `causa: {"missing":["og:title",…]}` inside a Spanish report is a
+        // raw dump, not a sentence.
+        assert_eq!(
+            humanize_detail(r#"{"missing":["og:title","og:image"],"present":[]}"#),
+            "missing: og:title, og:image"
+        );
+        assert_eq!(humanize_detail(r#"{"links":1,"sample":["/logo.svg"]}"#), "links: 1 · sample: /logo.svg");
+        // What is not a JSON object is shown as-is: raw data beats hidden data.
+        assert_eq!(humanize_detail("texto suelto"), "texto suelto");
+    }
+
+    #[test]
+    fn una_regla_http_dice_desde_donde_se_arregla() {
+        // Review item 6: a broken link is fixed on the page that links to it, and that data
+        // lives in `inspect` — the listing must say so, command ready to copy.
+        let dir = dir_de_prueba("hint-http");
+        let store = store_con_plantilla(&dir);
+        {
+            let conn = Connection::open(&store).expect("open");
+            conn.execute(
+                "INSERT INTO issues (url_id, rule_id, severity, category)
+                 VALUES (1, 'HTTP-404-INTERNAL', 'critical', 'http')",
+                [],
+            )
+            .expect("http issue");
+        }
+        let conn = Connection::open(&store).expect("open");
+        let texto = rule_urls_text(&conn, &store, "HTTP-404-INTERNAL", Lang::En).expect("list");
+        assert!(texto.contains("fixed on the page that links to it"), "{texto}");
+        assert!(texto.contains("crawlforge inspect"), "{texto}");
+        assert!(texto.contains("'https://e.es/p00'"), "quoted, ready to paste: {texto}");
+
+        let es = rule_urls_text(&conn, &store, "HTTP-404-INTERNAL", Lang::Es).expect("list");
+        assert!(es.contains("se arregla en la página que lo enlaza"), "{es}");
+
+        // A rule whose fix lives on the page itself does not get the noise.
+        let otro = rule_urls_text(&conn, &store, "ASSET-IMG-EMPTY-ALT-LINK", Lang::En).expect("list");
+        assert!(!otro.contains("crawlforge inspect"), "{otro}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

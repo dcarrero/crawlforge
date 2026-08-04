@@ -544,6 +544,44 @@ pub fn sql_not_infrastructure(path_column: &str) -> String {
         .join(" AND ")
 }
 
+/// Status codes that let the external probe assert "this URL is gone": **404 and 410 only**.
+///
+/// The probe is a `HEAD` (or a bodyless `GET`) sent with a bot user-agent from whatever IP the
+/// crawl runs on — very often a datacenter one. That is exactly the signature Cloudflare,
+/// Akamai and DataDome challenge, and their walls answer it with 401, 403 or 429 while the
+/// page opens fine in any browser. Measured against real hosts with the probe's own method and
+/// user-agent (2026-08): `medium.com/@rustlang` `HEAD` → 403, `wsj.com` → 401, `ft.com` and
+/// `openai.com` → 403. Every one of those pages loads for a visitor.
+///
+/// This is the same reasoning that already keeps someone else's 5xx out of
+/// `HTTP-404-EXTERNAL`: a code that says "the *server* refused or failed *this request*" is
+/// not a code that says "the *resource* is gone", and reporting it would make the report
+/// change from one crawl to the next without anyone having touched anything — or worse, call
+/// a living page dead. Only 404 and 410 state, from the origin itself, that the resource does
+/// not exist.
+///
+/// The excluded 4xx, so nobody re-adds them in a year without meeting the reasoning first:
+///
+/// - **401, 403, 407**: authentication or refusal — paywalls, anti-bot walls, hotlink
+///   protection. Say nothing about a browser visit.
+/// - **429**: rate limiting. Transient by definition, the 4xx twin of the excluded 5xx.
+/// - **451**: legally blocked *for this observer*; usually geo-dependent, not gone.
+/// - **400 and the rest (405, 406, 418…)**: they judge the request, not the resource. A
+///   server that dislikes a bodyless `HEAD` answers 400/405 while a browser `GET` succeeds.
+pub const EXTERNAL_GONE_STATUS: &[i64] = &[404, 410];
+
+/// SQL condition "this status code proves the external URL is gone", derived from
+/// [`EXTERNAL_GONE_STATUS`] so the list lives in one place. Numeric literals from this very
+/// crate — never user input — which is why they can be interpolated.
+pub fn sql_external_gone(status_column: &str) -> String {
+    let lista = EXTERNAL_GONE_STATUS
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{status_column} IN ({lista})")
+}
+
 /// Does the rule need a complete crawl to assert what it asserts?
 pub fn requiere_grafo_completo(rule_id: &str) -> bool {
     REQUIERE_GRAFO_COMPLETO.contains(&rule_id)

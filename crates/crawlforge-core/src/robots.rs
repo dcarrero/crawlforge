@@ -126,13 +126,25 @@ impl HostRules {
     }
 }
 
-/// Caché de `robots.txt`: un fichero por host, durante todo el rastreo.
+/// Caché de `robots.txt`: **una descarga por host** durante todo el rastreo.
 ///
 /// La caché guarda también los fallos: si un host no tiene `robots.txt`, no se vuelve a pedir
 /// en cada URL. Con 50.000 URLs de un mismo dominio eso es una petición, no cincuenta mil.
+///
+/// # La descarga va bajo llave, no solo el resultado
+///
+/// Guardar el resultado no basta, y la diferencia es la primera ola de cada host. El motor
+/// despacha `concurrency` URLs de golpe; las N tareas consultan la caché **antes** de que
+/// ninguna haya terminado de descargar, las N fallan el `get` y las N piden el fichero.
+/// Medido: **122 peticiones de `robots.txt` para 25 hosts**, 4,9x — exactamente la
+/// concurrencia por host. Y esa ráfaga simultánea es justo la que el `Crawl-delay` existe
+/// para evitar, con el agravante de que ocurre antes de poder saber que el host lo declara.
+///
+/// Por eso cada host guarda una celda ([`tokio::sync::OnceCell`]) y no un valor: la primera
+/// tarea que llega descarga y las demás **esperan a su resultado** en vez de repetirlo.
 #[derive(Default)]
 pub struct RobotsCache {
-    hosts: RwLock<HashMap<String, Arc<HostRules>>>,
+    hosts: RwLock<HashMap<String, Arc<tokio::sync::OnceCell<Arc<HostRules>>>>>,
 }
 
 impl RobotsCache {
@@ -140,16 +152,48 @@ impl RobotsCache {
         Self::default()
     }
 
-    /// Devuelve las reglas del host si ya están cacheadas.
+    /// Devuelve las reglas del host si ya están cargadas. `None` también mientras otra tarea
+    /// las está descargando: quien quiera esperar a esa descarga usa [`Self::get_or_fetch`].
     pub async fn get(&self, host: &str) -> Option<Arc<HostRules>> {
-        self.hosts.read().await.get(host).cloned()
+        self.hosts.read().await.get(host).and_then(|cell| cell.get().cloned())
+    }
+
+    /// Las reglas del host, descargándolas **una sola vez** aunque lleguen N tareas a la vez.
+    ///
+    /// `fetch` solo se ejecuta si esta llamada es la primera del host; el resto de tareas
+    /// esperan a que termine y comparten su resultado.
+    pub async fn get_or_fetch<F, Fut>(&self, host: &str, fetch: F) -> Arc<HostRules>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = HostRules>,
+    {
+        // Camino caliente: cerrojo de lectura y un `Arc` clonado. El de escritura solo se toma
+        // la primera vez que se ve un host.
+        let known = {
+            let guard = self.hosts.read().await;
+            guard.get(host).map(Arc::clone)
+        };
+        let cell = match known {
+            Some(cell) => cell,
+            None => {
+                let mut guard = self.hosts.write().await;
+                Arc::clone(guard.entry(host.to_string()).or_default())
+            }
+        };
+        if let Some(rules) = cell.get() {
+            return Arc::clone(rules);
+        }
+        Arc::clone(cell.get_or_init(|| async { Arc::new(fetch().await) }).await)
     }
 
     /// Guarda las reglas de un host. Si otra tarea se adelantó, gana la primera: el contenido
     /// es el mismo y así no se invalidan las referencias ya repartidas.
     pub async fn insert(&self, host: String, rules: HostRules) -> Arc<HostRules> {
-        let mut guard = self.hosts.write().await;
-        guard.entry(host).or_insert_with(|| Arc::new(rules)).clone()
+        let cell = {
+            let mut guard = self.hosts.write().await;
+            Arc::clone(guard.entry(host).or_default())
+        };
+        Arc::clone(cell.get_or_init(|| async { Arc::new(rules) }).await)
     }
 
     /// Todo lo cacheado, para volcarlo al almacén al terminar el rastreo.
@@ -157,7 +201,12 @@ impl RobotsCache {
     /// El `robots.txt` se descarga una vez por host y vive en este caché; sin este volcado, el
     /// fichero de rastreo no conserva ni rastro de él.
     pub async fn snapshot(&self) -> Vec<(String, Arc<HostRules>)> {
-        self.hosts.read().await.iter().map(|(h, r)| (h.clone(), Arc::clone(r))).collect()
+        self.hosts
+            .read()
+            .await
+            .iter()
+            .filter_map(|(host, cell)| cell.get().map(|r| (host.clone(), Arc::clone(r))))
+            .collect()
     }
 
     /// Número de hosts cacheados. Para métricas y tests.
@@ -271,6 +320,56 @@ mod tests {
         // Insertar el mismo host otra vez no lo duplica.
         cache.insert("ejemplo.es".into(), HostRules::allow_all()).await;
         assert_eq!(cache.len().await, 1);
+    }
+
+    #[tokio::test]
+    async fn the_first_wave_of_a_host_downloads_its_robots_txt_once() {
+        // The measured defect: check-then-fetch with no door. The N tasks of a host's first
+        // wave all miss the cache before any of them has finished downloading, so all N
+        // download — 122 requests for 25 hosts, exactly the per-host concurrency.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = Arc::new(RobotsCache::new());
+        let downloads = Arc::new(AtomicUsize::new(0));
+        // The download is slow on purpose: without the door every task gets past the `get`
+        // while the first one is still in flight, which is the whole point.
+        let fetch = |downloads: Arc<AtomicUsize>| async move {
+            downloads.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            HostRules::parse(b"User-agent: *\nDisallow: /privado/", UA)
+        };
+
+        let mut wave = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let cache = Arc::clone(&cache);
+            let downloads = Arc::clone(&downloads);
+            wave.spawn(async move {
+                cache.get_or_fetch("ejemplo.es", || fetch(downloads)).await
+            });
+        }
+        while let Some(joined) = wave.join_next().await {
+            let rules = joined.expect("the task does not die");
+            assert!(!rules.allows(&url("https://ejemplo.es/privado/x")), "everyone gets the rules");
+        }
+
+        assert_eq!(
+            downloads.load(Ordering::SeqCst),
+            1,
+            "eight tasks of one host must download its robots.txt once"
+        );
+        assert_eq!(cache.len().await, 1);
+    }
+
+    #[tokio::test]
+    async fn each_host_has_its_own_door() {
+        // The door serialises one host, never the crawl: a slow robots.txt on one host cannot
+        // hold up the others.
+        let cache = RobotsCache::new();
+        for host in ["uno.es", "dos.es", "tres.es"] {
+            cache.get_or_fetch(host, || async { HostRules::allow_all() }).await;
+        }
+        assert_eq!(cache.len().await, 3);
+        assert_eq!(cache.snapshot().await.len(), 3);
     }
 }
 

@@ -160,9 +160,28 @@ enum Command {
         /// exists, the previous crawl is kept next to it as <name>.prev.sqlite.
         #[arg(short, long)]
         out: Option<PathBuf>,
+        /// YAML file with crawl settings. Command-line flags override it.
+        /// See docs/crawl-config.example.yaml.
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
         /// Concurrent requests per host (1..=20) [default: 5].
         #[arg(short, long, value_parser = clap::value_parser!(u8).range(1..=20))]
         concurrency: Option<u8>,
+        /// Do not check the status of external links found on the listed pages.
+        #[arg(long)]
+        no_external_check: bool,
+        /// Stop checking external links after this many. The summary says how many were
+        /// left unchecked [default: 10000].
+        #[arg(long, value_name = "N")]
+        max_external: Option<u64>,
+        /// Only audit listed URLs matching this regex (repeatable; a plain string matches
+        /// anywhere in the URL). Overrides the config file.
+        #[arg(long, value_name = "REGEX")]
+        include: Vec<String>,
+        /// Skip listed URLs matching this regex (repeatable). Wins over --include. Skipped
+        /// URLs are recorded as excluded, not hidden. Overrides the config file.
+        #[arg(long, value_name = "REGEX")]
+        exclude: Vec<String>,
         /// Also export the results as CSV files into this directory.
         #[arg(long, value_name = "DIR")]
         csv: Option<PathBuf>,
@@ -405,7 +424,20 @@ async fn main() -> Result<()> {
             .await
         }
 
-        Command::List { file, out, concurrency, csv, bench, stats, note } => {
+        Command::List {
+            file,
+            out,
+            config,
+            concurrency,
+            no_external_check,
+            max_external,
+            include,
+            exclude,
+            csv,
+            bench,
+            stats,
+            note,
+        } => {
             anyhow::ensure!(file.is_file(), "{} does not exist", file.display());
             let contents = std::fs::read_to_string(&file).context("the URL list could not be read")?;
             // También aquí: la lista entera se guarda en `crawl_meta.config_json`, así que
@@ -438,8 +470,27 @@ async fn main() -> Result<()> {
             let mut job = CrawlJob::http(&first_url);
             job.project_name = file.display().to_string();
             job.mode = crawlforge_core::job::CrawlMode::List { urls };
-            job.limits.concurrency_per_host = concurrency.unwrap_or(DEFAULT_CONCURRENCY);
-            // En modo lista se audita lo que se pide y nada más: ni sitemaps ni seguir enlaces.
+            // Los mismos flags comunes que `crawl`, por las mismas funciones: el fichero
+            // propone y la línea de comandos dispone. El modo lista no acepta los topes de
+            // descubrimiento (`max_urls`, `max_depth`) porque aquí no se descubre nada, pero
+            // la sonda de externas sí es suya y sin estos flags no tenía interruptor (§5).
+            apply_config_file(&mut job, config.as_deref())?;
+            apply_crawl_flags(
+                &mut job,
+                &CrawlFlags {
+                    concurrency,
+                    max_urls: None,
+                    max_depth: None,
+                    no_sitemaps: false,
+                    ignore_robots: false,
+                    no_external_check,
+                    max_external,
+                },
+            );
+            apply_pattern_flags(&mut job, include, exclude);
+            // En modo lista se audita lo que se pide y nada más: ni sitemaps ni seguir
+            // enlaces. Van después del fichero de configuración: son invariantes del modo,
+            // no preferencias.
             job.discover_sitemaps = false;
             job.limits.follow_external = false;
             apply_http_auth(&mut job, &first_url, None)?;
@@ -456,7 +507,8 @@ async fn main() -> Result<()> {
         }
 
         Command::Report { store, format, rule, out, .. } => {
-            anyhow::ensure!(store.is_file(), "{} does not exist", store.display());
+            // El manual §5 promete que todo error de fichero dice qué comando lo genera.
+            anyhow::ensure!(store.is_file(), msg::error_store_missing(lang, store.display()));
             // Antes de imprimir nada: si el fichero no es un rastreo, decirlo con palabras en vez
             // de dejar que salte el «no such table: urls» a mitad del encabezado.
             crawlforge_cli::store_check::ensure_crawl_store(&store)?;
@@ -476,6 +528,11 @@ async fn main() -> Result<()> {
                     .context("the rule listing could not be generated");
             }
             if format.trim().eq_ignore_ascii_case("terminal") {
+                // El resumen abre con lo que el fichero dice de su propia completitud:
+                // truncado, modo lista, externas sin comprobar. El fichero viaja, y el aviso
+                // que solo daba el `crawl` moría con la sesión que lo lanzó (revisión §1).
+                report::print_store_notes(&store, lang)
+                    .context("the crawl file could not be summarised")?;
                 return report::print_summary(&store, lang).context("the crawl file could not be summarised");
             }
             let texto = audit_report::render(&store, &format, lang, out.as_deref())
@@ -488,7 +545,7 @@ async fn main() -> Result<()> {
         }
 
         Command::Inspect { store, url, limit, format, out, .. } => {
-            anyhow::ensure!(store.is_file(), "{} does not exist", store.display());
+            anyhow::ensure!(store.is_file(), msg::error_store_missing(lang, store.display()));
             // La misma pareja que `report`: identificar el fichero antes de trabajar con él
             // (que el error hable de ficheros y comandos, no de tablas), y el reintento
             // oportunista de salir de WAL — ver el comentario de `report`.
@@ -508,7 +565,7 @@ async fn main() -> Result<()> {
         }
 
         Command::Export { store, out, format } => {
-            anyhow::ensure!(store.is_file(), "{} does not exist", store.display());
+            anyhow::ensure!(store.is_file(), msg::error_store_missing(lang, store.display()));
             // El mismo reintento oportunista que en `report`: ver el comentario de allí.
             let _ = crawlforge_core::store::try_make_portable(&store);
             match format.trim().to_ascii_lowercase().as_str() {
@@ -549,9 +606,6 @@ async fn main() -> Result<()> {
     }
 }
 
-/// La concurrencia cuando ni el flag ni el fichero de configuración dicen otra cosa.
-/// Es el mismo valor que `CrawlLimits::default()`; existe para que el help pueda nombrarlo.
-const DEFAULT_CONCURRENCY: u8 = 5;
 
 /// Los flags de `crawl` que compiten con el fichero de configuración.
 ///
@@ -650,6 +704,14 @@ async fn run_and_report(mut job: CrawlJob, store: &Path, opts: RunOptions) -> Re
     // errata en un regex no debe costar una rotación de ficheros que no produce nada a cambio.
     crawlforge_core::pattern::UrlFilter::from_limits(&job.limits)
         .context("invalid --include/--exclude pattern")?;
+
+    // La semilla, por el mismo motivo y antes que nada: `crawl 'ht!tp://…'` creaba un
+    // `.sqlite` de aspecto válido (status 'done') y su `.lock` antes de fallar (revisión §8).
+    if let CrawlMode::Http { seed } = &job.mode {
+        if !is_crawlable_seed(seed) {
+            bail!(msg::error_invalid_seed(crawlforge_cli::i18n::current_lang(), seed));
+        }
+    }
 
     let target = match &job.mode {
         CrawlMode::Http { seed } => seed.clone(),
@@ -773,7 +835,10 @@ async fn run_and_report(mut job: CrawlJob, store: &Path, opts: RunOptions) -> Re
 /// otra no se lo cree nadie. Además `crawl` **rota** el fichero anterior a `.prev.sqlite`, y
 /// reanudar y rotar son incompatibles: `resume` continúa el fichero en el sitio, sin rotarlo.
 async fn run_resume(store: &Path, csv: Option<PathBuf>) -> Result<()> {
-    anyhow::ensure!(store.is_file(), "{} does not exist", store.display());
+    anyhow::ensure!(
+        store.is_file(),
+        msg::error_store_missing(crawlforge_cli::i18n::current_lang(), store.display())
+    );
     crawlforge_cli::store_check::ensure_crawl_store(store)?;
     // Un `status = 'running'` significa dos cosas opuestas: «se mató el proceso» y «hay otro
     // rastreo escribiendo ahora mismo». El cerrojo del fichero las distingue sin heurísticas:
@@ -1141,6 +1206,25 @@ fn format_rate(rate: f64) -> String {
         format!("{rate:.1}")
     } else {
         thousands(rate.round() as u64)
+    }
+}
+
+/// Si una semilla puede iniciar un rastreo HTTP: parsea, es `http(s)` y su host tiene forma
+/// de host. Lo último es lo que `Url::parse` no garantiza: acepta `ht!tp` como dominio, y con
+/// él se llegaba a crear el fichero de rastreo antes de descubrir que no hay a quién llamar.
+fn is_crawlable_seed(seed: &str) -> bool {
+    let Ok(url) = url::Url::parse(seed) else { return false };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    match url.host() {
+        // Un dominio real: letras, dígitos, guiones y puntos (más `_`, que existe en DNS).
+        Some(url::Host::Domain(d)) => {
+            !d.is_empty()
+                && d.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
+        }
+        Some(url::Host::Ipv4(_) | url::Host::Ipv6(_)) => true,
+        None => false,
     }
 }
 
@@ -1705,6 +1789,47 @@ mod tests {
                 "resume must not accept {flag:?}"
             );
         }
+    }
+
+    #[test]
+    fn list_acepta_los_flags_comunes_del_rastreo() {
+        // Review item 5: `list` is the mode that feeds CI and tool comparisons, and it had
+        // no switch at all for the external-link probe, no --config and no patterns.
+        let cli = Cli::try_parse_from([
+            "crawlforge", "list", "urls.txt",
+            "--no-external-check",
+            "--max-external", "50",
+            "--config", "sitio.yaml",
+            "--exclude", "/wp-admin/",
+            "--include", "/blog/",
+        ])
+        .expect("list must accept the common crawl flags");
+        let Command::List { no_external_check, max_external, config, exclude, include, .. } =
+            cli.command
+        else {
+            panic!("the subcommand is list");
+        };
+        assert!(no_external_check);
+        assert_eq!(max_external, Some(50));
+        assert_eq!(config, Some(PathBuf::from("sitio.yaml")));
+        assert_eq!(exclude, vec!["/wp-admin/"]);
+        assert_eq!(include, vec!["/blog/"]);
+    }
+
+    #[test]
+    fn una_semilla_imposible_se_rechaza_antes_de_tocar_el_disco() {
+        // Review item 8: `crawl 'ht!tp://sitio con espacios'` produced a 208 KB .sqlite with
+        // status 'done' plus its .lock before failing. `Url::parse` alone accepts `ht!tp`
+        // as a domain, so the seed needs its own validation.
+        assert!(!is_crawlable_seed("https://ht!tp//sitio%20con%20espacios"));
+        assert!(!is_crawlable_seed("no es una url"));
+        assert!(!is_crawlable_seed("ftp://ejemplo.es/"));
+        assert!(!is_crawlable_seed("https://"));
+
+        assert!(is_crawlable_seed("https://ejemplo.es/"));
+        assert!(is_crawlable_seed("http://localhost:8080/"));
+        assert!(is_crawlable_seed("https://127.0.0.1:8901/"));
+        assert!(is_crawlable_seed("https://sub_dominio.ejemplo.es/ruta?x=1"));
     }
 
     #[test]

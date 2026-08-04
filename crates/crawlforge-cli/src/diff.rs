@@ -373,8 +373,10 @@ pub fn compare(
     // El idioma se resuelve una vez por comparación (`--lang` > `CRAWLFORGE_LANG` > inglés)
     // y gobierna tanto el informe como los errores que ve el usuario.
     let lang = i18n::current_lang();
-    anyhow::ensure!(antes.is_file(), "{}", msg::error_missing_file(lang, antes.display()));
-    anyhow::ensure!(despues.is_file(), "{}", msg::error_missing_file(lang, despues.display()));
+    // Con el «qué comando lo genera» que el manual §5 promete de todo error de fichero: el
+    // caso típico es un `.prev.sqlite` que aún no existe porque el rastreo no se ha repetido.
+    anyhow::ensure!(antes.is_file(), "{}", msg::error_store_missing(lang, antes.display()));
+    anyhow::ensure!(despues.is_file(), "{}", msg::error_store_missing(lang, despues.display()));
 
     // Se valida antes de trabajar: si un fichero no es un rastreo —un diff de `diff --out`, una
     // base de otro programa— o el token está mal escrito, mejor saberlo ya y con sus palabras.

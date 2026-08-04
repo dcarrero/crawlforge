@@ -28,8 +28,11 @@
 //!
 //!   There is one case where a blocked page does get downloaded, and it is `--ignore-robots`.
 //!   Since 2026-08-04 it arrives marked, so `evaluate_indexability` gives it
-//!   `IndexabilityReason::Robots` and the user who asked to see what Google cannot gets the
-//!   reason on the page's own row — which is where they were going to look for it.
+//!   `IndexabilityReason::Robots` — and since 2026-08-04 [`RobotsBlocked`] and
+//!   [`BlockedInSitemap`] read **both** stores: the excluded rows of a normal crawl and the
+//!   crawled-but-marked pages of an `--ignore-robots` one. Before that, the flag meant to see
+//!   more silenced both rules completely, because with everything crawled no row was ever
+//!   `excluded` and `pages.indexability_reason = 'robots'` had no reader.
 //!
 //! # The two that no fixture proves, and it is on purpose
 //!
@@ -420,10 +423,17 @@ fn origin(url: &str) -> &str {
 /// that are linked, as Screaming Frog does— changes the crawler's behaviour, and that is not
 /// something to do on the sly just so a rule fits.
 ///
-/// The datum does end up in the store: `crawl_state='excluded'` with
-/// `exclusion_reason='robots'`, and a row in `links` pointing at it. That is exactly the
-/// finding: the site spends internal links on a URL it has itself forbidden from being
-/// crawled.
+/// The datum does end up in the store, through one of two doors, and the rule reads both:
+///
+/// - **Normal crawl**: the URL is never downloaded, `crawl_state='excluded'` with
+///   `exclusion_reason='robots'`, and a row in `links` pointing at it.
+/// - **`--ignore-robots`**: everything gets crawled, so no row is ever `excluded` — the mark
+///   moves to `pages.indexability_reason='robots'` on the downloaded page's own row.
+///
+/// Reading only the first silenced the rule exactly when the user asked to see more: a site
+/// that links a forbidden URL was a `critical` in a normal crawl and **zero findings** with
+/// the flag on. The finding is the same through either door: the site spends internal links
+/// on a URL it has itself forbidden from being crawled.
 pub struct RobotsBlocked;
 
 impl SiteRule for RobotsBlocked {
@@ -442,13 +452,17 @@ impl SiteRule for RobotsBlocked {
         // `INDEX-BLOCKED-IN-SITEMAP` deliberately does not carry this filter: if an
         // infrastructure URL shows up in the sitemap it is because the site owner declared it,
         // and taking it out of the sitemap is within their power.
+        //
+        // The `GROUP BY u.id` also guarantees one finding per URL if a row ever satisfied
+        // both robots conditions at once.
         let sql = format!(
             "SELECT u.url_hash, u.url, COUNT(DISTINCT l.from_url_id) AS inlinks
              FROM urls u
              JOIN links l ON l.to_url_id = u.id
+             LEFT JOIN pages p ON p.url_id = u.id
              WHERE u.is_internal = 1
-               AND u.crawl_state = 'excluded'
-               AND u.exclusion_reason = 'robots'
+               AND ((u.crawl_state = 'excluded' AND u.exclusion_reason = 'robots')
+                 OR p.indexability_reason = 'robots')
                AND {}
              GROUP BY u.id",
             crate::sql_not_infrastructure("u.path")
@@ -587,6 +601,11 @@ fn crawl_mode(conn: &Connection) -> rusqlite::Result<Option<String>> {
 ///
 /// Registered since 2026-07-30. Before that it could not be: `urls.in_sitemap` was 0 in every
 /// fixture because `filesystem` mode did not discover sitemaps. See the module header.
+///
+/// Like [`RobotsBlocked`], it reads the mark through both doors: the `excluded` row of a
+/// normal crawl and the `pages.indexability_reason='robots'` of an `--ignore-robots` one —
+/// the contradiction between sitemap and robots.txt is the same whichever way the crawler
+/// honoured it. The `GROUP BY` keeps it at one finding per URL.
 pub struct BlockedInSitemap;
 
 impl SiteRule for BlockedInSitemap {
@@ -598,9 +617,11 @@ impl SiteRule for BlockedInSitemap {
         hallazgos_por_url(
             conn,
             "SELECT u.url_hash FROM urls u
+             LEFT JOIN pages p ON p.url_id = u.id
              WHERE u.in_sitemap = 1
-               AND u.crawl_state = 'excluded'
-               AND u.exclusion_reason = 'robots'",
+               AND ((u.crawl_state = 'excluded' AND u.exclusion_reason = 'robots')
+                 OR p.indexability_reason = 'robots')
+             GROUP BY u.id",
             &[],
             &INDEX_BLOCKED_IN_SITEMAP,
         )
@@ -1784,6 +1805,94 @@ mod tests {
         assert!(RobotsBlocked.evaluate(&conn).expect("evaluate").is_empty());
     }
 
+    /// Inserts a URL crawled despite `robots.txt`, as `--ignore-robots` leaves it: downloaded
+    /// (`crawl_state='done'`), with its page marked `indexability_reason='robots'` by
+    /// `evaluate_indexability`. No row is ever `excluded` under that flag.
+    fn con_pagina_rastreada_pese_a_robots(conn: &Connection, id: i64, url: &str, path: &str) -> i64 {
+        conn.execute(
+            "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
+                               crawl_state, status_code)
+             VALUES (?1, ?2, ?1, 'https', 'ejemplo.es', ?3, 1, 0, 'done', 200)",
+            rusqlite::params![id, url, path],
+        )
+        .expect("insert crawled url");
+        conn.execute(
+            "INSERT INTO pages (url_id, is_indexable, indexability_reason, internal_links_in)
+             VALUES (?1, 0, 'robots', 0)",
+            rusqlite::params![id],
+        )
+        .expect("insert page");
+        id
+    }
+
+    #[test]
+    fn flags_a_blocked_url_crawled_with_ignore_robots() {
+        // Proves the fix. With `--ignore-robots` everything gets crawled, so no row is ever
+        // `excluded` and the mark lives in `pages.indexability_reason` instead. Before the
+        // rule read that second door, the flag meant to see more produced **zero** findings
+        // about exactly what it exists to show.
+        let conn = db();
+        let portada = con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
+        let bloqueada = con_pagina_rastreada_pese_a_robots(
+            &conn,
+            2,
+            "https://ejemplo.es/privado/",
+            "/privado/",
+        );
+        con_enlace(&conn, portada, bloqueada);
+
+        let hallazgos = RobotsBlocked.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1);
+        assert_eq!(hallazgos[0].0, Some(bloqueada), "the finding goes on the blocked URL");
+    }
+
+    #[test]
+    fn an_unlinked_blocked_page_under_ignore_robots_is_not_flagged() {
+        // Same criterion as the excluded door: with no inbound links, the Disallow is doing
+        // its job and there is nothing to fix.
+        let conn = db();
+        con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
+        con_pagina_rastreada_pese_a_robots(&conn, 2, "https://ejemplo.es/privado/", "/privado/");
+
+        assert!(RobotsBlocked.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn cdn_infrastructure_is_not_flagged_through_the_ignore_robots_door_either() {
+        // The infrastructure filter must hold on both doors, or the Cloudflare false positive
+        // would come back the moment someone crawls with the flag.
+        let conn = db();
+        let portada = con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
+        let cdn = con_pagina_rastreada_pese_a_robots(
+            &conn,
+            2,
+            "https://ejemplo.es/cdn-cgi/l/email-protection",
+            "/cdn-cgi/l/email-protection",
+        );
+        con_enlace(&conn, portada, cdn);
+
+        assert!(RobotsBlocked.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn a_url_matching_both_robots_doors_is_one_finding() {
+        // No real crawl produces both marks on one URL — an excluded row is never downloaded,
+        // so it has no page — but the rule must not depend on that invariant to avoid
+        // duplicates: the GROUP BY guarantees one finding either way.
+        let conn = db();
+        let portada = con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
+        let bloqueada = con_url_bloqueada(&conn, 2, "https://ejemplo.es/privado/");
+        conn.execute(
+            "INSERT INTO pages (url_id, is_indexable, indexability_reason, internal_links_in)
+             VALUES (?1, 0, 'robots', 0)",
+            rusqlite::params![bloqueada],
+        )
+        .expect("insert page");
+        con_enlace(&conn, portada, bloqueada);
+
+        assert_eq!(RobotsBlocked.evaluate(&conn).expect("evaluate").len(), 1);
+    }
+
     #[test]
     fn flags_a_robots_txt_that_blocks_the_whole_site() {
         let conn = db();
@@ -2348,6 +2457,32 @@ mod tests {
             [],
         )
         .expect("insert urls");
+        assert_eq!(hashes(&BlockedInSitemap.evaluate(&conn).expect("evaluate")), vec![1]);
+    }
+
+    #[test]
+    fn flags_a_sitemap_url_blocked_by_robots_under_ignore_robots_too() {
+        // Proves the fix, same defect as in `RobotsBlocked`: with `--ignore-robots` the URL
+        // gets crawled instead of excluded, the mark moves to `pages.indexability_reason`,
+        // and the sitemap-vs-robots contradiction — which is exactly the same either way —
+        // went unreported.
+        let conn = db();
+        con_meta(&conn, "http", "https://ejemplo.es/", true);
+        conn.execute(
+            "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
+                               crawl_state, status_code)
+             VALUES (1, 'https://ejemplo.es/privado', 1, 'https', 'ejemplo.es', '/privado', 1, 1,
+                     'done', 200)",
+            [],
+        )
+        .expect("insert url");
+        conn.execute(
+            "INSERT INTO pages (url_id, is_indexable, indexability_reason, internal_links_in)
+             VALUES (1, 0, 'robots', 0)",
+            [],
+        )
+        .expect("insert page");
+
         assert_eq!(hashes(&BlockedInSitemap.evaluate(&conn).expect("evaluate")), vec![1]);
     }
 

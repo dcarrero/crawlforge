@@ -424,6 +424,134 @@ async fn reanudar_no_hereda_el_permiso_de_ignorar_robots_del_fichero() {
 }
 
 #[tokio::test]
+async fn las_sondas_de_externas_que_pilla_el_corte_se_reencolan_al_reanudar() {
+    // El agujero: al cortar, las sondas en vuelo o en cola se perdían **para siempre**. Su
+    // fila queda `skipped` con estado nulo, `resume` solo reencola las `pending`, y como el
+    // frontier ya la tiene por vista, un enlace nuevo a esa misma URL tampoco la recuperaba:
+    // `HTTP-404-EXTERNAL` callaba sobre ella y ningún contador lo delataba.
+    let ajeno = ServidorDePruebas::arrancar_como_otro_host_con_puerto(|_| {
+        (0..6)
+            .map(|i| {
+                (
+                    format!("/e{i}"),
+                    // Cada sonda tarda: con una en vuelo por host ajeno, el corte pilla el
+                    // resto en cola con seguridad.
+                    Respuesta::pagina("Ajena", "<p>x</p>")
+                        .con_retardo(Duration::from_millis(300)),
+                )
+            })
+            .collect()
+    })
+    .await;
+    let enlaces: String = (0..6)
+        .map(|i| format!("<a href=\"{}\">{i}</a> ", ajeno.url_como_otro_host(&format!("/e{i}"))))
+        .collect();
+    let propio =
+        ServidorDePruebas::arrancar_con_puerto(|_| {
+            vec![("/".to_string(), Respuesta::pagina("Inicio", &enlaces))]
+        })
+        .await;
+
+    let tmp = Temporal::new("sondas-cortadas");
+    let store = tmp.path.join("crawl.sqlite");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let rastreo = engine::run_cancellable(job, &store, None, Some(rx));
+    // Se corta con la primera sonda ya en vuelo: las demás están en la cola de externas.
+    let disparo = async {
+        while ajeno.peticiones("/e0") == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tx.send(true).expect("el motor sigue escuchando la señal");
+    };
+    let (outcome, ()) = tokio::join!(rastreo, disparo);
+    let outcome = outcome.expect("el corte es un cierre limpio");
+    assert!(outcome.interrupted);
+    assert!(
+        outcome.metrics.externals_unchecked > 0,
+        "el resumen tiene que decir cuántas quedaron sin comprobar, y dijo {}",
+        outcome.metrics.externals_unchecked
+    );
+
+    let sin_estado_tras_el_corte: i64 = {
+        let conn = abrir(&store);
+        conn.query_row(
+            "SELECT COUNT(*) FROM urls WHERE is_internal = 0 AND status_code IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("contar")
+    };
+    assert!(sin_estado_tras_el_corte > 0, "hay sondas a medias que recuperar");
+
+    // Reanudar las vuelve a encolar: la promesa de `resume` es continuar, y esto era una
+    // parte del rastreo que no continuaba nunca.
+    let reanudado = engine::resume(&store).await.expect("reanudar");
+    assert_eq!(
+        reanudado.metrics.externals_checked, sin_estado_tras_el_corte as u64,
+        "la reanudación comprueba exactamente las que quedaron a medias"
+    );
+
+    let conn = abrir(&store);
+    let sin_estado: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM urls WHERE is_internal = 0 AND status_code IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("contar");
+    assert_eq!(sin_estado, 0, "al terminar, ninguna externa se queda sin comprobar");
+}
+
+#[tokio::test]
+async fn reanudar_no_pide_una_url_pendiente_que_no_es_del_sitio() {
+    // `validate_resume_scope` valida el `config_json`, que es lo que pedía la revisión
+    // anterior, pero justo después las URLs se recargaban con un `SELECT ... WHERE crawl_state
+    // = 'pending'` **sin comprobar host ni esquema**. Una fila inyectada en un fichero por lo
+    // demás legítimo hacía que `resume` la pidiera con un `GET` completo y guardara el cuerpo.
+    let servidor = ServidorDePruebas::arrancar(&[
+        ("/", Respuesta::pagina("Inicio", "<p>x</p>")),
+        ("/ajena", Respuesta::pagina("Ajena", "<p>no deberías pedirme</p>")),
+    ])
+    .await;
+
+    let tmp = Temporal::new("pendiente-ajena");
+    let store = tmp.path.join("crawl.sqlite");
+    let mut job = CrawlJob::http(servidor.base());
+    job.discover_sitemaps = false;
+    let config = serde_json::to_string(&job).expect("serializar el job");
+    fichero_manipulado(&store, &config, &servidor.base(), "http");
+
+    // La fila inyectada: el mismo servidor bajo otro nombre de host, que para el motor es otro
+    // dominio. Que responda de verdad es lo que hace verificable el «no se pidió».
+    {
+        let conn = crawlforge_core::store::open_writer(&store).expect("abrir el fichero");
+        conn.execute(
+            "INSERT INTO urls (url, url_hash, scheme, host, path, depth, is_internal,
+                               in_sitemap, crawl_state)
+             VALUES (?1, 42, 'http', 'localhost', '/ajena', 0, 1, 0, 'pending')",
+            rusqlite::params![servidor.url_como_otro_host("/ajena")],
+        )
+        .expect("insertar la fila manipulada");
+    }
+
+    engine::resume(&store).await.expect("reanudar");
+    assert_eq!(
+        servidor.peticiones("/ajena"),
+        0,
+        "la URL pendiente no es del sitio de los metadatos: no se pide"
+    );
+    // La fila sigue ahí y sigue `pending`: descartarla del plan no es borrarla del fichero.
+    let conn = abrir(&store);
+    let estado: String = conn
+        .query_row("SELECT crawl_state FROM urls WHERE path = '/ajena'", [], |r| r.get(0))
+        .expect("la fila manipulada sigue en el fichero");
+    assert_eq!(estado, "pending");
+}
+
+#[tokio::test]
 async fn reanudar_un_fichero_sin_metadatos_dice_por_que() {
     // Un fichero migrado pero sin fila de `crawl_meta`: ni es un rastreo ni se puede continuar.
     let tmp = Temporal::new("sin-meta");

@@ -228,6 +228,32 @@ pub mod msg {
             en: "{n} external links were not checked: the max_external cap was reached. Raise it with --max-external.",
             es: "{n} enlaces externos quedaron sin comprobar: se alcanzó el tope max_external. Súbelo con --max-external.",
         }
+        // La variante de fichero para un rastreo cortado: aquí no se puede afirmar que el
+        // tope fuera el motivo — un truncado deja externas sin sondear igualmente.
+        external_never_checked(n) {
+            en: "{n} external links were recorded but never checked.",
+            es: "{n} enlaces externos quedaron registrados pero sin comprobar.",
+        }
+        // La otra mitad de la honestidad de las externas: cuando la comprobación estaba
+        // apagada, «cero enlaces externos rotos» no significa que no los haya.
+        external_check_disabled() {
+            en: "External links were not checked (--no-external-check): the absence of broken \
+                 external links in this report does not mean there are none.",
+            es: "Los enlaces externos no se comprobaron (--no-external-check): que este informe \
+                 no traiga enlaces externos rotos no significa que no los haya.",
+        }
+        // El resumen del rastreo dice cuántas externas se sondearon aunque todo fuera bien:
+        // es el tiempo que el cierre atribuía en silencio al rastreo del sitio.
+        external_checked_note(n) {
+            en: "{n} external links checked.",
+            es: "{n} enlaces externos comprobados.",
+        }
+        // Qué reglas calló el truncado, por su ID: sin la lista, «las reglas que necesitan el
+        // grafo» obliga a adivinar cuáles son.
+        rules_not_evaluated(rules) {
+            en: "Rules that need the complete link graph were not evaluated: {rules}.",
+            es: "Las reglas que necesitan el grafo de enlaces completo no se evaluaron: {rules}.",
+        }
         results_title() {
             en: "Results",
             es: "Resultados",
@@ -271,6 +297,16 @@ pub mod msg {
         note_never_requested() {
             en: "(discovered, but the crawl stopped before fetching them)",
             es: "(descubiertas, pero el rastreo se detuvo antes de pedirlas)",
+        }
+        // Filas internas `skipped` sin motivo: en modo lista, los enlaces que apuntan fuera
+        // de la lista. Explican por qué «URLs 21» cuando se dieron 5.
+        label_out_of_scope() {
+            en: "Out of scope",
+            es: "Fuera del alcance",
+        }
+        note_out_of_scope() {
+            en: "(linked from audited pages, but outside this crawl's scope)",
+            es: "(enlazadas desde páginas auditadas, pero fuera del alcance de este rastreo)",
         }
         heading_non_indexable() {
             en: "Non-indexable, why",
@@ -360,6 +396,14 @@ pub mod msg {
         rule_no_findings(rule) {
             en: "No findings for {rule} in this crawl.",
             es: "Sin hallazgos de {rule} en este rastreo.",
+        }
+        // El paso siguiente de un enlace roto: se arregla en la página que lo enlaza, y ese
+        // dato lo da `inspect`. El comando lo imprime el llamador, listo para copiar.
+        hint_who_links() {
+            en: "A broken link is fixed on the page that links to it. Who links to a URL, \
+                 with its anchor text:",
+            es: "Un enlace roto se arregla en la página que lo enlaza. Quién enlaza a una \
+                 URL, con su texto de ancla:",
         }
         error_unknown_rule(rule) {
             en: "{rule} is not a rule ID. The catalog is listed by `crawlforge rules`.",
@@ -478,9 +522,30 @@ pub mod msg {
             en: "excluded from the crawl ({reason})",
             es: "excluida del rastreo ({reason})",
         }
+        // Una externa con código o con error de sonda **sí se pidió**: decir de ella
+        // «excluida del rastreo» era falso. Se comprobó su estado y no se auditó su contenido.
+        state_note_external_checked() {
+            en: "external URL — status checked, content not audited",
+            es: "URL externa — estado comprobado, contenido no auditado",
+        }
+        state_note_external_unchecked() {
+            en: "external URL — never requested",
+            es: "URL externa — nunca solicitada",
+        }
+        // Interna `skipped` sin motivo: fuera del alcance del rastreo (el caso del modo lista).
+        state_note_out_of_scope() {
+            en: "discovered, but outside this crawl's scope",
+            es: "descubierta, pero fuera del alcance de este rastreo",
+        }
         state_note_error(detail) {
             en: "the request failed ({detail})",
             es: "la petición falló ({detail})",
+        }
+        // `unknown` no es una región del HTML, es el relleno de «no se supo»: se traduce,
+        // a diferencia de `main`/`nav`/`footer`, que son identificadores del documento.
+        region_unknown() {
+            en: "unknown",
+            es: "desconocida",
         }
         inspect_page_title() {
             en: "Page",
@@ -552,10 +617,6 @@ pub mod msg {
             en: "… showing {n} — full list: {cmd}",
             es: "… se muestran {n} — lista completa: {cmd}",
         }
-        outlinks_title(total, internal, external) {
-            en: "Outlinks ({total}: {internal} internal, {external} external)",
-            es: "Enlaces salientes ({total}: {internal} internos, {external} externos)",
-        }
         images_title(n) {
             en: "Images ({n})",
             es: "Imágenes ({n})",
@@ -568,9 +629,62 @@ pub mod msg {
             en: "Used as an image",
             es: "Usada como imagen",
         }
-        image_usage_line(times, pages) {
-            en: "embedded {times} times on {pages} pages",
-            es: "incrustada {times} veces en {pages} páginas",
+    }
+
+    // Los dos mensajes con plural real se escriben a mano: el macro no distingue «1 interno»
+    // de «2 internos», y resolverlo con «interno(s)» es el atajo que la revisión cazó.
+    // Siguen viviendo aquí, con sus dos columnas, como el resto del catálogo.
+
+    /// La cabecera de enlaces salientes, con el plural bien resuelto en cada idioma.
+    pub fn outlinks_title(lang: Lang, total: i64, internal: i64, external: i64) -> String {
+        let n = |v: i64| super::count(lang, v);
+        match lang {
+            Lang::En => format!(
+                "Outlinks ({}: {} internal, {} external)",
+                n(total),
+                n(internal),
+                n(external)
+            ),
+            Lang::Es => format!(
+                "Enlaces salientes ({}: {} {}, {} {})",
+                n(total),
+                n(internal),
+                if internal == 1 { "interno" } else { "internos" },
+                n(external),
+                if external == 1 { "externo" } else { "externos" },
+            ),
+        }
+    }
+
+    /// El sufijo que separa las externas del recuento de códigos de estado: un 404 ajeno no
+    /// es un error del sitio auditado y no debe sumarse como si lo fuera. A mano por el
+    /// plural español («+1 externa», «+2 externas»); el inglés no flexiona.
+    pub fn note_external_status(lang: Lang, n: i64) -> String {
+        let count = super::count(lang, n);
+        match lang {
+            Lang::En => format!("+{count} external"),
+            Lang::Es => format!("+{count} {}", if n == 1 { "externa" } else { "externas" }),
+        }
+    }
+
+    /// «Incrustada N veces en M páginas», sin decir «1 veces» ni «1 pages».
+    pub fn image_usage_line(lang: Lang, times: i64, pages: i64) -> String {
+        let n = |v: i64| super::count(lang, v);
+        match lang {
+            Lang::En => format!(
+                "embedded {} {} on {} {}",
+                n(times),
+                if times == 1 { "time" } else { "times" },
+                n(pages),
+                if pages == 1 { "page" } else { "pages" },
+            ),
+            Lang::Es => format!(
+                "incrustada {} {} en {} {}",
+                n(times),
+                if times == 1 { "vez" } else { "veces" },
+                n(pages),
+                if pages == 1 { "página" } else { "páginas" },
+            ),
         }
     }
 
@@ -817,6 +931,13 @@ pub mod msg {
             en: "{path} does not exist",
             es: "{path} no existe",
         }
+        // El contrato del manual §5: todo error de fichero dice qué comando lo genera.
+        error_store_missing(path) {
+            en: "{path} does not exist. Crawl files are produced by `crawlforge crawl`, \
+                 `crawlforge audit` and `crawlforge list`.",
+            es: "{path} no existe. Los ficheros de rastreo los generan `crawlforge crawl`, \
+                 `crawlforge audit` y `crawlforge list`.",
+        }
         error_not_a_crawl(path) {
             en: "{path} does not look like a CrawlForge crawl file",
             es: "{path} no parece un fichero de rastreo de CrawlForge",
@@ -998,6 +1119,14 @@ pub mod msg {
         crawling(target) {
             en: "Crawling {target}",
             es: "Rastreando {target}",
+        }
+        // Se valida **antes de tocar el disco**: una semilla imposible no debe costar una
+        // rotación de ficheros ni dejar un `.sqlite` de aspecto válido con un `.lock` al lado.
+        error_invalid_seed(url) {
+            en: "{url} is not a crawlable URL: expected something like https://example.com/. \
+                 Nothing was created.",
+            es: "{url} no es una URL rastreable: se esperaba algo como https://example.com/. \
+                 No se ha creado nada.",
         }
         file_line(path) {
             en: "File:     {path}",
@@ -1304,6 +1433,50 @@ mod tests {
             let aviso = msg::warn_base_mismatch(lang, 3, 3, "https://a.es/", "https://b.es/");
             assert!(aviso.contains("--base https://a.es/"), "{aviso}");
         }
+    }
+
+    #[test]
+    fn los_plurales_de_la_ficha_se_resuelven_en_los_dos_idiomas() {
+        // «1 externos» y «embedded 1 times on 1 pages» eran los plurales sin resolver que
+        // cazó la revisión: las dos cadenas con plural real se escriben a mano.
+        assert_eq!(
+            msg::outlinks_title(Lang::Es, 8, 7, 1),
+            "Enlaces salientes (8: 7 internos, 1 externo)"
+        );
+        assert_eq!(
+            msg::outlinks_title(Lang::Es, 3, 1, 2),
+            "Enlaces salientes (3: 1 interno, 2 externos)"
+        );
+        assert_eq!(
+            msg::outlinks_title(Lang::En, 3, 2, 1),
+            "Outlinks (3: 2 internal, 1 external)"
+        );
+        assert_eq!(msg::image_usage_line(Lang::En, 1, 1), "embedded 1 time on 1 page");
+        assert_eq!(msg::image_usage_line(Lang::En, 3, 2), "embedded 3 times on 2 pages");
+        assert_eq!(msg::image_usage_line(Lang::Es, 1, 1), "incrustada 1 vez en 1 página");
+        assert_eq!(msg::image_usage_line(Lang::Es, 3, 2), "incrustada 3 veces en 2 páginas");
+        assert_eq!(msg::note_external_status(Lang::Es, 1), "+1 externa");
+        assert_eq!(msg::note_external_status(Lang::Es, 2), "+2 externas");
+        assert_eq!(msg::note_external_status(Lang::En, 1), "+1 external");
+    }
+
+    #[test]
+    fn las_notas_de_completitud_estan_en_los_dos_idiomas() {
+        for (en, es) in [
+            (msg::external_check_disabled(Lang::En), msg::external_check_disabled(Lang::Es)),
+            (msg::external_checked_note(Lang::En, 3), msg::external_checked_note(Lang::Es, 3)),
+            (msg::external_never_checked(Lang::En, 3), msg::external_never_checked(Lang::Es, 3)),
+            (msg::rules_not_evaluated(Lang::En, "X"), msg::rules_not_evaluated(Lang::Es, "X")),
+            (msg::state_note_external_checked(Lang::En), msg::state_note_external_checked(Lang::Es)),
+            (msg::error_store_missing(Lang::En, "x"), msg::error_store_missing(Lang::Es, "x")),
+            (msg::error_invalid_seed(Lang::En, "x"), msg::error_invalid_seed(Lang::Es, "x")),
+            (msg::hint_who_links(Lang::En), msg::hint_who_links(Lang::Es)),
+        ] {
+            assert_ne!(en, es, "the Spanish column must not be the English copied over");
+        }
+        // El error de fichero dice qué comando lo genera, como promete el manual §5.
+        assert!(msg::error_store_missing(Lang::En, "x").contains("crawlforge crawl"));
+        assert!(msg::error_store_missing(Lang::Es, "x").contains("crawlforge crawl"));
     }
 
     #[test]

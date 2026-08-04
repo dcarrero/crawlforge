@@ -362,11 +362,18 @@ const CANONICAL_JOIN: &str = "FROM pages p
      JOIN urls tgt ON tgt.url = p.canonical
      ";
 
-/// The canonical points at a URL that answers 4xx or 5xx.
+/// The canonical points at a URL that answers with an error.
 ///
 /// The ID says `4XX` because that is the normal case, but the catalogue's normative condition is
 /// "error URL" and a canonical to a 500 is every bit as fatal, so it covers 400 and up. The
 /// actual code goes in the finding's detail.
+///
+/// **That full range only holds for your own URLs.** A cross-domain target was checked with
+/// the bot `HEAD` probe, and the codes an anti-bot wall answers it with (401, 403, 429…) say
+/// nothing about the page a browser gets — the typical victim is a language selector between
+/// two of your own domains, whose 403-behind-Cloudflare turned into a `critical` here. Same
+/// criterion as `HTTP-404-EXTERNAL`, and someone else's 5xx stays out with it: for a foreign
+/// target only 404/410 assert (see [`crate::sql_external_gone`]).
 pub struct CanonToError;
 
 impl SiteRule for CanonToError {
@@ -378,7 +385,10 @@ impl SiteRule for CanonToError {
         let sql = format!(
             "SELECT src.url_hash, p.canonical, tgt.status_code
              {CANONICAL_JOIN}
-             WHERE tgt.id <> src.id AND tgt.status_code >= 400"
+             WHERE tgt.id <> src.id
+               AND ((tgt.is_internal = 1 AND tgt.status_code >= 400)
+                 OR (tgt.is_internal = 0 AND {externa_rota}))",
+            externa_rota = crate::sql_external_gone("tgt.status_code"),
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([], |r| {
@@ -980,6 +990,49 @@ mod tests {
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/roto", Some(500));
         page(&conn, 1, Some("https://fixture.local/roto"), "https://fixture.local/a", None, false);
+        assert_eq!(ids(&CanonToError.evaluate(&conn).expect("evaluate")), vec![1]);
+    }
+
+    /// Inserts a URL on another host, as the external status probe leaves it.
+    fn url_externa(conn: &Connection, id: i64, u: &str, status: Option<i64>) {
+        conn.execute(
+            "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
+                               crawl_state, status_code)
+             VALUES (?1, ?2, ?1, 'https', 'otro.example', '/', 0, 0, 'skipped', ?3)",
+            rusqlite::params![id, u, status],
+        )
+        .expect("insert external url");
+    }
+
+    #[test]
+    fn a_cross_domain_canonical_behind_a_bot_wall_is_not_an_error() {
+        // Proves the fix. The typical case is a language selector between two of your own
+        // domains: the target is cross-domain, so it was checked with the bot HEAD probe, and
+        // its wall's 403 escalated to a `critical` here. A wall's answer to a bot proves
+        // nothing about the page — same criterion as HTTP-404-EXTERNAL, and someone else's
+        // 5xx stays out with it.
+        for status in [401, 403, 429, 503] {
+            let conn = db();
+            url(&conn, 1, "https://fixture.local/en", Some(200));
+            url_externa(&conn, 2, "https://otro.example/en", Some(status));
+            page(&conn, 1, Some("https://otro.example/en"), "https://fixture.local/en", None, true);
+
+            assert!(
+                CanonToError.evaluate(&conn).expect("evaluate").is_empty(),
+                "a foreign {status} cannot back a critical about the canonical target"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cross_domain_canonical_to_a_gone_url_is_an_error() {
+        // Guard: 404 and 410 are the foreign origin itself stating the target is gone, and
+        // narrowing the codes must not silence that.
+        let conn = db();
+        url(&conn, 1, "https://fixture.local/a", Some(200));
+        url_externa(&conn, 2, "https://otro.example/borrada", Some(404));
+        page(&conn, 1, Some("https://otro.example/borrada"), "https://fixture.local/a", None, true);
+
         assert_eq!(ids(&CanonToError.evaluate(&conn).expect("evaluate")), vec![1]);
     }
 

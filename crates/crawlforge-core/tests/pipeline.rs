@@ -188,8 +188,12 @@ async fn las_reglas_encuentran_exactamente_los_problemas_sembrados() {
     assert_eq!(por_regla("CANON-MISSING"), 2);
     // about/ y post-1 comparten el título "Repetido".
     assert_eq!(por_regla("META-TITLE-DUPLICATE"), 2);
-    // Tres 4xx internos enlazados: la página inexistente y las dos imágenes.
-    assert_eq!(por_regla("HTTP-404-INTERNAL"), 3);
+    // Tres 4xx internos enlazados, repartidos entre dos reglas: `HTTP-404-INTERNAL` es de
+    // enlaces (`element = 'a'`) y se queda con la página inexistente; las dos imágenes rotas
+    // son de `ASSET-IMG-BROKEN`. Antes salían por las dos a la vez, con severidades que se
+    // contradecían —critical y high— para el mismo fichero.
+    assert_eq!(por_regla("HTTP-404-INTERNAL"), 1);
+    assert_eq!(por_regla("ASSET-IMG-BROKEN"), 2);
 
     // Las páginas sin título no cuentan como duplicadas entre sí.
     let duplicados_sin_titulo: i64 = count(

@@ -19,6 +19,93 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.5.0] — 2026-08-04
+
+Everything here comes from a five-front review — security, performance, stability, usability and
+rule correctness — of what shipped in 0.2.0 through 0.4.0. Most of it is the external link check
+paying for its first day in the open.
+
+### Security
+
+- **The external probe now has a network perimeter.** Until now the only filter before requesting
+  a URL from a third party was its scheme, so a site under audit could point the crawler at
+  `169.254.169.254`, at the LAN, or at a service on loopback, and the resulting file — the one this
+  product is designed to send to a client — carried the status, the response time and an error
+  message precise enough to tell a refused connection from a timeout. That is a map of the
+  consultant's internal network. Addresses that are not globally routable, and the names
+  `localhost`, `*.local` and `*.internal`, are no longer probed.
+
+  The screen is skipped when the audited site is itself local, and that is deliberate: auditing an
+  `astro dev` on `localhost` or a client's staging on the office LAN means whoever started the
+  crawl is already inside that network. The cloud metadata range is the exception and is screened
+  either way, because a crawl of `localhost` from a cloud CI runner is a real thing and that
+  address answers with the instance's credentials.
+
+  It is a lexical screen: a name that resolves to a private address still goes through. Closing
+  that needs the crawler to own its resolver and check the address it actually dialled, redirects
+  included. The code says so where it matters, rather than implying more protection than it gives.
+
+- **`--exclude` and `rel="nofollow"` now stop the probe.** The external branch returned before
+  either was evaluated, so neither could prevent a request. The case that matters: spam links in
+  a WordPress comment thread carry `rel="ugc nofollow"`, which is precisely the web's way of
+  saying do not follow this — and those were the links getting a request from the user's own IP.
+
+- Third-party strings (`mime`, `content_type`, `error_message`) are clipped before being stored.
+
+### Fixed
+
+- **Broken external links no longer include anti-bot walls.** A `HEAD` from a datacenter IP with a
+  bot user agent is what Cloudflare, Akamai and DataDome answer with 401, 403 or 429 — measured
+  against real hosts, all of which open fine in a browser. Only 404 and 410 now assert that a link
+  is broken. A 400 does not either: to a bodyless probe it usually judges the request, not the
+  resource. It is the same reasoning that already excluded foreign 5xx, and the code now carries
+  it so nobody undoes it in a year.
+- **A dead domain is reported.** A probe that fails DNS resolution is not missing data — the domain
+  is gone, which is the most common form of link rot and, since expired domains get re-bought, a
+  security warning too. Timeouts and connection failures still stay silent, because those are
+  missing data.
+- **A broken resource no longer produces two findings that contradict each other.** The 404 rules
+  did not filter by element, so a missing stylesheet came out as both a critical broken link and a
+  high broken asset — and "leaves the visitor on an error page" is false for a stylesheet nobody
+  navigates to. They now cover `<a>` only. Broken `<iframe>` and `<form>` targets are left with no
+  rule at all for now, which is honest rather than wrong.
+- **`--ignore-robots` no longer silences the rules about what robots blocks.** The flag exists to
+  see what Google cannot, and it was making two rules report nothing at all, because they looked
+  for exclusion rows that the flag prevents from existing.
+- **One slow host no longer starves the rest of the crawl.** The dispatcher parked URLs it could
+  not send in a buffer, and once that buffer filled it stopped looking at the queue entirely —
+  where other hosts were waiting with capacity to spare. Reproduced: 250 URLs of a host with
+  `Crawl-delay` alongside 5 of a free host left the free host at zero after twenty seconds. The
+  buffer is gone; the frontier now serves the first URL, in BFS order, of a host that has room.
+- **A dead external host no longer adds hours of serial waiting.** Three consecutive network
+  failures, or a 429, close that host; the probes it still had queued are counted as unchecked
+  rather than attempted one ten-second timeout at a time.
+- **Probes interrupted by a cut are recovered.** They were left with no status, never re-queued on
+  resume, and never re-discovered, so the rule stayed silent about them forever with no counter
+  saying so.
+- **`resume` validates the rows it re-reads.** It checked the stored configuration but then loaded
+  pending URLs without checking host or scheme, so a hand-edited file could point a resumed crawl
+  anywhere.
+- **`robots.txt` is fetched once per host.** The cache was check-then-fetch, so the first wave of a
+  host downloaded it once per concurrent task — measured at 4.9x on a portfolio crawl, and exactly
+  the burst that the `Crawl-delay` gate exists to prevent.
+- The writer thread no longer outlives a handle dropped without closing it.
+
+### Changed
+
+- **The report tells you what it could not see.** The warnings about a truncated crawl, a list-mode
+  crawl, external checks turned off or a cap reached existed only in the output of `crawl`, so a
+  file read the next day — or by the colleague it was sent to — lied by omission. `report` now
+  opens with them, and names the rules that went unevaluated.
+- External URLs are counted separately in the status-code summary, so the totals reconcile.
+- `inspect` no longer describes a probed external URL as excluded from the crawl.
+- `list` accepts `--config`, `--include`, `--exclude`, `--no-external-check` and `--max-external`.
+- `report --rule` on an HTTP rule ends with the command that shows which pages link to each URL,
+  because that is where a broken link is fixed.
+- An invalid seed is rejected before any file is created.
+- URL suggestions on a typo now use edit distance, so a misspelling inside the last path segment
+  suggests something instead of nothing.
+
 ## [0.4.0] — 2026-08-04
 
 ### Fixed

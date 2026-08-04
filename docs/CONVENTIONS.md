@@ -17,9 +17,15 @@ and comparing crawls**. A single audit is a snapshot; whoever runs dozens of pro
 what changed since the last one.
 
 **It is an auditor for sites you own.** It is not a tool for extracting other people's data: the
-product only crawls the site it is pointed at, respects `robots.txt` unless the owner explicitly
-allows otherwise, and does not chase external links by default. That restriction is by design and
-shapes the code, not just the messaging.
+product only crawls the site it is pointed at, and respects `robots.txt` unless the owner
+explicitly allows otherwise. That restriction is by design and shapes the code, not just the
+messaging.
+
+Outbound links are the one thing it touches beyond that site, and only to answer whether they
+still resolve: a headers-only request, once per distinct URL, one in flight per foreign host, with
+nothing of that site parsed, stored or followed. `--no-external-check` turns it off. Saying it
+precisely matters — this paragraph is what gets quoted in a store listing and in an answer to a
+review, and a sentence the product itself contradicts is worse than a long one.
 
 ## 2. Settled decisions
 

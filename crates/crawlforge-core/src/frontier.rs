@@ -114,6 +114,13 @@ pub struct Frontier {
     /// Colas por profundidad: se sirve siempre la más superficial que tenga trabajo.
     levels: Vec<VecDeque<QueuedUrl>>,
     seen: HashSet<i64>,
+    /// URLs en cola por host.
+    ///
+    /// Es lo que permite a [`Self::dequeue_dispatchable`] decidir **sin recorrer la cola** si
+    /// hay algo que despachar: con un solo host —el caso normal— la decisión cuesta una
+    /// comparación. Un mapa de un contador por host es despreciable al lado del índice de
+    /// vistas: en un rastreo de un sitio son una entrada, y en uno de cartera, veinte.
+    by_host: std::collections::HashMap<String, usize>,
     pending: usize,
     dispatched: u64,
 }
@@ -136,6 +143,7 @@ impl Frontier {
         if self.levels.len() <= depth {
             self.levels.resize_with(depth + 1, VecDeque::new);
         }
+        self.track_host(&item.url);
         self.levels[depth].push_back(item);
         self.pending += 1;
         true
@@ -159,10 +167,84 @@ impl Frontier {
             if let Some(item) = level.pop_front() {
                 self.pending -= 1;
                 self.dispatched += 1;
+                release_host(&mut self.by_host, item.url.host_str().unwrap_or_default());
                 return Some(item);
             }
         }
         None
+    }
+
+    /// Saca la primera URL —en orden BFS— de un host que **ahora mismo pueda despacharse**.
+    ///
+    /// `dispatchable` recibe el host y responde si le queda hueco. `max_scan` acota cuántas
+    /// URLs se miran en la cabeza de la cola antes de rendirse.
+    ///
+    /// # Por qué mirar más allá de la cabeza
+    ///
+    /// La cola se sirve por profundidad y dentro de un nivel por orden de descubrimiento, así
+    /// que un host lento —uno con `Crawl-delay`, que queda a una petición en vuelo— puede
+    /// ocupar los primeros cientos de puestos y **matar de hambre a los demás**. Ocurrió: 250
+    /// URLs de un host con `Crawl-delay: 1` por delante de 5 de un host libre dejaban al libre
+    /// a cero pasados veinte segundos, y con el retardo en su tope de 30 s habría esperado cien
+    /// minutos. El planificador anterior lo empeoraba: retenía las no despachables en un búfer
+    /// aparte de 200 y, una vez lleno, dejaba de mirar la cola.
+    ///
+    /// El recorrido **no cuesta nada cuando no puede servir de nada**: [`Self::by_host`] dice
+    /// qué hosts tienen trabajo en cola, así que si ninguno tiene hueco se responde sin tocar
+    /// la cola. Con un solo host saturado —el caso normal, y el del banco de rendimiento— eso
+    /// es una comparación por llamada, frente a las 200 del búfer anterior.
+    ///
+    /// `max_scan` es el precio de lo contrario: un host con hueco cuyo trabajo esté más allá
+    /// de ese punto espera a que drene lo que tiene delante. Es un tope de trabajo por llamada,
+    /// no un olvido — la URL sigue en la cola y sale en cuanto se acerque a la cabeza.
+    pub fn dequeue_dispatchable(
+        &mut self,
+        max_scan: usize,
+        mut dispatchable: impl FnMut(&str) -> bool,
+    ) -> Option<QueuedUrl> {
+        // La puerta barata: hosts con trabajo en cola y hueco para una petición más.
+        let ready: HashSet<&str> = self
+            .by_host
+            .keys()
+            .filter(|host| dispatchable(host))
+            .map(String::as_str)
+            .collect();
+        if ready.is_empty() {
+            return None;
+        }
+
+        let mut scanned = 0usize;
+        let mut found: Option<(usize, usize)> = None;
+        'search: for (level_index, level) in self.levels.iter().enumerate() {
+            for (position, item) in level.iter().enumerate() {
+                if scanned >= max_scan {
+                    break 'search;
+                }
+                scanned += 1;
+                if ready.contains(item.url.host_str().unwrap_or_default()) {
+                    found = Some((level_index, position));
+                    break 'search;
+                }
+            }
+        }
+
+        let (level_index, position) = found?;
+        let item = self.levels[level_index].remove(position)?;
+        self.pending -= 1;
+        self.dispatched += 1;
+        release_host(&mut self.by_host, item.url.host_str().unwrap_or_default());
+        Some(item)
+    }
+
+    fn track_host(&mut self, url: &Url) {
+        let host = url.host_str().unwrap_or_default();
+        // `get_mut` primero: el camino normal no asigna la clave. Es una llamada por URL
+        // descubierta y no puede pagar un `String` cada vez.
+        if let Some(count) = self.by_host.get_mut(host) {
+            *count += 1;
+        } else {
+            self.by_host.insert(host.to_string(), 1);
+        }
     }
 
     pub fn pending(&self) -> usize {
@@ -182,12 +264,30 @@ impl Frontier {
         self.pending == 0
     }
 
+    /// Hosts distintos con trabajo en cola. Para métricas y tests.
+    pub fn hosts_pending(&self) -> usize {
+        self.by_host.len()
+    }
+
     /// ¿Conviene ya desbordar a SQLite?
     ///
     /// De momento solo se informa: el desbordamiento a disco no está implementado; los sujetos de
     /// los bancos de prueba (hasta 50k URLs) no llegan al umbral.
     pub fn should_spill(&self) -> bool {
         self.pending > SPILL_THRESHOLD
+    }
+}
+
+/// Descuenta una URL del recuento de su host y retira la entrada al llegar a cero.
+///
+/// Sin la retirada, un rastreo de cartera acumularía una entrada por host visto durante todo
+/// el rastreo, y la puerta de [`Frontier::dequeue_dispatchable`] pasaría a costar lo que hosts
+/// se hayan visto en vez de lo que hosts quedan en cola.
+fn release_host(by_host: &mut std::collections::HashMap<String, usize>, host: &str) {
+    let Some(count) = by_host.get_mut(host) else { return };
+    *count -= 1;
+    if *count == 0 {
+        by_host.remove(host);
     }
 }
 
@@ -284,6 +384,101 @@ mod tests {
         }
         assert!(!f.should_spill());
         assert_eq!(f.pending(), 10);
+    }
+
+    // --- Serving by host: what keeps a slow host from starving the rest ---
+
+    /// Everything is dispatchable.
+    fn any(_host: &str) -> bool {
+        true
+    }
+
+    #[test]
+    fn a_saturated_host_at_the_head_does_not_hide_the_rest_of_the_queue() {
+        // The reproduction: 250 URLs of a host with `Crawl-delay` —one request in flight— in
+        // front of 5 of a free host. The buffered scheduler kept the first 200 in its buffer,
+        // stopped looking at the queue and never reached the free host: measured at zero of
+        // five after twenty seconds.
+        let mut f = Frontier::new();
+        for i in 0..250 {
+            f.enqueue(item(&format!("https://lento.es/{i}"), 0), i);
+        }
+        for i in 0..5 {
+            f.enqueue(item(&format!("https://libre.es/{i}"), 0), 1000 + i);
+        }
+
+        let got = f
+            .dequeue_dispatchable(4096, |host| host == "libre.es")
+            .expect("the free host has work and room, however far back it sits");
+        assert_eq!(got.url.host_str(), Some("libre.es"));
+        assert_eq!(f.pending(), 254, "nothing is lost or moved out of the queue");
+    }
+
+    #[test]
+    fn with_no_host_able_to_dispatch_the_queue_is_not_walked() {
+        // The cheap gate: it is the normal case —one saturated host— and it is the benchmark's
+        // hot path. The old scheduler paid 200 checks here, each taking the throttle's mutex.
+        let mut f = Frontier::new();
+        for i in 0..1000 {
+            f.enqueue(item(&format!("https://saturado.es/{i}"), 0), i);
+        }
+        let mut asked = 0;
+        let got = f.dequeue_dispatchable(4096, |_| {
+            asked += 1;
+            false
+        });
+        assert!(got.is_none());
+        assert_eq!(asked, 1, "one host in the queue, one question asked");
+        assert_eq!(f.pending(), 1000);
+    }
+
+    #[test]
+    fn serving_by_host_keeps_the_bfs_order_of_that_host() {
+        let mut f = Frontier::new();
+        f.enqueue(item("https://a.es/1", 0), 1);
+        f.enqueue(item("https://b.es/1", 0), 2);
+        f.enqueue(item("https://a.es/2", 0), 3);
+        f.enqueue(item("https://a.es/hondo", 5), 4);
+
+        let first = f.dequeue_dispatchable(64, |h| h == "a.es").expect("a.es has work");
+        assert_eq!(first.url.path(), "/1");
+        let second = f.dequeue_dispatchable(64, |h| h == "a.es").expect("a.es still has work");
+        assert_eq!(second.url.path(), "/2", "arrival order within the level");
+        let third = f.dequeue_dispatchable(64, |h| h == "a.es").expect("only the deep one left");
+        assert_eq!(third.depth, 5, "and the shallow level goes first");
+        assert!(f.dequeue_dispatchable(64, |h| h == "a.es").is_none());
+    }
+
+    #[test]
+    fn the_scan_limit_bounds_the_work_of_a_single_call() {
+        let mut f = Frontier::new();
+        for i in 0..500 {
+            f.enqueue(item(&format!("https://relleno.es/{i}"), 0), i);
+        }
+        f.enqueue(item("https://libre.es/1", 0), 9999);
+        // With the limit short of the free host's position, this call gives up — and the URL
+        // stays in the queue for the next one.
+        assert!(f.dequeue_dispatchable(10, |h| h == "libre.es").is_none());
+        assert_eq!(f.pending(), 501, "giving up is not losing it");
+        assert!(f.dequeue_dispatchable(4096, |h| h == "libre.es").is_some());
+    }
+
+    #[test]
+    fn the_count_of_hosts_with_work_follows_the_queue() {
+        let mut f = Frontier::new();
+        f.enqueue(item("https://a.es/1", 0), 1);
+        f.enqueue(item("https://a.es/2", 0), 2);
+        f.enqueue(item("https://b.es/1", 0), 3);
+        assert_eq!(f.hosts_pending(), 2);
+
+        f.dequeue_dispatchable(64, |h| h == "b.es").expect("b.es");
+        assert_eq!(f.hosts_pending(), 1, "a host with nothing left leaves the map");
+
+        f.dequeue().expect("a.es/1");
+        assert_eq!(f.hosts_pending(), 1, "a.es still has one");
+        f.dequeue().expect("a.es/2");
+        assert_eq!(f.hosts_pending(), 0);
+        assert!(f.dequeue_dispatchable(64, any).is_none());
     }
 
     #[test]

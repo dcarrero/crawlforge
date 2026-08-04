@@ -18,9 +18,14 @@ una cartera de sitios y la comparación entre rastreos**. Una auditoría suelta 
 lleva decenas de proyectos necesita saber qué cambió desde la anterior.
 
 **Es un auditor de sitios web propios.** No es una herramienta de extracción de datos ajenos: el
-producto solo rastrea el sitio que se le indica, respeta `robots.txt` salvo permiso explícito del
-dueño, y no persigue enlaces externos por defecto. Esa restricción es de diseño y condiciona el
-código, no solo el discurso.
+producto solo rastrea el sitio que se le indica y respeta `robots.txt` salvo permiso explícito del
+dueño. Esa restricción es de diseño y condiciona el código, no solo el discurso.
+
+Lo único que toca fuera de ese sitio son los enlaces salientes, y solo para responder si siguen
+resolviendo: una petición de solo cabeceras, una vez por URL distinta, una en vuelo por host
+ajeno, sin parsear, guardar ni seguir nada de ese sitio. `--no-external-check` lo apaga. Decirlo
+con precisión importa: este párrafo es el que se cita en una ficha de tienda y en la respuesta a
+una revisión, y una frase que el propio producto contradice es peor que una frase larga.
 
 ## 2. Decisiones cerradas
 

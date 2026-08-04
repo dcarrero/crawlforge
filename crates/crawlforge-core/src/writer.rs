@@ -609,7 +609,34 @@ pub struct WriterStats {
 pub struct WriterHandle {
     sender: tokio::sync::mpsc::Sender<Message>,
     thread: std::thread::JoinHandle<Result<WriterStats>>,
-    ticker: tokio::task::JoinHandle<()>,
+    ticker: TickerGuard,
+}
+
+/// La tarea del latido, abortada al soltarse.
+///
+/// Existe por una fuga concreta: el latido conserva un **clon del `Sender`**, así que mientras
+/// viva, `blocking_recv` nunca devuelve `None` y el hilo escritor no termina nunca. Soltar un
+/// [`WriterHandle`] sin llamar a `finish` —cualquier `?` entre el arranque del escritor y el
+/// cierre— dejaba el hilo y su conexión SQLite vivos lo que viviera el runtime.
+///
+/// En la CLI da igual, porque el proceso muere detrás. En la app de escritorio, donde el motor
+/// corre dentro del proceso de la interfaz, es un hilo y una conexión escritora filtrados por
+/// cada rastreo que falle así.
+///
+/// Es un tipo aparte y no un `Drop` sobre `WriterHandle` porque `finish(self)` mueve los otros
+/// dos campos, y Rust no deja mover fuera de un tipo que implementa `Drop`.
+struct TickerGuard(tokio::task::JoinHandle<()>);
+
+impl TickerGuard {
+    fn abort(&self) {
+        self.0.abort();
+    }
+}
+
+impl Drop for TickerGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 impl WriterHandle {
@@ -640,7 +667,7 @@ impl WriterHandle {
             }
         });
 
-        Ok(Self { sender, thread, ticker })
+        Ok(Self { sender, thread, ticker: TickerGuard(ticker) })
     }
 
     /// Encola un resultado, **esperando si el escritor va por detrás**.
@@ -1293,5 +1320,40 @@ mod tests {
         assert_eq!(CrawlState::Error.as_str(), "error");
         assert_eq!(CrawlState::Excluded.as_str(), "excluded");
         assert_eq!(CrawlState::Skipped.as_str(), "skipped");
+    }
+
+    /// Dropping the guard has to stop the task, because the heartbeat holds a clone of the
+    /// `Sender` and while it lives the writer thread never sees the channel close.
+    ///
+    /// This tests the mechanism and not the whole `WriterHandle`, and the reason is worth
+    /// writing down: with the leak in place the heartbeat keeps firing every two seconds, and a
+    /// `Tick` flushes the pending batch — so «the rows made it to the file» is true either way
+    /// and proves nothing. What the leak actually costs is a live thread and a live SQLite
+    /// connection, and neither is observable from a test once the handle is gone.
+    #[tokio::test]
+    async fn dropping_the_ticker_guard_stops_the_heartbeat() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let beats = Arc::new(AtomicU32::new(0));
+        let suyo = Arc::clone(&beats);
+        let guard = TickerGuard(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                suyo.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        let while_alive = beats.load(Ordering::SeqCst);
+        assert!(while_alive > 0, "the task never ran: the test proves nothing");
+
+        drop(guard);
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        assert_eq!(
+            beats.load(Ordering::SeqCst),
+            while_alive,
+            "the heartbeat survived its guard: the writer thread would never end"
+        );
     }
 }

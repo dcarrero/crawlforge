@@ -280,11 +280,20 @@ fn sample(srcs: &[&str]) -> Vec<String> {
 
 // ---------------------------------------------------------------- Site rules
 
-/// Image returning 4xx or 5xx.
+/// Image returning an error: any 4xx/5xx of your own, 404/410 from someone else's host.
 ///
 /// The finding is recorded **on the image's URL**, not on every page that loads it, with the
 /// count of affected pages: the missing file is one and gets fixed once. Same criterion as
 /// `HTTP-404-INTERNAL`, whose family it belongs to.
+///
+/// **External images only assert on the codes the probe can vouch for** (see
+/// [`crate::sql_external_gone`]). The concrete, frequent case that forced the split: a
+/// hotlinked foreign image behind Referer-based anti-hotlink protection loads fine on the page
+/// — the browser sends the Referer — and answers 403 to our probe, which sends none. That was
+/// a `high` finding about an image the visitor sees perfectly. And a foreign 5xx is the same
+/// volatility `HTTP-404-EXTERNAL` already excludes with its reasoning written down: it entered
+/// through this door instead. Your own server keeps the full `>= 400` range: a 403 or a 500 on
+/// your own uploads folder is measured with a real request and is yours to fix.
 pub struct AssetImgBroken;
 
 impl SiteRule for AssetImgBroken {
@@ -296,13 +305,16 @@ impl SiteRule for AssetImgBroken {
         // `images.src_url_id` points at the image's `urls` row, which the engine requests like
         // any other URL: that is where its `status_code` comes from. The `COUNT(DISTINCT ...)`
         // is what turns "a file is missing" into "a file is missing and 40 pages load it".
-        let mut stmt = conn.prepare(
+        let sql = format!(
             "SELECT u.url_hash, u.url, u.status_code, COUNT(DISTINCT i.page_url_id) AS pages
              FROM urls u
              JOIN images i ON i.src_url_id = u.id
-             WHERE u.status_code >= 400
+             WHERE (u.is_internal = 1 AND u.status_code >= 400)
+                OR (u.is_internal = 0 AND {externa_rota})
              GROUP BY u.id",
-        )?;
+            externa_rota = crate::sql_external_gone("u.status_code"),
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let rows = stmt.query_map([], |r| {
             Ok((
@@ -383,11 +395,16 @@ impl SiteRule for AssetImgHeavy {
     }
 }
 
-/// Stylesheet or script returning 4xx or 5xx.
+/// Stylesheet or script returning an error: any 4xx/5xx of your own, 404/410 from a CDN.
 ///
 /// The parser only records `<link rel="stylesheet">` as `element = 'link'` —the canonical, the
 /// `amphtml` and the `hreflang` are not resources and go to their own columns— so the CSS/JS
 /// distinction is read off the element itself, without looking at the file extension.
+///
+/// External resources carry the same restriction as [`AssetImgBroken`], for the same reason: a
+/// CDN's 403 to a bot probe or a foreign 5xx during the crawl says nothing about what the
+/// visitor's browser gets, and the volatility `HTTP-404-EXTERNAL` excludes on purpose must not
+/// re-enter through this rule.
 pub struct AssetBroken;
 
 impl SiteRule for AssetBroken {
@@ -399,15 +416,19 @@ impl SiteRule for AssetBroken {
         // Also grouped by `element` so two different uses of the same URL do not mix: a file
         // served both as a stylesheet and as a script is rare, but if it happens those are two
         // findings with two causes.
-        let mut stmt = conn.prepare(
+        let sql = format!(
             "SELECT u.url_hash, u.url, u.status_code,
                     CASE l.element WHEN 'script' THEN 'js' ELSE 'css' END AS kind,
                     COUNT(DISTINCT l.from_url_id) AS pages
              FROM urls u
              JOIN links l ON l.to_url_id = u.id
-             WHERE u.status_code >= 400 AND l.element IN ('link', 'script')
+             WHERE ((u.is_internal = 1 AND u.status_code >= 400)
+                 OR (u.is_internal = 0 AND {externa_rota}))
+               AND l.element IN ('link', 'script')
              GROUP BY u.id, l.element",
-        )?;
+            externa_rota = crate::sql_external_gone("u.status_code"),
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
         let rows = stmt.query_map([], |r| {
             Ok((
@@ -834,6 +855,16 @@ mod tests {
         .expect("insert url");
     }
 
+    /// Inserts a URL on someone else's host, as the external status probe leaves it.
+    fn url_externa(conn: &Connection, id: i64, url: &str, status: Option<i64>) {
+        conn.execute(
+            "INSERT INTO urls (id, url, url_hash, status_code, is_internal)
+             VALUES (?1, ?2, ?3, ?4, 0)",
+            rusqlite::params![id, url, id * 1000, status],
+        )
+        .expect("insert external url");
+    }
+
     #[test]
     fn detects_the_image_returning_an_error_and_counts_the_pages() {
         let conn = conn_minima();
@@ -895,6 +926,109 @@ mod tests {
             detalles.iter().all(|d| d.contains("\"used_by_pages\":1")),
             "the same stylesheet cited twice on one page is one page: {detalles:?}"
         );
+    }
+
+    #[test]
+    fn a_hotlink_wall_403_is_not_a_broken_image() {
+        // Proves the fix. A foreign image behind Referer-based anti-hotlink protection loads
+        // fine on the page — the browser sends the Referer — and answers 403 to our probe,
+        // which sends none. Reporting it was a `high` finding about an image the visitor sees
+        // perfectly. Same for the other codes a wall answers a bot with.
+        for status in [401, 403, 429] {
+            let conn = conn_minima();
+            url(&conn, 1, "https://ejemplo.es/a", Some(200), Some(2_000));
+            url_externa(&conn, 2, "https://fotos.example/protegida.jpg", Some(status));
+            conn.execute_batch("INSERT INTO images (page_url_id, src_url_id) VALUES (1, 2);")
+                .expect("insert image");
+
+            assert!(
+                AssetImgBroken.evaluate(&conn).expect("evaluate").is_empty(),
+                "a foreign {status} says nothing about what the visitor's browser gets"
+            );
+        }
+    }
+
+    #[test]
+    fn a_foreign_5xx_is_not_a_broken_image() {
+        // Proves the fix. The volatility HTTP-404-EXTERNAL excludes with its reasoning written
+        // down — someone else's 5xx is almost always transient — entered through this rule
+        // instead. Now the same criterion holds at both doors.
+        let conn = conn_minima();
+        url(&conn, 1, "https://ejemplo.es/a", Some(200), Some(2_000));
+        url_externa(&conn, 2, "https://fotos.example/caida.jpg", Some(503));
+        conn.execute_batch("INSERT INTO images (page_url_id, src_url_id) VALUES (1, 2);")
+            .expect("insert image");
+
+        assert!(AssetImgBroken.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn a_foreign_image_that_is_gone_is_still_broken() {
+        // Guard: narrowing the external codes must not silence the true case.
+        for status in [404, 410] {
+            let conn = conn_minima();
+            url(&conn, 1, "https://ejemplo.es/a", Some(200), Some(2_000));
+            url_externa(&conn, 2, "https://fotos.example/borrada.jpg", Some(status));
+            conn.execute_batch("INSERT INTO images (page_url_id, src_url_id) VALUES (1, 2);")
+                .expect("insert image");
+
+            assert_eq!(
+                AssetImgBroken.evaluate(&conn).expect("evaluate").len(),
+                1,
+                "a foreign {status} is the origin stating the image is gone"
+            );
+        }
+    }
+
+    #[test]
+    fn an_own_403_or_5xx_image_is_still_broken() {
+        // Guard: the restriction is for hosts we do not control. Your own uploads folder
+        // answering 403 or 500 is measured with a real request and is yours to fix.
+        for status in [403, 500] {
+            let conn = conn_minima();
+            url(&conn, 1, "https://ejemplo.es/a", Some(200), Some(2_000));
+            url(&conn, 2, "https://ejemplo.es/uploads/rota.jpg", Some(status), Some(0));
+            conn.execute_batch("INSERT INTO images (page_url_id, src_url_id) VALUES (1, 2);")
+                .expect("insert image");
+
+            assert_eq!(AssetImgBroken.evaluate(&conn).expect("evaluate").len(), 1, "{status}");
+        }
+    }
+
+    #[test]
+    fn a_cdn_wall_or_hiccup_is_not_a_broken_resource() {
+        // Proves the fix for ASSET-BROKEN: same criterion as the images, same reasons.
+        for status in [403, 429, 503] {
+            let conn = conn_minima();
+            url(&conn, 1, "https://ejemplo.es/a", Some(200), Some(2_000));
+            url_externa(&conn, 2, "https://cdn.example/lib.js", Some(status));
+            conn.execute_batch(
+                "INSERT INTO links (from_url_id, to_url_id, element) VALUES (1, 2, 'script');",
+            )
+            .expect("insert link");
+
+            assert!(
+                AssetBroken.evaluate(&conn).expect("evaluate").is_empty(),
+                "a foreign {status} says nothing about what the visitor's browser gets"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cdn_resource_that_is_gone_is_still_broken() {
+        // Guard: a stylesheet a CDN answers 404 for is gone for every visitor too.
+        let conn = conn_minima();
+        url(&conn, 1, "https://ejemplo.es/a", Some(200), Some(2_000));
+        url_externa(&conn, 2, "https://cdn.example/tema.css", Some(404));
+        conn.execute_batch(
+            "INSERT INTO links (from_url_id, to_url_id, element) VALUES (1, 2, 'link');",
+        )
+        .expect("insert link");
+
+        let hallazgos = AssetBroken.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1);
+        let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
+        assert!(detalle.contains("\"kind\":\"css\""), "detail: {detalle}");
     }
 
     #[test]

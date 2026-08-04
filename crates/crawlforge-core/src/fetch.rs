@@ -134,6 +134,13 @@ pub struct StatusProbe {
     pub content_type: Option<String>,
     pub content_length: Option<u64>,
     pub response_time_ms: u32,
+    /// `Retry-After`, tal cual lo mandó el servidor, cuando acompaña a un 429 o a un 503.
+    ///
+    /// Es lo que convierte «este host va justo» en «este host ha dicho cuánto». El motor no
+    /// espera: una sonda de estado es una cortesía, así que ante esa señal deja de sondear ese
+    /// host y cuenta las suyas como no comprobadas (ver `ExternalQueue`). Se conserva para que
+    /// el motivo pueda decir cuánto pedía el servidor.
+    pub retry_after: Option<String>,
 }
 
 /// Fuente de bytes. `HttpFetcher`, `FilesystemFetcher` y, en el futuro, un fetcher que renderice JavaScript.
@@ -289,14 +296,17 @@ impl HttpFetcher {
             request = request.header(reqwest::header::AUTHORIZATION, header);
         }
         let response = request.send().await.map_err(|e| classify_reqwest_error(&e))?;
-        let content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        };
         Ok(StatusProbe {
             status: response.status().as_u16(),
-            content_type,
+            content_type: header("content-type"),
+            retry_after: header("retry-after"),
             content_length: response.content_length(),
             response_time_ms: started.elapsed().as_millis() as u32,
         })

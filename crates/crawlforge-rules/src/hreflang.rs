@@ -746,6 +746,11 @@ fn clave_de_par(a: &str, b: &str) -> String {
 /// actually requested. 5xx are left out on purpose — they tend to be transient and the rule's ID
 /// names 4xx — and the finding is recorded on the page declaring the hreflang, which is where
 /// the line to fix lives.
+///
+/// **A cross-domain target only asserts on 404/410** (see [`crate::sql_external_gone`]): the
+/// hreflang between two of your own domains is the textbook multi-domain setup, its target got
+/// the bot `HEAD` probe, and a wall's 401/403/429 to that probe would otherwise escalate to a
+/// `critical` about a page every browser opens fine. Same criterion as `HTTP-404-EXTERNAL`.
 pub struct HreflangTo4xx;
 
 impl SiteRule for HreflangTo4xx {
@@ -755,10 +760,15 @@ impl SiteRule for HreflangTo4xx {
 
     fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
         let conjuntos = leer_conjuntos(conn)?;
-        let mut estado = conn.prepare(
+        let sql = format!(
             "SELECT status_code FROM urls
-             WHERE url = ?1 AND status_code >= 400 AND status_code < 500 LIMIT 1",
-        )?;
+             WHERE url = ?1
+               AND ((is_internal = 1 AND status_code >= 400 AND status_code < 500)
+                 OR (is_internal = 0 AND {externa_rota}))
+             LIMIT 1",
+            externa_rota = crate::sql_external_gone("status_code"),
+        );
+        let mut estado = conn.prepare(&sql)?;
 
         let mut salida = Vec::new();
         for origen in &conjuntos {
@@ -1212,5 +1222,50 @@ mod tests {
     fn to_4xx_stays_quiet_on_a_crawl_without_hreflang() {
         let conn = db(&[("https://ejemplo.es/", Some(200), true, None)]);
         assert!(HreflangTo4xx.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    /// Marks an already inserted URL as belonging to another host, as the external status
+    /// probe leaves it.
+    fn marcar_externa(conn: &Connection, url: &str) {
+        let cambiadas = conn
+            .execute("UPDATE urls SET is_internal = 0 WHERE url = ?1", rusqlite::params![url])
+            .expect("mark external");
+        assert_eq!(cambiadas, 1, "the URL to mark external must exist");
+    }
+
+    #[test]
+    fn to_4xx_does_not_escalate_a_cross_domain_bot_wall() {
+        // Proves the fix. The hreflang between two of your own domains is the textbook
+        // multi-domain setup; the cross-domain target got the bot HEAD probe, and its wall's
+        // 401/403/429 was escalating to a critical about a page every browser opens fine.
+        // Same criterion as HTTP-404-EXTERNAL.
+        for status in [401u16, 403, 429] {
+            let es = json(&[("es", "https://ejemplo.es/"), ("en", "https://ejemplo.co.uk/")]);
+            let conn = db(&[
+                ("https://ejemplo.es/", Some(200), true, Some(&es)),
+                ("https://ejemplo.co.uk/", Some(status), false, None),
+            ]);
+            marcar_externa(&conn, "https://ejemplo.co.uk/");
+
+            assert!(
+                HreflangTo4xx.evaluate(&conn).expect("evaluate").is_empty(),
+                "a foreign {status} cannot back a critical about the hreflang target"
+            );
+        }
+    }
+
+    #[test]
+    fn to_4xx_still_reports_a_cross_domain_target_that_is_gone() {
+        // Guard: a 404/410 is the foreign origin itself stating the alternate is gone.
+        let es = json(&[("es", "https://ejemplo.es/"), ("en", "https://ejemplo.co.uk/")]);
+        let conn = db(&[
+            ("https://ejemplo.es/", Some(200), true, Some(&es)),
+            ("https://ejemplo.co.uk/", Some(410), false, None),
+        ]);
+        marcar_externa(&conn, "https://ejemplo.co.uk/");
+
+        let hallazgos = HreflangTo4xx.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1);
+        assert!(hallazgos[0].1.detail_json.as_deref().unwrap_or_default().contains("410"));
     }
 }

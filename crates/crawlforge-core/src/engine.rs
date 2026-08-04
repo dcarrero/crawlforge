@@ -662,9 +662,11 @@ async fn run_with<F: Fetcher + 'static>(
     // profundidad guardada —el orden BFS sobrevive al corte— y todo lo demás marcado como
     // visto para no repetirlo. `already_fetched` descuenta del presupuesto lo ya rastreado:
     // sin él, un rastreo con `max_urls` interrumpido y reanudado rastrearía de más.
-    let (mut frontier, mut in_sitemap, already_fetched) = match resume {
-        Some(setup) => (setup.frontier, setup.in_sitemap, setup.already_fetched),
-        None => (Frontier::new(), std::collections::HashSet::new(), 0),
+    let (mut frontier, mut in_sitemap, already_fetched, resumed_probes) = match resume {
+        Some(setup) => {
+            (setup.frontier, setup.in_sitemap, setup.already_fetched, setup.pending_probes)
+        }
+        None => (Frontier::new(), std::collections::HashSet::new(), 0, Vec::new()),
     };
     let mut metrics = CrawlMetrics::default();
     // En modo lista solo se descargan las URLs de la lista, así que ninguna página tiene a
@@ -902,14 +904,42 @@ async fn run_with<F: Fetcher + 'static>(
     // las externas quedan registradas sin estado, como siempre.
     let external_checks =
         job.limits.check_external && !job.limits.follow_external && fetcher.can_check_status();
+    // ¿Se le aplica el perímetro de red a las sondas? Solo si el sitio auditado está en
+    // internet.
+    //
+    // La criba (`normalize::is_probeable_host`) existe para que un sitio ajeno no pueda dirigir
+    // peticiones a la red del consultor. Si el rastreo apunta a `http://localhost:4321/` —un
+    // `astro dev`— o al pre de un cliente en la LAN de la oficina, quien lanzó el rastreo ya
+    // está dentro de esa red y lo hizo a propósito: cribar ahí no protegería de nada y
+    // rompería el caso de uso. La criba vale para lo que de verdad la motiva: un sitio público
+    // que enlaza a `169.254.169.254`.
+    //
+    // Es el mismo criterio con el que `ResumeScope` decide si mirar los hosts de un fichero.
+    let screen_local_network =
+        seeds.first().is_some_and(|s| normalize::is_probeable_host(&s.normalized));
     let mut externals = ExternalQueue::default();
     // Externas encoladas para comprobar, contra el tope `max_external`. Cuenta encoladas y no
     // comprobadas: así el tope decide en el descubrimiento y las descartadas se cuentan una
     // sola vez en `externals_unchecked`.
     let mut externals_enqueued: u64 = 0;
-    // URLs sacadas del frontier cuyo host estaba al límite al despachar. Se reintentan antes
-    // de sacar nada nuevo, así que conservan su orden.
-    let mut deferred: VecDeque<QueuedUrl> = VecDeque::new();
+    // Sondas que quedaron a medias en una sesión anterior: filas externas, sin estado y sin
+    // error, que el corte pilló en vuelo o en cola. Sin esto se perdían para siempre — la
+    // reanudación solo relee las `pending`, y el frontier ya las tiene por vistas.
+    if external_checks {
+        for url in resumed_probes {
+            if let Some(host) = url.host_str() {
+                throttle.force_serial(host);
+            }
+            if externals_enqueued >= job.limits.max_external {
+                metrics.externals_unchecked += 1;
+                continue;
+            }
+            match externals.push(url) {
+                Ok(()) => externals_enqueued += 1,
+                Err(_) => metrics.externals_unchecked += 1,
+            }
+        }
+    }
     // Peticiones en vuelo por host: la cuenta contra la que se aplica el límite de cada host.
     let mut in_flight_by_host: HashMap<String, usize> = HashMap::new();
     // Host de cada tarea en vuelo, por identificador: es lo que permite liberar el hueco
@@ -932,9 +962,7 @@ async fn run_with<F: Fetcher + 'static>(
         // semilla—, que el freno adaptativo puede haber reducido si ese servidor está dando
         // señales de ir ahogado.
         while in_flight.len() < MAX_TOTAL_IN_FLIGHT {
-            if let Some(item) =
-                next_dispatchable(&mut frontier, &mut deferred, &throttle, &in_flight_by_host)
-            {
+            if let Some(item) = next_dispatchable(&mut frontier, &throttle, &in_flight_by_host) {
                 let host = item.url.host_str().unwrap_or_default().to_string();
                 *in_flight_by_host.entry(host.clone()).or_insert(0) += 1;
                 let fetcher = Arc::clone(&fetcher);
@@ -982,11 +1010,11 @@ async fn run_with<F: Fetcher + 'static>(
 
         // Sin nada en vuelo y sin nada en la cola, el rastreo ha terminado. No basta con
         // mirar la cola: una petición en vuelo todavía puede descubrir enlaces nuevos. Y sin
-        // nada en vuelo tampoco puede haber retenidas: con el límite mínimo de 1 por host,
-        // cualquier retenida —interna o externa— se habría despachado en el rellenado de
+        // nada en vuelo no puede quedar nada por despachar: con el límite mínimo de 1 por
+        // host, todo lo que quedara en cola —interno o externo— tenía hueco en el rellenado de
         // arriba.
         if in_flight.is_empty() {
-            debug_assert!(deferred.is_empty());
+            debug_assert!(frontier.is_empty());
             debug_assert!(externals.pending() == 0);
             break;
         }
@@ -1057,6 +1085,32 @@ async fn run_with<F: Fetcher + 'static>(
                     // sonda clasifica la URL como recurso — un CSS en un CDN). Nada de esto
                     // toca `urls_fetched`: el presupuesto `max_urls` es del sitio del usuario.
                     metrics.externals_checked += 1;
+                    if let Some(host) = item.url.host_str() {
+                        // El freno adaptativo cuenta también estas respuestas. Su efecto
+                        // directo es pequeño —`force_serial` ya dejó el host en una petición
+                        // en vuelo— pero es lo que hace que `throttled_hosts()` diga la
+                        // verdad, y el commit que trajo las sondas prometía ser «educado con
+                        // quien no es nuestro».
+                        if let Ok(probe) = &check {
+                            throttle.record(host, probe.status);
+                        }
+                        let outcome = match &check {
+                            Ok(probe) => Ok(probe.status),
+                            Err(failure) => Err(failure),
+                        };
+                        if let Some((dropped, reason)) = externals.record(host, outcome) {
+                            metrics.externals_unchecked += dropped as u64;
+                            let retry_after =
+                                check.as_ref().ok().and_then(|p| p.retry_after.clone());
+                            tracing::info!(
+                                host,
+                                motivo = reason.as_str(),
+                                sin_comprobar = dropped,
+                                retry_after,
+                                "se deja de sondear este host ajeno"
+                            );
+                        }
+                    }
                     let (row, resource) = match &check {
                         Ok(probe) => (
                             external_checked_row(&item, hash, probe),
@@ -1166,25 +1220,54 @@ async fn run_with<F: Fetcher + 'static>(
                                 // estado, una vez por URL única: es lo que hace posible
                                 // HTTP-404-EXTERNAL. La deduplicación la da el frontier: mil
                                 // enlaces a la misma externa entran aquí una sola vez.
+                                //
+                                // Lo que se decide aquí es **si se sonda**, no si se
+                                // registra: la fila se escribe siempre.
                                 frontier.mark_seen(link_hash);
                                 metrics.urls_discovered += 1;
-                                writer.send(CrawlResult {
-                                    url: Some(external_row(n, link_hash)),
-                                    ..Default::default()
-                                }).await?;
+                                let mut row = external_row(n, link_hash);
                                 if external_checks {
-                                    if externals_enqueued < job.limits.max_external {
-                                        externals_enqueued += 1;
-                                        if let Some(h) = n.normalized.host_str() {
-                                            // Una petición en vuelo por host ajeno, sin
-                                            // recuperación: educación, no rendimiento.
-                                            throttle.force_serial(h);
+                                    let skip = why_not_probe(
+                                        &n.normalized,
+                                        link.is_nofollow,
+                                        &filter,
+                                        &job.limits,
+                                        externals_enqueued,
+                                        screen_local_network,
+                                    );
+                                    // El host ajeno también decide: puede estar cerrado por
+                                    // fallos o haber agotado su propio tope.
+                                    let skip = match skip {
+                                        Some(reason) => Some(reason),
+                                        None => {
+                                            if let Some(h) = n.normalized.host_str() {
+                                                // Una petición en vuelo por host ajeno, sin
+                                                // recuperación: educación, no rendimiento.
+                                                throttle.force_serial(h);
+                                            }
+                                            match externals.push(n.normalized.clone()) {
+                                                Ok(()) => {
+                                                    externals_enqueued += 1;
+                                                    None
+                                                }
+                                                Err(reason) => Some(reason),
+                                            }
                                         }
-                                        externals.push(n.normalized.clone());
-                                    } else {
+                                    };
+                                    if let Some(reason) = skip {
                                         metrics.externals_unchecked += 1;
+                                        row.exclusion_reason = reason.exclusion_reason();
+                                        tracing::debug!(
+                                            url = %n.normalized,
+                                            motivo = reason.as_str(),
+                                            "URL externa registrada sin comprobar su estado"
+                                        );
                                     }
                                 }
+                                writer.send(CrawlResult {
+                                    url: Some(row),
+                                    ..Default::default()
+                                }).await?;
                                 continue;
                             }
                             // Modo lista: el destino interno se registra y no se pide.
@@ -1381,8 +1464,20 @@ async fn run_with<F: Fetcher + 'static>(
         metrics.peak_rss_bytes = rss.sample_if_due();
         emitter.tick(
             &metrics,
-            (frontier.pending() + deferred.len() + in_flight.len() + externals.pending()) as u64,
+            (frontier.pending() + in_flight.len() + externals.pending()) as u64,
         );
+    }
+
+    // Un corte deja sondas de externas sin mandar, y eso tiene que verse en el resumen: sus
+    // filas quedan sin estado, y ninguna regla puede decir nada de ellas. En un final normal la
+    // cola está vacía y esto suma cero.
+    if externals.pending() > 0 {
+        tracing::debug!(
+            sondas = externals.pending(),
+            motivo = NotProbed::Interrupted.as_str(),
+            "el corte deja externas sin comprobar"
+        );
+        metrics.externals_unchecked += externals.pending() as u64;
     }
 
     // Lo que siga en vuelo tras un corte —presupuesto de tiempo, tope de URLs— se cancela aquí,
@@ -1476,11 +1571,55 @@ async fn run_with<F: Fetcher + 'static>(
 /// con 20 dominios puede ir a 100 peticiones en vuelo sin castigar a ningún servidor».
 const MAX_TOTAL_IN_FLIGHT: usize = 100;
 
-/// Tope de URLs retenidas porque su host está al límite.
+/// URLs que el planificador mira en la cabeza del frontier antes de rendirse en una llamada.
 ///
-/// Retenerlas en un búfer aparte conserva el orden BFS sin reencolarlas; el tope evita que, con
-/// un único host saturado —el caso normal—, el frontier entero se mude al búfer.
-const MAX_DEFERRED: usize = 200;
+/// Solo se recorre cuando **hay** un host con trabajo en cola y hueco para pedirle algo (la
+/// puerta de `Frontier::dequeue_dispatchable`), así que el recorrido no es especulativo: es el
+/// precio de encontrar a ese host detrás de lo que haya acumulado uno saturado. Cuatro mil
+/// cubren de sobra el caso que lo motivó —cientos de URLs de un host con `Crawl-delay` por
+/// delante— y acotan el trabajo de una llamada.
+const MAX_FRONTIER_SCAN: usize = 4_096;
+
+/// Sondas de estado que se le mandan como mucho a un mismo host ajeno.
+///
+/// El tope global (`max_external`, 10.000) no protege del caso real: **un solo host** enlazado
+/// desde cientos de páginas. Con una sonda en vuelo por host ajeno, doscientas URLs de un host
+/// que tarde un segundo son más de tres minutos pegados al final del rastreo. Doscientas cubren
+/// con holgura lo que un sitio real enlaza hacia un mismo dominio; lo que pase de ahí queda
+/// registrado sin estado y contado en [`CrawlMetrics::externals_unchecked`].
+const MAX_EXTERNAL_PER_HOST: u32 = 200;
+
+/// Fallos de red seguidos de un host ajeno tras los que se deja de sondearlo.
+///
+/// Un dominio muerto enlazado desde doscientas URLs únicas paga el timeout entero por cada una,
+/// y en serie: **~33 minutos** añadidos al final del rastreo (medido: 8 URLs con 400 ms de
+/// retardo daban 3,3 s de cola, serialización perfecta). Tres respuestas ausentes seguidas ya
+/// dicen lo que hay que saber del host. Un 4xx o un 5xx **no** cuentan: eso es una respuesta,
+/// el host está vivo y su estado es justo lo que la sonda venía a averiguar.
+const EXTERNAL_HOST_FAILURE_STREAK: u32 = 3;
+
+/// Tope de un texto que controla un servidor ajeno y acaba en el fichero de rastreo.
+///
+/// `resources.mime` y `urls.error_message` son cadenas que elige quien responde. No hay
+/// inyección de por medio —todo va por parámetros—, pero un `Content-Type` de varios KB en cada
+/// una de 10.000 externas engorda el fichero que se le entrega al cliente sin aportar nada: el
+/// tipo de contenido más largo que existe no llega a cien caracteres.
+const MAX_THIRD_PARTY_TEXT: usize = 255;
+
+/// Recorta un texto de terceros a [`MAX_THIRD_PARTY_TEXT`] **caracteres**, no bytes.
+///
+/// Por caracteres porque la columna es `TEXT` y porque cortar por bytes partiría una secuencia
+/// UTF-8 por la mitad. El caso normal no copia ni recorre nada: si la cadena cabe en el tope
+/// contada en bytes, cabe contada en caracteres.
+fn clip_third_party(mut text: String) -> String {
+    if text.len() <= MAX_THIRD_PARTY_TEXT {
+        return text;
+    }
+    if let Some((end, _)) = text.char_indices().nth(MAX_THIRD_PARTY_TEXT) {
+        text.truncate(end);
+    }
+    text
+}
 
 /// Espera hasta el instante límite; sin límite, espera para siempre. Para `tokio::select!`.
 async fn wait_deadline(deadline: Option<tokio::time::Instant>) {
@@ -1549,6 +1688,14 @@ struct ResumeSetup {
     in_sitemap: std::collections::HashSet<i64>,
     /// URLs ya rastreadas (`crawl_state = 'done'`): descuentan del presupuesto `max_urls`.
     already_fetched: u64,
+    /// Sondas de externas que quedaron sin respuesta al cortar.
+    ///
+    /// Son las filas que delatan a una sonda a medias: externa, `skipped`, sin `status_code`,
+    /// sin `error_kind` y sin motivo de exclusión. Sin reencolarlas se perdían **para
+    /// siempre**: `resume` solo relee las `pending`, y como el frontier ya las tiene por
+    /// vistas, un enlace nuevo a esa misma URL tampoco las recuperaba. `HTTP-404-EXTERNAL`
+    /// callaba sobre ellas y ningún contador lo delataba.
+    pending_probes: Vec<Url>,
 }
 
 fn not_resumable(store_path: &Path, reason: impl Into<String>) -> crate::CoreError {
@@ -1674,6 +1821,16 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
         }
     }
 
+    // El alcance con el que se releen las filas del fichero.
+    //
+    // `validate_resume_scope` comprueba el `config_json`, que es lo que pedía la revisión
+    // anterior, y justo después las URLs se recargaban con un `SELECT ... WHERE crawl_state =
+    // 'pending'` **sin mirar ni host ni esquema**. Un `.sqlite` fabricado —o uno legítimo con
+    // una fila inyectada— con una `pending` apuntando a `169.254.169.254` hacía que `resume` la
+    // pidiera con un `GET` completo y guardara el cuerpo: peor que la sonda de externas, que al
+    // menos no descarga nada. El fichero es entrada no confiable; su lista de URLs también.
+    let scope = ResumeScope::of(&job, &base_url);
+
     // Las pendientes vuelven a la cola con su profundidad guardada y en su orden de
     // descubrimiento: el frontier sirve por niveles, así que el BFS queda como estaba.
     {
@@ -1691,6 +1848,14 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
                 tracing::warn!(url, "reanudación: URL pendiente ilegible; se omite");
                 continue;
             };
+            if let Err(motivo) = scope.admits(&parsed) {
+                tracing::warn!(
+                    url,
+                    motivo,
+                    "reanudación: URL pendiente fuera del alcance del rastreo; no se pide"
+                );
+                continue;
+            }
             let depth = depth.unwrap_or(0);
             // `urls` no guarda de dónde salió cada pendiente; se reconstruye por contexto.
             // Solo afecta a `pages.crawl_depth_source` de lo que se rastree ahora.
@@ -1722,6 +1887,33 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
     let already_fetched: i64 =
         conn.query_row("SELECT COUNT(*) FROM urls WHERE crawl_state = 'done'", [], |r| r.get(0))?;
 
+    // Las sondas que el corte pilló sin respuesta. Se releen solo si este rastreo las hace:
+    // con `--no-external-check` o con `follow_external`, esas filas no son sondas a medias.
+    let mut pending_probes = Vec::new();
+    if job.limits.check_external && !job.limits.follow_external {
+        let mut stmt = conn.prepare(
+            "SELECT url FROM urls
+             WHERE is_internal = 0 AND crawl_state = 'skipped'
+               AND status_code IS NULL AND error_kind IS NULL AND exclusion_reason IS NULL",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        for row in rows {
+            let url = row?;
+            let Ok(parsed) = Url::parse(&url) else { continue };
+            // El perímetro se vuelve a aplicar aquí, y no vale con que se aplicara al
+            // descubrirlas: estas URLs vienen del fichero, no de un enlace recién resuelto.
+            // La criba de red interna, con el mismo criterio que en el rastreo: solo si el
+            // sitio auditado está en internet (ver `ResumeScope::screen_local`).
+            if !normalize::is_crawlable_scheme(&parsed)
+                || (scope.screen_local && !normalize::is_probeable_host(&parsed))
+            {
+                tracing::warn!(url, "reanudación: sonda externa fuera del perímetro; se descarta");
+                continue;
+            }
+            pending_probes.push(parsed);
+        }
+    }
+
     Ok((
         job,
         ResumeSetup {
@@ -1729,8 +1921,61 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
             frontier,
             in_sitemap,
             already_fetched: already_fetched.max(0) as u64,
+            pending_probes,
         },
     ))
+}
+
+/// Hasta dónde puede llegar una reanudación al releer las URLs de su fichero.
+///
+/// El criterio es el mismo con el que el motor decide qué es interno mientras rastrea
+/// (`normalize::is_internal`), aplicado ahora a lo que el fichero dice que quedó pendiente: los
+/// hosts que los metadatos —ya validados contra `config_json`— declaran como objetivo del
+/// rastreo, y nada más.
+struct ResumeScope {
+    /// Hosts admitidos, en minúsculas. Uno en `http` y `filesystem`; los de la lista guardada
+    /// en modo `list`, que legítimamente puede mezclar dominios.
+    hosts: std::collections::HashSet<String>,
+    /// ¿Se aplica además la criba de red privada?
+    ///
+    /// **Solo cuando el propio objetivo del rastreo es público.** Auditar
+    /// `http://localhost:4321/` —un `astro dev`— o el pre de un cliente en la red de la oficina
+    /// es trabajo normal, y en ese caso el fichero no pide nada que el usuario no pidiera al
+    /// lanzarlo. Lo que la criba corta es lo otro: una URL de red interna colada en la lista de
+    /// un rastreo cuyo objetivo declarado es un sitio de internet.
+    screen_local: bool,
+}
+
+impl ResumeScope {
+    fn of(job: &CrawlJob, base_url: &str) -> Self {
+        let host_of = |raw: &str| {
+            Url::parse(raw).ok().and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+        };
+        let hosts: std::collections::HashSet<String> = match &job.mode {
+            // Una lista puede mezclar hosts a propósito, y `validate_resume_scope` solo puede
+            // contrastar el primero contra los metadatos: los demás pasan por la criba.
+            CrawlMode::List { urls } => urls.iter().filter_map(|u| host_of(u)).collect(),
+            _ => host_of(base_url).into_iter().collect(),
+        };
+        let screen_local = Url::parse(base_url)
+            .ok()
+            .is_some_and(|u| normalize::is_probeable_host(&u));
+        Self { hosts, screen_local }
+    }
+
+    fn admits(&self, url: &Url) -> std::result::Result<(), &'static str> {
+        if !normalize::is_crawlable_scheme(url) {
+            return Err("no es http ni https");
+        }
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        if !self.hosts.contains(&host) {
+            return Err("su host no es el del rastreo");
+        }
+        if self.screen_local && !normalize::is_probeable_host(url) {
+            return Err("es una dirección de red interna y el rastreo es de un sitio público");
+        }
+        Ok(())
+    }
 }
 
 /// Rechaza una configuración guardada cuyo objetivo no cuadra con los metadatos del fichero.
@@ -1933,38 +2178,24 @@ fn exclusion_reason_from_db(s: &str) -> Option<ExclusionReason> {
     }
 }
 
-/// Saca la siguiente URL despachable: primero las retenidas cuyo host ya tiene hueco, después
-/// el frontier, reteniendo por el camino las de hosts saturados.
+/// Saca la siguiente URL despachable: la primera, en orden BFS, de un host que tenga hueco.
 ///
 /// Es lo que hace que el límite de ritmo sea **por host y no global**: antes el pool entero se
 /// dimensionaba con el límite del host semilla, así que con `follow_external` todos los hosts
 /// compartían el freno del semilla — si un 503 lo reducía a 1, los demás también rastreaban de
 /// uno en uno. Ver `CONVENTIONS.md §4`.
+///
+/// La decisión de a quién le queda hueco vive aquí; la de cómo encontrarlo sin recorrer la cola
+/// entera, en [`Frontier::dequeue_dispatchable`], que es donde está el recuento por host.
 fn next_dispatchable(
     frontier: &mut Frontier,
-    deferred: &mut VecDeque<QueuedUrl>,
     throttle: &crate::throttle::Throttle,
     in_flight_by_host: &HashMap<String, usize>,
 ) -> Option<QueuedUrl> {
-    let has_slot = |url: &Url| {
-        let host = url.host_str().unwrap_or_default();
+    frontier.dequeue_dispatchable(MAX_FRONTIER_SCAN, |host| {
         let in_flight = in_flight_by_host.get(host).copied().unwrap_or(0);
         in_flight < throttle.limit_for(host) as usize
-    };
-
-    for i in 0..deferred.len() {
-        if has_slot(&deferred[i].url) {
-            return deferred.remove(i);
-        }
-    }
-    while deferred.len() < MAX_DEFERRED {
-        let item = frontier.dequeue()?;
-        if has_slot(&item.url) {
-            return Some(item);
-        }
-        deferred.push_back(item);
-    }
-    None
+    })
 }
 
 /// Libera el hueco que ocupaba una tarea en el recuento por host.
@@ -2001,6 +2232,102 @@ enum UrlOutcome {
     ExternalChecked(std::result::Result<crate::fetch::StatusProbe, crate::fetch::FetchFailure>),
 }
 
+/// Por qué una URL externa se registra **sin** comprobar su estado.
+///
+/// Existe para que ninguna se quede en silencio: la fila se escribe igual —el informe necesita
+/// saber a dónde apunta el sitio— y el motivo va al recuento de
+/// [`CrawlMetrics::externals_unchecked`] y al log. Es el mismo principio que ya aplicaba
+/// `max_external`: un tope que trunca sin decirlo hace que el informe parezca completo cuando
+/// no lo está.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotProbed {
+    /// La URL casa con un `--exclude` (o queda fuera de un `--include`) del usuario.
+    Pattern,
+    /// El enlace lleva `rel="nofollow"` y `respect_nofollow` está activo.
+    Nofollow,
+    /// El host no es una dirección de internet: loopback, red privada, `localhost`… Ver
+    /// `normalize::is_probeable_host`.
+    LocalNetwork,
+    /// Tope global de sondas del rastreo (`max_external`).
+    Budget,
+    /// Tope de sondas de un mismo host ([`MAX_EXTERNAL_PER_HOST`]).
+    HostBudget,
+    /// El host dejó de responder ([`EXTERNAL_HOST_FAILURE_STREAK`] fallos seguidos).
+    HostUnreachable,
+    /// El host respondió 429 o 503: pidió que dejáramos de pedirle cosas.
+    RateLimited,
+    /// El rastreo se cortó —a petición o por presupuesto— con la sonda aún en cola.
+    Interrupted,
+}
+
+impl NotProbed {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pattern => "pattern",
+            Self::Nofollow => "nofollow",
+            Self::LocalNetwork => "local_network",
+            Self::Budget => "max_external",
+            Self::HostBudget => "max_external_per_host",
+            Self::HostUnreachable => "host_unreachable",
+            Self::RateLimited => "rate_limited",
+            Self::Interrupted => "interrupted",
+        }
+    }
+
+    /// Lo que se deja escrito en `urls.exclusion_reason`, si el motivo es una decisión del
+    /// usuario y no una circunstancia de la red.
+    ///
+    /// Solo esos dos: son los que **no** deben reintentarse al reanudar —el `--exclude` y el
+    /// `nofollow` seguirán ahí— y son los que el informe puede explicar en términos del sitio.
+    /// Los demás dejan la fila como estaba, sin estado y sin motivo, que es lo que hace que
+    /// una reanudación vuelva a intentarlos: son de esta sesión, no del sitio.
+    fn exclusion_reason(self) -> Option<ExclusionReason> {
+        match self {
+            Self::Pattern => Some(ExclusionReason::Pattern),
+            Self::Nofollow => Some(ExclusionReason::Nofollow),
+            _ => None,
+        }
+    }
+}
+
+/// ¿Hay algún motivo para **no** pedirle su estado a esta URL externa?
+///
+/// Tres de los cuatro motivos son decisiones que ya estaban tomadas y la sonda se saltaba:
+///
+/// - **`--exclude` / `--include`.** La rama de externas hacía `continue` antes de evaluar los
+///   patrones, así que `--exclude 'dominio\.com'` no impedía la petición: excluía del rastreo
+///   algo que nunca se iba a rastrear y dejaba pasar lo único que sí se pedía.
+/// - **`rel="nofollow"`.** Lo mismo, y con un caso concreto detrás: los enlaces de spam de los
+///   comentarios de un WordPress llevan `rel="ugc nofollow"`. Sin esto se le manda un `HEAD`
+///   con nuestro user-agent de bot a cada dominio de spam acumulado en años, y sus 404 salen
+///   publicados como hallazgos del sitio auditado.
+/// - **El perímetro de red** (`normalize::is_probeable_host`), que no existía. Ver su doc.
+/// - Y el tope global de sondas, que ya estaba.
+///
+/// La fila de `urls` se escribe igual en todos los casos: lo que se salta es la petición.
+fn why_not_probe(
+    url: &Url,
+    is_nofollow: bool,
+    filter: &crate::pattern::UrlFilter,
+    limits: &crate::job::CrawlLimits,
+    enqueued: u64,
+    screen_local_network: bool,
+) -> Option<NotProbed> {
+    if !filter.allows(url.as_str()) {
+        return Some(NotProbed::Pattern);
+    }
+    if limits.respect_nofollow && is_nofollow {
+        return Some(NotProbed::Nofollow);
+    }
+    if !normalize::is_probeable(url, screen_local_network) {
+        return Some(NotProbed::LocalNetwork);
+    }
+    if enqueued >= limits.max_external {
+        return Some(NotProbed::Budget);
+    }
+    None
+}
+
 /// Cola de comprobaciones de estado de URLs externas.
 ///
 /// Aparte del frontier a propósito: estas URLs no forman parte del rastreo (no cuentan contra
@@ -2011,26 +2338,53 @@ enum UrlOutcome {
 ///
 /// La deduplicación no vive aquí: el índice de vistas del frontier corta las repeticiones
 /// antes de llegar a `push`.
+///
+/// # El estado por host es la mitad del trabajo
+///
+/// Sondar a terceros tiene dos costes que el tope global no acota: **un host muerto** —cada
+/// URL suya paga el timeout entero, en serie— y **un host que se queja**. Por eso cada host
+/// lleva su cuenta de sondas, su racha de fallos y su cierre. Al cerrarse, lo que le quedara
+/// en cola no desaparece: se cuenta como no comprobado con su motivo.
 #[derive(Default)]
 struct ExternalQueue {
-    by_host: HashMap<String, VecDeque<Url>>,
+    by_host: HashMap<String, HostProbes>,
     /// Ronda de hosts con trabajo. Invariante: un host está aquí ⟺ su cola existe y no está
     /// vacía.
     hosts: VecDeque<String>,
     pending: usize,
 }
 
+/// Lo que la cola sabe de un host ajeno.
+#[derive(Default)]
+struct HostProbes {
+    queue: VecDeque<Url>,
+    /// Sondas aceptadas para este host, contra [`MAX_EXTERNAL_PER_HOST`].
+    accepted: u32,
+    /// Fallos de red seguidos. Cualquier respuesta —incluido un 404— la reinicia.
+    failures: u32,
+    /// Cerrado: no se le manda nada más y se dice por qué.
+    closed: Option<NotProbed>,
+}
+
 impl ExternalQueue {
-    fn push(&mut self, url: Url) {
+    /// Encola una sonda, o dice por qué no.
+    fn push(&mut self, url: Url) -> std::result::Result<(), NotProbed> {
         let host = url.host_str().unwrap_or_default().to_string();
-        match self.by_host.entry(host.clone()) {
-            std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().push_back(url),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(VecDeque::from([url]));
-                self.hosts.push_back(host);
-            }
+        let nuevo = !self.by_host.contains_key(&host);
+        let state = self.by_host.entry(host.clone()).or_default();
+        if let Some(reason) = state.closed {
+            return Err(reason);
+        }
+        if state.accepted >= MAX_EXTERNAL_PER_HOST {
+            return Err(NotProbed::HostBudget);
+        }
+        state.accepted += 1;
+        state.queue.push_back(url);
+        if nuevo {
+            self.hosts.push_back(host);
         }
         self.pending += 1;
+        Ok(())
     }
 
     /// La siguiente URL cuyo host tiene hueco, rotando la ronda de hosts para que uno lento
@@ -2047,11 +2401,9 @@ impl ExternalQueue {
                 self.hosts.push_back(host);
                 continue;
             }
-            let Some(queue) = self.by_host.get_mut(&host) else { continue };
-            let url = queue.pop_front();
-            if queue.is_empty() {
-                self.by_host.remove(&host);
-            } else {
+            let Some(state) = self.by_host.get_mut(&host) else { continue };
+            let url = state.queue.pop_front();
+            if !state.queue.is_empty() {
                 self.hosts.push_back(host);
             }
             if let Some(url) = url {
@@ -2060,6 +2412,51 @@ impl ExternalQueue {
             }
         }
         None
+    }
+
+    /// Anota lo que respondió —o dejó de responder— una sonda y devuelve cuántas URLs de ese
+    /// host quedan sin comprobar por ello, con su motivo.
+    ///
+    /// Aquí está el cortocircuito: tres ausencias seguidas cierran el host. Una respuesta,
+    /// cualquiera, reinicia la racha; un 429 o un 503 lo cierran de golpe, que es lo que
+    /// significa «educado con quien no es nuestro».
+    fn record(
+        &mut self,
+        host: &str,
+        outcome: std::result::Result<u16, &crate::fetch::FetchFailure>,
+    ) -> Option<(usize, NotProbed)> {
+        let reason = {
+            let state = self.by_host.get_mut(host)?;
+            match outcome {
+                Ok(status) if crate::throttle::is_overload(status) => {
+                    state.failures = 0;
+                    NotProbed::RateLimited
+                }
+                Ok(_) => {
+                    state.failures = 0;
+                    return None;
+                }
+                Err(_) => {
+                    state.failures += 1;
+                    if state.failures < EXTERNAL_HOST_FAILURE_STREAK {
+                        return None;
+                    }
+                    NotProbed::HostUnreachable
+                }
+            }
+        };
+        Some((self.close(host, reason), reason))
+    }
+
+    /// Cierra un host y devuelve cuántas sondas suyas se quedan sin mandar.
+    fn close(&mut self, host: &str, reason: NotProbed) -> usize {
+        let Some(state) = self.by_host.get_mut(host) else { return 0 };
+        state.closed = Some(reason);
+        let dropped = state.queue.len();
+        state.queue.clear();
+        self.pending -= dropped;
+        self.hosts.retain(|h| h != host);
+        dropped
     }
 
     fn pending(&self) -> usize {
@@ -2139,7 +2536,12 @@ async fn process_url<F: Fetcher>(
     outcome
 }
 
-/// Carga (y cachea) el `robots.txt` de un host.
+/// Carga (y cachea) el `robots.txt` de un host, **una sola vez aunque lleguen N tareas a la
+/// vez**.
+///
+/// La descarga va dentro de la puerta de la caché y no antes: consultar primero y descargar
+/// después dejaba que la primera ola de un host —`concurrency` tareas despachadas de golpe—
+/// fallara el `get` en bloque y pidiera el fichero N veces. Ver `RobotsCache`.
 async fn load_host_rules<F: Fetcher>(
     fetcher: &F,
     cache: &RobotsCache,
@@ -2147,23 +2549,24 @@ async fn load_host_rules<F: Fetcher>(
     host: &str,
     job: &CrawlJob,
 ) -> Arc<HostRules> {
-    if let Some(cached) = cache.get(host).await {
-        return cached;
-    }
-    let rules = match crate::robots::robots_url_for(url) {
-        Some(robots_url) => match fetcher.fetch(&robots_url).await {
-            Ok(Ok(doc)) if doc.status == 200 => {
-                HostRules::parse(&doc.body, &job.limits.user_agent)
+    cache
+        .get_or_fetch(host, || async {
+            match crate::robots::robots_url_for(url) {
+                Some(robots_url) => match fetcher.fetch(&robots_url).await {
+                    Ok(Ok(doc)) if doc.status == 200 => {
+                        HostRules::parse(&doc.body, &job.limits.user_agent)
+                    }
+                    // Un 404 de robots.txt es lo normal, no un problema. Pero se anota qué
+                    // respondió: la regla que avisa de su ausencia necesita distinguir un 404
+                    // de un fallo de red, y con `allow_all()` a secas las dos cosas eran
+                    // indistinguibles.
+                    Ok(Ok(doc)) => HostRules::absent(Some(doc.status)),
+                    _ => HostRules::absent(None),
+                },
+                None => HostRules::allow_all(),
             }
-            // Un 404 de robots.txt es lo normal, no un problema. Pero se anota qué respondió:
-            // la regla que avisa de su ausencia necesita distinguir un 404 de un fallo de red,
-            // y con `allow_all()` a secas las dos cosas eran indistinguibles.
-            Ok(Ok(doc)) => HostRules::absent(Some(doc.status)),
-            _ => HostRules::absent(None),
-        },
-        None => HostRules::allow_all(),
-    };
-    cache.insert(host.to_string(), rules).await
+        })
+        .await
 }
 
 /// Máximo de sitemaps que se descargan en un rastreo.
@@ -2674,7 +3077,7 @@ fn failed_row(
     let mut row = base_row(item, hash, in_sitemap);
     row.crawl_state = CrawlState::Error;
     row.error_kind = Some(failure.kind.as_str().to_string());
-    row.error_message = Some(failure.message.clone());
+    row.error_message = Some(clip_third_party(failure.message.clone()));
     row.fetched_at = Some(now_iso8601());
     row
 }
@@ -2750,7 +3153,7 @@ fn external_checked_row(item: &QueuedUrl, hash: i64, probe: &crate::fetch::Statu
     row.is_internal = false;
     row.crawl_state = CrawlState::Skipped;
     row.status_code = Some(probe.status);
-    row.content_type = probe.content_type.clone();
+    row.content_type = probe.content_type.clone().map(clip_third_party);
     row.content_length = probe.content_length;
     row.response_time_ms = Some(probe.response_time_ms);
     row.fetched_at = Some(now_iso8601());
@@ -2768,7 +3171,7 @@ fn external_check_failed_row(
     row.is_internal = false;
     row.crawl_state = CrawlState::Skipped;
     row.error_kind = Some(failure.kind.as_str().to_string());
-    row.error_message = Some(failure.message.clone());
+    row.error_message = Some(clip_third_party(failure.message.clone()));
     row.fetched_at = Some(now_iso8601());
     row
 }
@@ -2786,7 +3189,8 @@ fn resource_row(
         kind,
         status_code: status,
         size_bytes,
-        mime: content_type.map(|s| s.to_string()),
+        // El `Content-Type` lo escribe el servidor de enfrente. Ver `MAX_THIRD_PARTY_TEXT`.
+        mime: content_type.map(|s| clip_third_party(s.to_string())),
     })
 }
 
@@ -2894,7 +3298,7 @@ fn build_result<F: Fetcher>(
     let mut url_row = base_row(item, hash, in_sitemap);
     url_row.crawl_state = CrawlState::Done;
     url_row.status_code = Some(doc.status);
-    url_row.content_type = doc.content_type.clone();
+    url_row.content_type = doc.content_type.clone().map(clip_third_party);
     url_row.content_length = Some(doc.content_length());
     url_row.response_time_ms = Some(doc.response_time_ms);
     url_row.fetched_at = Some(now_iso8601());
@@ -3434,24 +3838,24 @@ mod tests {
         frontier.enqueue(encolada("https://libre.es/1"), 3);
 
         let throttle = crate::throttle::Throttle::new(1);
-        let mut deferred = VecDeque::new();
         let mut in_flight = HashMap::from([("saturado.es".to_string(), 1_usize)]);
 
-        let item = next_dispatchable(&mut frontier, &mut deferred, &throttle, &in_flight)
+        let item = next_dispatchable(&mut frontier, &throttle, &in_flight)
             .expect("libre.es tiene hueco");
         assert_eq!(item.url.host_str(), Some("libre.es"));
-        assert_eq!(deferred.len(), 2, "las de saturado.es se retienen, no se descartan");
+        assert_eq!(frontier.pending(), 2, "las de saturado.es siguen en la cola");
 
         // Todo ocupado: nada despachable, pero nada perdido.
         in_flight.insert("libre.es".to_string(), 1);
-        assert!(next_dispatchable(&mut frontier, &mut deferred, &throttle, &in_flight).is_none());
+        assert!(next_dispatchable(&mut frontier, &throttle, &in_flight).is_none());
+        assert_eq!(frontier.pending(), 2);
 
-        // Al liberarse el host, las retenidas salen en su orden de llegada.
+        // Al liberarse el host, las suyas salen en su orden de llegada.
         in_flight.remove("saturado.es");
-        let item = next_dispatchable(&mut frontier, &mut deferred, &throttle, &in_flight)
+        let item = next_dispatchable(&mut frontier, &throttle, &in_flight)
             .expect("saturado.es ya tiene hueco");
         assert_eq!(item.url.path(), "/1", "conserva el orden BFS");
-        assert_eq!(deferred.len(), 1);
+        assert_eq!(frontier.pending(), 1);
     }
 
     #[test]
@@ -3465,29 +3869,46 @@ mod tests {
         let mut frontier = Frontier::new();
         frontier.enqueue(encolada("https://ahogado.es/1"), 1);
         frontier.enqueue(encolada("https://sano.es/1"), 2);
-        let mut deferred = VecDeque::new();
         // El host frenado va lleno con su límite reducido.
         let in_flight = HashMap::from([("ahogado.es".to_string(), 2_usize)]);
 
-        let item = next_dispatchable(&mut frontier, &mut deferred, &throttle, &in_flight)
+        let item = next_dispatchable(&mut frontier, &throttle, &in_flight)
             .expect("el host sano no hereda el freno del ahogado");
         assert_eq!(item.url.host_str(), Some("sano.es"));
     }
 
     #[test]
-    fn el_bufer_de_retenidas_esta_acotado() {
-        // Sin el tope, un único host saturado mudaría el frontier entero al búfer.
+    fn un_host_serializado_no_mata_de_hambre_a_los_demas() {
+        // La reproducción del defecto: 250 URLs de un host con `Crawl-delay` —una petición en
+        // vuelo— por delante de 5 de un host libre. El planificador anterior retenía las
+        // primeras 200 en un búfer aparte y, con el búfer lleno, **dejaba de mirar el
+        // frontier**: el host libre se quedaba a cero de cinco indefinidamente. Con el retardo
+        // en su tope de 30 s, habría esperado cien minutos.
+        //
+        // El test antiguo (`tests/crawl_delay.rs`) no lo cazaba porque usaba cinco URLs y
+        // nunca llenaba el búfer.
         let mut frontier = Frontier::new();
-        for i in 0..(MAX_DEFERRED + 10) {
-            frontier.enqueue(encolada(&format!("https://saturado.es/{i}")), i as i64);
+        for i in 0..250 {
+            frontier.enqueue(encolada(&format!("https://lento.es/{i}")), i);
         }
-        let throttle = crate::throttle::Throttle::new(1);
-        let mut deferred = VecDeque::new();
-        let in_flight = HashMap::from([("saturado.es".to_string(), 1_usize)]);
+        for i in 0..5 {
+            frontier.enqueue(encolada(&format!("https://libre.es/{i}")), 1000 + i);
+        }
 
-        assert!(next_dispatchable(&mut frontier, &mut deferred, &throttle, &in_flight).is_none());
-        assert_eq!(deferred.len(), MAX_DEFERRED);
-        assert_eq!(frontier.pending(), 10, "el resto sigue en el frontier");
+        let throttle = crate::throttle::Throttle::new(5);
+        // El host lento declara Crawl-delay: queda en una petición en vuelo, y la tiene.
+        throttle.force_serial("lento.es");
+        let in_flight = HashMap::from([("lento.es".to_string(), 1_usize)]);
+
+        // Las cinco del host libre salen sin esperar a que drene el lento.
+        for _ in 0..5 {
+            let item = next_dispatchable(&mut frontier, &throttle, &in_flight)
+                .expect("el host libre tiene hueco y trabajo");
+            assert_eq!(item.url.host_str(), Some("libre.es"));
+        }
+        // Y agotado el host libre, no se inventa nada del saturado.
+        assert!(next_dispatchable(&mut frontier, &throttle, &in_flight).is_none());
+        assert_eq!(frontier.pending(), 250, "las del host lento siguen enteras en la cola");
     }
 
     #[tokio::test]
@@ -3501,6 +3922,311 @@ mod tests {
         assert!(host_by_task.is_empty());
         assert!(in_flight_by_host.is_empty(), "las entradas a cero se retiran del mapa");
         set.shutdown().await;
+    }
+
+    // ── La decisión de sondar una externa ────────────────────────────────────
+
+    fn limites() -> crate::job::CrawlLimits {
+        crate::job::CrawlLimits::default()
+    }
+
+    fn sin_filtro() -> crate::pattern::UrlFilter {
+        crate::pattern::UrlFilter::from_limits(&limites()).expect("sin patrones")
+    }
+
+    fn por_que_no(url: &str, nofollow: bool, filtro: &crate::pattern::UrlFilter) -> Option<NotProbed> {
+        why_not_probe(
+            &Url::parse(url).expect("URL de test válida"),
+            nofollow,
+            filtro,
+            &limites(),
+            0,
+            true,
+        )
+    }
+
+    #[test]
+    fn a_normal_external_link_is_probed() {
+        assert_eq!(por_que_no("https://ejemplo.es/guia", false, &sin_filtro()), None);
+    }
+
+    #[test]
+    fn the_probe_stops_at_the_users_own_exclude() {
+        // La rama de externas hacía `continue` antes de evaluar los patrones: `--exclude` no
+        // impedía la petición, solo excluía del rastreo algo que nunca se iba a rastrear.
+        let mut limits = limites();
+        limits.exclude_patterns = vec![r"spam\.example".to_string()];
+        let filtro = crate::pattern::UrlFilter::from_limits(&limits).expect("patrón válido");
+        assert_eq!(
+            por_que_no("https://spam.example/promo", false, &filtro),
+            Some(NotProbed::Pattern)
+        );
+        assert_eq!(por_que_no("https://ejemplo.es/guia", false, &filtro), None);
+    }
+
+    #[test]
+    fn a_nofollow_link_is_registered_but_not_probed() {
+        // El caso real: los enlaces de spam de los comentarios de un WordPress llevan
+        // `rel="ugc nofollow"`. Sin esto se le manda un HEAD con nuestro user-agent de bot a
+        // cada dominio de spam acumulado en años, y sus 404 salen publicados como hallazgos.
+        assert_eq!(
+            por_que_no("https://casino-spam.example/", true, &sin_filtro()),
+            Some(NotProbed::Nofollow)
+        );
+        // Con `respect_nofollow` apagado, el enlace vuelve a sondearse.
+        let mut limits = limites();
+        limits.respect_nofollow = false;
+        assert_eq!(
+            why_not_probe(
+                &Url::parse("https://casino-spam.example/").expect("URL válida"),
+                true,
+                &sin_filtro(),
+                &limits,
+                0,
+                true,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn the_probe_does_not_reach_the_users_own_network() {
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://127.0.0.1:8080/panel",
+            "http://10.0.0.5/",
+            "http://localhost:5432/",
+        ] {
+            assert_eq!(
+                por_que_no(url, false, &sin_filtro()),
+                Some(NotProbed::LocalNetwork),
+                "{url} no puede pedirse"
+            );
+        }
+    }
+
+    #[test]
+    fn auditing_a_local_site_does_not_screen_the_local_network() {
+        // Quien rastrea `http://localhost:4321/` ya está dentro de esa red y lo pidió él: la
+        // criba no protegería de nada y rompería el caso de uso. Ver `screen_local_network`.
+        assert_eq!(
+            why_not_probe(
+                &Url::parse("http://127.0.0.1:9000/x").expect("URL válida"),
+                false,
+                &sin_filtro(),
+                &limites(),
+                0,
+                false,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn the_global_probe_budget_is_still_the_last_word() {
+        let limits = limites();
+        assert_eq!(
+            why_not_probe(
+                &Url::parse("https://ejemplo.es/x").expect("URL válida"),
+                false,
+                &sin_filtro(),
+                &limits,
+                limits.max_external,
+                true,
+            ),
+            Some(NotProbed::Budget)
+        );
+    }
+
+    // ── La cola de sondas: topes y cortocircuito por host ────────────────────
+
+    fn externa(url: &str) -> Url {
+        Url::parse(url).expect("URL de test válida")
+    }
+
+    fn fallo_de_red() -> crate::fetch::FetchFailure {
+        crate::fetch::FetchFailure {
+            kind: crate::fetch::ErrorKind::Timeout,
+            message: "timed out".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_dead_host_stops_receiving_probes_after_three_silences() {
+        // Un dominio muerto enlazado desde 200 URLs únicas pagaba el timeout entero por cada
+        // una, en serie: ~33 minutos pegados al final del rastreo.
+        let mut cola = ExternalQueue::default();
+        for i in 0..20 {
+            cola.push(externa(&format!("https://muerto.example/{i}"))).expect("cabe");
+        }
+        let fallo = fallo_de_red();
+
+        assert!(cola.record("muerto.example", Err(&fallo)).is_none(), "una no basta");
+        assert!(cola.record("muerto.example", Err(&fallo)).is_none(), "dos tampoco");
+        let (sin_comprobar, motivo) =
+            cola.record("muerto.example", Err(&fallo)).expect("la tercera cierra el host");
+        assert_eq!(motivo, NotProbed::HostUnreachable);
+        assert_eq!(sin_comprobar, 20, "lo que quedaba en cola se cuenta, no se olvida");
+        assert_eq!(cola.pending(), 0);
+
+        // Y no se le vuelve a encolar nada.
+        assert_eq!(
+            cola.push(externa("https://muerto.example/otra")),
+            Err(NotProbed::HostUnreachable)
+        );
+    }
+
+    #[test]
+    fn an_answer_of_any_kind_resets_the_streak() {
+        // Un 404 o un 500 son respuestas: el host está vivo, y su estado es justo lo que la
+        // sonda venía a averiguar.
+        let mut cola = ExternalQueue::default();
+        for i in 0..5 {
+            cola.push(externa(&format!("https://vivo.example/{i}"))).expect("cabe");
+        }
+        let fallo = fallo_de_red();
+        cola.record("vivo.example", Err(&fallo));
+        cola.record("vivo.example", Err(&fallo));
+        assert!(cola.record("vivo.example", Ok(404)).is_none(), "un 404 es una respuesta");
+        assert!(cola.record("vivo.example", Err(&fallo)).is_none(), "la racha se reinició");
+        assert!(cola.record("vivo.example", Err(&fallo)).is_none());
+        assert_eq!(cola.pending(), 5, "el host sigue abierto");
+    }
+
+    #[test]
+    fn a_host_that_asks_for_a_break_gets_it() {
+        // El commit que trajo las sondas prometía ser «educado con quien no es nuestro» y esa
+        // parte no estaba: la rama de sondas no miraba el estado de la respuesta.
+        let mut cola = ExternalQueue::default();
+        for i in 0..8 {
+            cola.push(externa(&format!("https://saturado.example/{i}"))).expect("cabe");
+        }
+        let (sin_comprobar, motivo) =
+            cola.record("saturado.example", Ok(429)).expect("un 429 cierra el host");
+        assert_eq!(motivo, NotProbed::RateLimited);
+        assert_eq!(sin_comprobar, 8);
+        assert_eq!(
+            cola.push(externa("https://saturado.example/otra")),
+            Err(NotProbed::RateLimited)
+        );
+    }
+
+    #[test]
+    fn one_host_cannot_take_the_whole_probe_budget() {
+        let mut cola = ExternalQueue::default();
+        for i in 0..MAX_EXTERNAL_PER_HOST {
+            cola.push(externa(&format!("https://enlazado.example/{i}"))).expect("cabe");
+        }
+        assert_eq!(
+            cola.push(externa("https://enlazado.example/una-mas")),
+            Err(NotProbed::HostBudget)
+        );
+        // Y el tope es de ese host, no del rastreo: otro dominio sigue entrando.
+        assert_eq!(cola.push(externa("https://otro.example/1")), Ok(()));
+    }
+
+    #[test]
+    fn closing_a_host_does_not_touch_the_others() {
+        let mut cola = ExternalQueue::default();
+        cola.push(externa("https://muerto.example/1")).expect("cabe");
+        cola.push(externa("https://vivo.example/1")).expect("cabe");
+        let fallo = fallo_de_red();
+        for _ in 0..EXTERNAL_HOST_FAILURE_STREAK {
+            cola.record("muerto.example", Err(&fallo));
+        }
+        assert_eq!(cola.pending(), 1, "solo queda la del host vivo");
+
+        let throttle = crate::throttle::Throttle::new(1);
+        let en_vuelo = HashMap::new();
+        let url = cola.next_dispatchable(&throttle, &en_vuelo).expect("la del host vivo");
+        assert_eq!(url.host_str(), Some("vivo.example"));
+        assert!(cola.next_dispatchable(&throttle, &en_vuelo).is_none());
+    }
+
+    // ── El alcance de una reanudación ────────────────────────────────────────
+
+    #[test]
+    fn resume_only_reloads_urls_of_the_crawls_own_site() {
+        let job = CrawlJob::http("https://cliente.es/");
+        let scope = ResumeScope::of(&job, "https://cliente.es/");
+        let admite = |s: &str| scope.admits(&Url::parse(s).expect("URL válida")).is_ok();
+
+        assert!(admite("https://cliente.es/blog/entrada"));
+        assert!(!admite("https://otro-dominio.es/"), "otro sitio no es este rastreo");
+        assert!(!admite("https://sub.cliente.es/"), "un subdominio es otro sitio (is_internal)");
+        // Y el esquema: una fila fabricada con `file:` no es una URL de rastreo.
+        assert!(scope.admits(&Url::parse("file:///etc/passwd").expect("URL válida")).is_err());
+    }
+
+    #[test]
+    fn resume_of_a_public_site_refuses_an_address_of_the_internal_network() {
+        // El ataque que cierra: un fichero con metadatos coherentes de un sitio público y una
+        // fila `pending` apuntando a la red interna. En modo lista es donde cabe, porque una
+        // lista mezcla hosts legítimamente y solo su primera URL se contrasta contra los
+        // metadatos.
+        let job = CrawlJob {
+            mode: CrawlMode::List {
+                urls: vec![
+                    "https://cliente.es/a".to_string(),
+                    "http://169.254.169.254/latest/meta-data/".to_string(),
+                ],
+            },
+            ..CrawlJob::http("https://cliente.es/")
+        };
+        let scope = ResumeScope::of(&job, "https://cliente.es/a");
+        assert!(scope.admits(&Url::parse("https://cliente.es/a").expect("URL válida")).is_ok());
+        assert!(scope
+            .admits(&Url::parse("http://169.254.169.254/latest/meta-data/").expect("URL válida"))
+            .is_err());
+    }
+
+    #[test]
+    fn resume_of_a_local_site_keeps_working() {
+        // Auditar `http://localhost:4321/` —un `astro dev`— es trabajo normal, y quien lanzó
+        // ese rastreo ya estaba dentro de esa red. La criba no puede romperlo.
+        let job = CrawlJob::http("http://localhost:4321/");
+        let scope = ResumeScope::of(&job, "http://localhost:4321/");
+        assert!(scope
+            .admits(&Url::parse("http://localhost:4321/blog/").expect("URL válida"))
+            .is_ok());
+    }
+
+    // ── Texto de terceros ────────────────────────────────────────────────────
+
+    #[test]
+    fn third_party_text_is_clipped_and_short_text_is_left_alone() {
+        assert_eq!(clip_third_party("text/css".to_string()), "text/css");
+
+        let largo = "x".repeat(4096);
+        assert_eq!(clip_third_party(largo).chars().count(), MAX_THIRD_PARTY_TEXT);
+
+        // Por caracteres y no por bytes: cortar por bytes partiría la secuencia UTF-8 y la
+        // cadena dejaría de ser válida.
+        let acentuado = "á".repeat(4096);
+        let recortado = clip_third_party(acentuado);
+        assert_eq!(recortado.chars().count(), MAX_THIRD_PARTY_TEXT);
+        assert!(recortado.is_char_boundary(recortado.len()));
+    }
+
+    #[test]
+    fn a_huge_content_type_does_not_grow_the_crawl_file() {
+        // `resources.mime` y `urls.content_type` los escribe el servidor de enfrente: 10.000
+        // externas con un `Content-Type` de varios KB engordan el fichero que se entrega al
+        // cliente sin aportar nada.
+        let mime = format!("text/css; charset=utf-8; {}", "a".repeat(8192));
+        let row = resource_row(
+            1,
+            Some(&mime),
+            Some(200),
+            Some(10),
+            &Url::parse("https://cdn.example/lib.css").expect("URL válida"),
+        )
+        .expect("es un recurso");
+        assert_eq!(row.kind, "css");
+        assert_eq!(
+            row.mime.as_deref().map(|m| m.chars().count()),
+            Some(MAX_THIRD_PARTY_TEXT)
+        );
     }
 
     #[test]

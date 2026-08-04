@@ -211,6 +211,92 @@ fn header(conn: &Connection) -> Result<Header> {
     Ok(c)
 }
 
+/// Lo que el propio fichero dice sobre su completitud: si el rastreo se cortó, si es de modo
+/// lista, si las externas se comprobaron y cuántas quedaron sin comprobar.
+///
+/// Es el dato del §1 de la revisión de agosto: la honestidad del producto —«esto no se pudo
+/// evaluar»— existía solo en la salida del `crawl`, y el fichero viaja. Vive aquí, en la
+/// biblioteca, porque lo leen dos pantallas (el resumen de terminal y el informe MD/HTML) y
+/// las dos tienen que contar lo mismo.
+pub struct StoreNotes {
+    pub truncated: bool,
+    /// `max_urls`, `max_depth`, `max_duration` o `list_mode`. Identificadores, no prosa.
+    pub truncated_reason: Option<String>,
+    /// Lo que la configuración guardada dice de `check_external`. `None` cuando el
+    /// `config_json` no se puede leer (un fichero antiguo o fabricado): sin dato no se afirma.
+    pub check_external: Option<bool>,
+    /// Externas registradas y nunca sondeadas: sin código, sin error de sonda y sin motivo
+    /// de exclusión.
+    pub externals_unchecked: i64,
+}
+
+pub fn store_notes(conn: &Connection) -> Result<StoreNotes> {
+    use rusqlite::OptionalExtension;
+    let meta: Option<(i64, Option<String>, String)> = conn
+        .query_row(
+            "SELECT truncated, truncated_reason, config_json FROM crawl_meta LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((truncated, reason, config_json)) = meta else {
+        return Ok(StoreNotes {
+            truncated: false,
+            truncated_reason: None,
+            check_external: None,
+            externals_unchecked: 0,
+        });
+    };
+    let check_external = serde_json::from_str::<crawlforge_core::job::CrawlJob>(&config_json)
+        .ok()
+        .map(|job| job.limits.check_external);
+    let externals_unchecked: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM urls
+         WHERE is_internal = 0 AND crawl_state = 'skipped'
+           AND status_code IS NULL AND error_kind IS NULL AND exclusion_reason IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(StoreNotes {
+        truncated: truncated == 1,
+        truncated_reason: reason.map(|s| strip_control_chars(&s)),
+        check_external,
+        externals_unchecked,
+    })
+}
+
+impl StoreNotes {
+    /// La nota sobre las externas que corresponde a este fichero, si toca alguna.
+    ///
+    /// Tres casos y solo tres: la comprobación estaba apagada (y «cero externas rotas» no
+    /// significa nada); estaba encendida, el rastreo terminó entero y aun así quedaron sin
+    /// sondear (el tope `max_external`); o quedaron sin sondear en un rastreo cortado, donde
+    /// culpar al tope sería inventar. Sin dato de configuración no se afirma nada.
+    pub fn external_note(&self, lang: Lang) -> Option<String> {
+        match self.check_external {
+            Some(false) => Some(msg::external_check_disabled(lang)),
+            Some(true) if self.externals_unchecked > 0 => {
+                let n = i18n::count(lang, self.externals_unchecked);
+                if self.truncated {
+                    Some(msg::external_never_checked(lang, n))
+                } else {
+                    Some(msg::external_unchecked(lang, n))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// La lista de reglas que un grafo incompleto deja sin evaluar, para los truncados de
+    /// verdad (el modo lista ya lo cuenta su propia nota, sin enumerar).
+    pub fn silenced_rules_note(&self, lang: Lang) -> Option<String> {
+        let is_cut = self.truncated && self.truncated_reason.as_deref() != Some("list_mode");
+        is_cut.then(|| {
+            msg::rules_not_evaluated(lang, crawlforge_rules::REQUIERE_GRAFO_COMPLETO.join(", "))
+        })
+    }
+}
+
 /// Páginas **distintas** afectadas por cada `(rule_id, severity)`, contando solo filas que
 /// son páginas HTML. Es el numerador de `crawlforge_rules::is_pervasive`: los hallazgos pueden
 /// repetirse por página (una fila por imagen) y los hay sobre URLs que no son páginas, así que
@@ -428,6 +514,16 @@ fn markdown(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
         } else {
             s.push_str(&format!("{}\n\n", msg::report_truncated_note(lang, motivo)));
         }
+    }
+    // Las mismas notas de completitud que el resumen de terminal, porque el fichero viaja:
+    // el informe de mañana, o el del compañero que recibe el `.sqlite`, no puede mentir por
+    // omisión sobre qué reglas callaron ni sobre si las externas se miraron.
+    let notes = store_notes(conn)?;
+    if let Some(nota) = notes.silenced_rules_note(lang) {
+        s.push_str(&format!("> {nota}\n\n"));
+    }
+    if let Some(nota) = notes.external_note(lang) {
+        s.push_str(&format!("> {nota}\n\n"));
     }
 
     s.push_str(&format!("| {} | {} |\n|---|---:|\n", msg::th_metric(lang), msg::th_value(lang)));
@@ -900,6 +996,36 @@ mod tests {
         let aviso = md.find("modo lista").expect("must warn about what actually happened");
         let metrica = md.find("| URLs |").expect("metrics table");
         assert!(aviso < metrica, "the notice comes before the numbers it qualifies");
+    }
+
+    #[test]
+    fn el_informe_truncado_nombra_las_reglas_calladas() {
+        // Review item 1: the manual promises the report says what could not be evaluated,
+        // and the MD/HTML report is exactly the artifact that travels without its author.
+        let (_d, path) = store_de_prueba(true);
+        let md = render(&path, "md", Lang::En, None).expect("report");
+        assert!(
+            md.contains("INDEX-ORPHAN-PAGE"),
+            "the silenced rules are named, not alluded to: {md:.600}"
+        );
+    }
+
+    #[test]
+    fn el_informe_dice_si_las_externas_no_se_miraron() {
+        let (_d, path) = store_de_prueba(false);
+        {
+            let mut job = crawlforge_core::job::CrawlJob::http("https://ejemplo.es/");
+            job.limits.check_external = false;
+            let config = serde_json::to_string(&job).expect("serialize");
+            let conn = Connection::open(&path).expect("open");
+            conn.execute("UPDATE crawl_meta SET config_json = ?1", [config]).expect("meta");
+        }
+        let md = render(&path, "md", Lang::En, None).expect("report");
+        assert!(md.contains("--no-external-check"), "{md:.600}");
+        assert!(md.contains("does not mean there are none"), "{md:.600}");
+
+        let es = render(&path, "md", Lang::Es, None).expect("report");
+        assert!(es.contains("no significa que no los haya"), "{es:.600}");
     }
 
     #[test]
