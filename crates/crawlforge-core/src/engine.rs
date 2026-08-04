@@ -3889,7 +3889,7 @@ struct FinalizeRun {
 /// no en el rastreo, y sin desglosar el paso no había forma de verlo.
 ///
 /// La señal de cancelación se consulta **entre reglas**: la pasada final puede durar más que
-/// el propio rastreo (5 min 20 s en un-diario; más de 8 h antes del índice de la 006) y era la
+/// el propio rastreo (5 min 20 s en el rastreo de campo; más de 8 h antes del índice de la 006) y era la
 /// única fase sorda al primer Ctrl-C — hacía falta el segundo, el que mata el proceso y deja
 /// el WAL sin volcar. Una sentencia en curso no se interrumpe: el corte cae en la costura
 /// entre una regla y la siguiente, que es el mismo punto donde se emite el progreso.

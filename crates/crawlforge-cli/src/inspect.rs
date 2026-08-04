@@ -29,7 +29,7 @@
 //! # Coste medido sobre un rastreo real
 //!
 //! Todas las consultas van por índices existentes (`EXPLAIN QUERY PLAN` sobre
-//! `un-diario-completo.sqlite`: 1,29 M URLs, 31,8 M enlaces). El peor caso es la portada de un
+//! el rastreo de campo: 1,29 M URLs, 31,8 M enlaces). El peor caso es la portada de un
 //! sitio grande: 1,08 M de filas entrantes obligan a dos pasadas por `idx_links_to` (~8 s
 //! cada una en frío, <1 s en caliente). Una página normal responde en milisegundos.
 

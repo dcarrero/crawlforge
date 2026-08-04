@@ -325,14 +325,14 @@ texto de ancla, si es `nofollow` y desde qué región (los enlaces de contenido 
 `nav` y `footer` después). Salida real, recortada:
 
 ```
-$ crawlforge inspect un-diario-completo.sqlite '/un-titular-cualquiera'
+$ crawlforge inspect crawl-tumedio-com.sqlite '/nueva-piscina-municipal-abre-en-junio'
 
 ── Inlinks (24) ─────────────────────────────
   By region: unknown 13 · main 11 · 0 nofollow
   Linking pages, content links first:
-    main     "Dani Simón, nuevo portero llegado del Navalcarnero" — https://tumedio.com/carlos-cano-refuerza-la-defensa-del-calvo-sotelo-puertollano/
-    main     "Dani Simón como nuevo portero" — https://tumedio.com/el-calvo-sotelo-presenta-su-nueva-equipacion-para-2026-27/
-    unknown  (no anchor text) ×4 — https://tumedio.com/tag/calvo-sotelo-puertollano/
+    main     "la nueva piscina abre en junio" — https://tumedio.com/obras-del-polideportivo-terminadas/
+    main     "la piscina municipal" — https://tumedio.com/presupuesto-municipal-2026/
+    unknown  (no anchor text) ×4 — https://tumedio.com/tag/deportes/
 
 ── Outlinks (156: 108 internal, 48 external) ─
      200  https://tumedio.com/quienes-somos/ "¿Quiénes somos?"

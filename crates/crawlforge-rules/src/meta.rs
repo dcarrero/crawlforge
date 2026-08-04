@@ -1184,7 +1184,7 @@ mod tests {
 
     #[test]
     fn two_articles_with_the_same_title_are_still_a_high_duplicate() {
-        // The real case from un-diario: the same article published twice under a different slug.
+        // The real case from the field crawl: the same article published twice under another slug.
         // They genuinely compete for the same query, and there the rule's severity is the right
         // one.
         let conn = conexion_con_titulos(&[
