@@ -404,8 +404,11 @@ Said upfront, so you do not waste time looking for it:
 - **It does not render JavaScript.** A site whose content is assembled in the browser will look
   empty. It is planned.
 - **It does not follow external sites.** Outbound links are checked for status —that is what makes
-  `HTTP-404-EXTERNAL` fire— but nothing of another domain is parsed or crawled. Following one whole
-  is `--follow-external`, and it is off by default for good reason.
+  `HTTP-404-EXTERNAL` fire— but nothing of another domain is parsed or crawled. There is **no
+  `--follow-external` flag**: crawling a third-party site whole is not something the tool offers
+  from the command line. The `follow_external` key exists in the configuration file and stays off
+  by default; a resumed crawl ignores whatever the file says about it, the same way it ignores a
+  saved `ignore_robots`.
 - **There is no graphical interface** yet.
 - **There is no crawl scheduling** and no portfolio panel. Phases 6 and 7.
 - **`HTTP-TEMP-REDIRECT`** does not exist yet: it needs a crawl history that does not exist yet.

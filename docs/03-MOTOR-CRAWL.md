@@ -185,6 +185,7 @@ struct CrawlLimits {
     follow_external: bool,        // default: only check status, do not crawl
     check_external: bool,         // that status check; enabled by default
     max_external: u64,            // cap on externals checked; 10_000 by default
+    max_external_urls: u64,       // cap on externals *recorded*; 100_000 by default
     respect_nofollow: bool,
     concurrency_per_host: u8,     // 1..=20, default 5
     user_agent: String,
@@ -206,6 +207,39 @@ does when the visitor clicks it, and requesting it would nearly double the reque
 parties in order to say less. Externals **do not count against `max_urls`**, and reaching
 `max_external` **does not set `crawl_meta.truncated`** —that field turns off the
 `REQUIERE_GRAFO_COMPLETO` rules—: it leaves externals unchecked and the summary says how many.
+
+`max_external_urls` is the other cap and it is a different one: `max_external` bounds what gets
+**probed**, this bounds what gets **recorded**. An external link costs no request, so nothing was
+bounding registration — measured in `--release`, one page of 9.3 MB with 350,000 `<a>` to distinct
+hosts left 350,001 rows in `urls`, an 87 MB file and 279 MB of RSS with `max_urls` at 1,000. Same
+rules as the other cap: it warns instead of truncating silently
+(`CrawlMetrics::externals_unregistered`) and it does not touch `crawl_meta.truncated`.
+
+### 9.ter The audit perimeter (`normalize::NetworkScreen`, `dns::ScreeningResolver`)
+
+The external probe sends a request to an address **the audited site chose**, so there is a
+perimeter, and it is **two lines**:
+
+1. **Lexical**, over the host as written. It is the only one that sees an IP literal, because the
+   connector never calls the resolver for a host that already parses as an address. It therefore
+   has to cover every spelling: octal, integer, mapped, IPv4-compatible, IPv4-translated, NAT64
+   and 6to4.
+2. **The resolver.** `ScreeningResolver` implements `reqwest::dns::Resolve`, resolves the name and
+   **filters the addresses before returning them**, so the connection is never attempted. It is the
+   only line that can see a name: `localtest.me`, `lvh.me`, `nip.io` and `sslip.io` are public
+   wildcard-DNS services that answer with whatever address is written into the name, and they cost
+   an attacker nothing. **All** the addresses a name answers with are checked, not the first: one
+   private answer among public ones refuses the whole name.
+
+What is inside the perimeter, in order: the cloud metadata range is never reachable; a public
+address always is; a host the user **named** as a target of the crawl is reachable at its own
+address (that is what keeps split-horizon DNS working); and a crawl **all** of whose targets are
+local addresses reaches its own network, which is the `astro dev` and the client's LAN staging.
+That last exemption used to be a switch thrown by the first seed, and in list mode the first line
+of the user's file threw it for every other line.
+
+`follow_external` widens the crawl's **scope**, never the perimeter, and a resume takes it from the
+live session and not from `config_json` — same as `tier` and `ignore_robots`.
 
 ### 9.bis Include and exclude patterns (`pattern.rs`)
 

@@ -103,6 +103,20 @@ pub struct CrawlLimits {
     /// está incompleto» y apagaría las reglas de `REQUIERE_GRAFO_COMPLETO`.
     #[serde(default = "default_max_external")]
     pub max_external: u64,
+    /// Tope de URLs externas **registradas** por rastreo. Distinto de [`Self::max_external`],
+    /// que solo acota las que se sondean.
+    ///
+    /// Hacía falta porque un enlace externo no cuesta una petición y nada lo acotaba: las
+    /// externas no cuentan contra `max_urls` a propósito —ese presupuesto es de páginas del
+    /// usuario—, así que una sola página hostil llenaba la tabla. Medido en `--release`: 9,3 MB
+    /// de HTML con 350.000 `<a>` a hosts distintos dejaban 350.001 filas, 87 MB de fichero y
+    /// 279 MB de RSS **con `max_urls` en 1.000 y las sondas apagadas**.
+    ///
+    /// Como `max_external`, avisa en vez de truncar en silencio
+    /// (`CrawlMetrics::externals_unregistered`) y **no** toca `crawl_meta.truncated`: el rastreo
+    /// del sitio del usuario está completo, y marcarlo apagaría las reglas de grafo completo.
+    #[serde(default = "default_max_external_urls")]
+    pub max_external_urls: u64,
     pub respect_nofollow: bool,
     /// 1..=20. Por defecto 5.
     pub concurrency_per_host: u8,
@@ -128,6 +142,16 @@ fn default_max_external() -> u64 {
     10_000
 }
 
+/// El tope por defecto de externas registradas.
+///
+/// Cien mil son unas diez veces lo que enlaza hacia fuera un sitio grande de verdad y acotan el
+/// caso hostil en ~25 MB de fichero, que es un orden de magnitud por debajo de los 87 MB que
+/// dejaba una sola página. Diez veces el tope de sondas, porque registrar es diez veces más
+/// barato que pedir.
+fn default_max_external_urls() -> u64 {
+    100_000
+}
+
 impl Default for CrawlLimits {
     fn default() -> Self {
         Self {
@@ -140,6 +164,7 @@ impl Default for CrawlLimits {
             follow_external: false,
             check_external: default_true(),
             max_external: default_max_external(),
+            max_external_urls: default_max_external_urls(),
             respect_nofollow: true,
             concurrency_per_host: 5,
             user_agent: crate::fetch::DEFAULT_USER_AGENT.to_string(),
@@ -250,6 +275,8 @@ pub struct JobConfig {
     pub check_external: Option<bool>,
     /// Tope de URLs externas comprobadas por rastreo (10.000 por defecto).
     pub max_external: Option<u64>,
+    /// Tope de URLs externas **registradas**. Ver [`CrawlLimits::max_external_urls`].
+    pub max_external_urls: Option<u64>,
     pub respect_nofollow: Option<bool>,
     /// Solo se rastrean las URLs que casen con alguno de estos patrones (regex, sin anclar).
     /// La semilla de un rastreo HTTP se rastrea siempre. Semántica completa: `pattern.rs`.
@@ -307,6 +334,9 @@ impl JobConfig {
         }
         if let Some(n) = self.max_external {
             job.limits.max_external = n;
+        }
+        if let Some(n) = self.max_external_urls {
+            job.limits.max_external_urls = n;
         }
         if let Some(v) = self.respect_nofollow {
             job.limits.respect_nofollow = v;

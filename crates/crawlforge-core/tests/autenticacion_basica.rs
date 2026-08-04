@@ -15,10 +15,14 @@
 
 mod support;
 
+use crawlforge_core::dns::StaticLookup;
 use crawlforge_core::engine;
+use crawlforge_core::fetch::{Fetcher, HttpFetcher, DEFAULT_USER_AGENT};
 use crawlforge_core::job::{CrawlJob, HttpBasicAuth};
+use crawlforge_core::normalize::NetworkScreen;
 use rusqlite::Connection;
 use support::servidor::{Respuesta, ServidorDePruebas};
+use url::Url;
 
 /// La credencial de todos los tests y su cabecera exacta: `base64("consultor:S3creta")`.
 /// El valor está precalculado a mano para que el test no dependa del base64 del propio motor.
@@ -138,44 +142,55 @@ async fn un_staging_protegido_se_rastrea_entero_incluidos_robots_y_sitemaps() {
 
 #[tokio::test]
 async fn la_credencial_no_viaja_a_ningun_otro_host() {
-    // El mismo servidor atiende como `127.0.0.1` (el staging, la semilla) y como `localhost`
-    // (para el motor, un dominio externo). Con `follow_external` la URL ajena sí se rastrea:
-    // exactamente el escenario en el que una credencial mal acotada se regalaría.
-    let servidor = ServidorDePruebas::arrancar_como_otro_host_con_puerto(|puerto| {
+    // Dos hosts distintos servidos por el mismo puerto: `staging.cliente.es` es el objetivo
+    // autenticado y `ajeno.es` es el dominio de terceros. Se resuelven con un `Lookup` de
+    // mentira porque ninguno existe, y **ambos** se declaran objetivos del rastreo para que el
+    // perímetro no sea lo que corta la petición: lo que este test mide es la credencial.
+    let servidor = ServidorDePruebas::arrancar_como_otro_host_con_puerto(|_| {
         vec![
             (
                 "/".to_string(),
-                Respuesta::pagina(
-                    "Portada",
-                    &format!("<p><a href=\"http://localhost:{puerto}/externa\">fuera</a></p>"),
-                )
-                .exigiendo_autorizacion(CABECERA),
+                Respuesta::pagina("Portada", "<p>staging</p>").exigiendo_autorizacion(CABECERA),
             ),
             ("/externa".to_string(), Respuesta::pagina("Ajena", "<p>Otra web.</p>")),
         ]
     })
     .await;
-    let externa = servidor.url_como_otro_host("/externa");
+    let puerto = servidor.base().rsplit(':').next().unwrap_or_default().trim_end_matches('/')
+        .parse::<u16>()
+        .expect("puerto del servidor de pruebas");
 
-    let tmp = Temporal::new("otro-host");
-    let mut job = CrawlJob::http(servidor.base());
-    job.limits.http_basic_auth = Some(HttpBasicAuth::new(USUARIO, CONTRASENA));
-    job.limits.follow_external = true;
-    job.discover_sitemaps = false;
+    let loopback = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+    let lookup = std::sync::Arc::new(StaticLookup::new([
+        ("staging.cliente.es".to_string(), vec![loopback]),
+        ("ajeno.es".to_string(), vec![loopback]),
+    ]));
+    let screen = NetworkScreen::for_targets(["staging.cliente.es", "ajeno.es"]);
+    let auth = HttpBasicAuth::new(USUARIO, CONTRASENA);
+    let fetcher = HttpFetcher::screened_with(DEFAULT_USER_AGENT, screen, lookup)
+        .expect("construir el fetcher")
+        .with_basic_auth("staging.cliente.es", &auth);
 
-    let outcome = engine::run(job, &tmp.path.join("crawl.sqlite")).await.expect("rastrear");
-    let conn = abrir(&outcome.store_path);
+    let propia = Url::parse(&format!("http://staging.cliente.es:{puerto}/")).expect("URL válida");
+    let ajena = Url::parse(&format!("http://ajeno.es:{puerto}/externa")).expect("URL válida");
 
-    // La semilla se rastreó autenticada y la externa se pidió de verdad.
-    assert_eq!(estado(&conn, &servidor.base()), Some(200));
-    assert_eq!(estado(&conn, &externa), Some(200), "la externa tuvo que pedirse");
+    let doc = fetcher.fetch(&propia).await.expect("sin error de core").expect("respuesta");
+    assert_eq!(doc.status, 200, "el host acotado se pide autenticado");
+    let doc = fetcher.fetch(&ajena).await.expect("sin error de core").expect("respuesta");
+    assert_eq!(doc.status, 200, "el host ajeno se pide igual, pero sin credencial");
 
-    // Y la petición al host ajeno viajó limpia: ni rastro de la credencial.
+    // La petición al host ajeno viajó limpia: ni rastro de la credencial.
     let recibidas = servidor.autorizaciones("/externa");
     assert!(!recibidas.is_empty(), "/externa tuvo que pedirse");
     assert!(
         recibidas.iter().all(Option::is_none),
         "la credencial del staging no puede viajar a otro host: {recibidas:?}"
+    );
+    // Y a la suya sí llegó, para que el test no pase por no haberse mandado nunca nada.
+    let suyas = servidor.autorizaciones("/");
+    assert!(
+        suyas.iter().any(|a| a.as_deref() == Some(CABECERA)),
+        "el host acotado sí tenía que recibirla: {suyas:?}"
     );
 }
 

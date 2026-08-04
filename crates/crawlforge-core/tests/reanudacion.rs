@@ -424,11 +424,25 @@ async fn reanudar_no_hereda_el_permiso_de_ignorar_robots_del_fichero() {
 }
 
 #[tokio::test]
-async fn las_sondas_de_externas_que_pilla_el_corte_se_reencolan_al_reanudar() {
-    // El agujero: al cortar, las sondas en vuelo o en cola se perdían **para siempre**. Su
-    // fila queda `skipped` con estado nulo, `resume` solo reencola las `pending`, y como el
-    // frontier ya la tiene por vista, un enlace nuevo a esa misma URL tampoco la recuperaba:
-    // `HTTP-404-EXTERNAL` callaba sobre ella y ningún contador lo delataba.
+async fn una_auditoria_local_no_repite_sus_sondas_al_reanudar_y_lo_dice() {
+    // Dos contratos a la vez, y el segundo llegó después.
+    //
+    // **Uno.** Al cortar, las sondas en vuelo o en cola se perdían para siempre: su fila queda
+    // `skipped` con estado nulo, `resume` solo reencola las `pending`, y como el frontier ya la
+    // tiene por vista, un enlace nuevo a esa misma URL tampoco la recuperaba. Nadie lo contaba.
+    //
+    // **Dos.** El perímetro de red deja alcanzar una dirección privada cuando *todos* los
+    // objetivos del rastreo son locales — el `astro dev`, el pre en la LAN. Al reanudar, esa
+    // excepción **no se concede**: el objetivo lo declara el fichero, y el fichero es entrada no
+    // confiable. Un `.sqlite` que dijera `base_url = http://localhost:4321/` con una fila externa
+    // inyectada hacía que la máquina que lo reanuda sondeara su propio loopback (comprobado:
+    // `HEAD /app/kibana`, `status=200` escrito en el fichero).
+    //
+    // Este rastreo es local por los dos lados, así que aquí manda el segundo contrato: lo que se
+    // afirma es que la reanudación **no** repite las sondas y que quedan dichas, no calladas.
+    // La otra mitad —que una auditoría pública sí las repite— no tiene test de integración, y no
+    // por descuido: montarla pediría una externa pública que respondiera en loopback, que es
+    // exactamente la combinación que el perímetro existe para impedir.
     let ajeno = ServidorDePruebas::arrancar_como_otro_host_con_puerto(|_| {
         (0..6)
             .map(|i| {
@@ -486,12 +500,11 @@ async fn las_sondas_de_externas_que_pilla_el_corte_se_reencolan_al_reanudar() {
     };
     assert!(sin_estado_tras_el_corte > 0, "hay sondas a medias que recuperar");
 
-    // Reanudar las vuelve a encolar: la promesa de `resume` es continuar, y esto era una
-    // parte del rastreo que no continuaba nunca.
+    // Reanudar no las repite, porque el objetivo local lo declara el fichero.
     let reanudado = engine::resume(&store).await.expect("reanudar");
     assert_eq!(
-        reanudado.metrics.externals_checked, sin_estado_tras_el_corte as u64,
-        "la reanudación comprueba exactamente las que quedaron a medias"
+        reanudado.metrics.externals_checked, 0,
+        "una reanudación no concede la excepción de red local: el objetivo sale del fichero"
     );
 
     let conn = abrir(&store);
@@ -502,7 +515,16 @@ async fn las_sondas_de_externas_que_pilla_el_corte_se_reencolan_al_reanudar() {
             |r| r.get(0),
         )
         .expect("contar");
-    assert_eq!(sin_estado, 0, "al terminar, ninguna externa se queda sin comprobar");
+    assert_eq!(
+        sin_estado, sin_estado_tras_el_corte,
+        "siguen exactamente las mismas sin comprobar: la reanudación no tocó ninguna"
+    );
+    // Desorden conocido y aceptado: esas filas se quedan sin `exclusion_reason`, porque el
+    // rechazo ocurre al releer el plan y ahí no se escribe —**nadie escribe en SQLite salvo el
+    // hilo escritor**, y en ese punto todavía no existe—. La consecuencia es que cada
+    // reanudación posterior las vuelve a leer y a rechazar: idempotente y sin coste de red, pero
+    // indistinguibles de una sonda que se cortó a medias. Escribir el motivo pide llevar la lista
+    // hasta el escritor, y eso es un cambio aparte.
 }
 
 #[tokio::test]

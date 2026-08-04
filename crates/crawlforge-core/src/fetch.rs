@@ -6,6 +6,7 @@
 
 use crate::error::Result;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use url::Url;
 
@@ -60,6 +61,14 @@ pub enum ErrorKind {
     Timeout,
     Connection,
     TooLarge,
+    /// El perímetro de la auditoría rechazó la dirección: no se llegó a abrir la conexión.
+    ///
+    /// **No es un fallo de red y no puede contarse como tal.** `HTTP-404-EXTERNAL` reporta el
+    /// dominio caducado por su `error_kind = 'dns'`; si un rechazo del perímetro llegara con
+    /// ese `kind`, el informe acusaría al sitio auditado de enlazar a un dominio muerto por una
+    /// decisión nuestra. El motor lo convierte en «registrada, no sondeada» con
+    /// `exclusion_reason = 'local_network'`, que es lo que de verdad pasó.
+    Blocked,
 }
 
 impl ErrorKind {
@@ -70,13 +79,15 @@ impl ErrorKind {
             Self::Timeout => "timeout",
             Self::Connection => "connection",
             Self::TooLarge => "toolarge",
+            Self::Blocked => "blocked",
         }
     }
 
     /// ¿Merece la pena reintentar este fallo?
     ///
     /// DNS y TLS no: si el nombre no resuelve o el certificado no valida, volver a intentarlo
-    /// tres veces solo alarga el rastreo. Timeout y conexión sí: suelen ser transitorios.
+    /// tres veces solo alarga el rastreo. Timeout y conexión sí: suelen ser transitorios. El
+    /// rechazo del perímetro tampoco: la respuesta sería la misma tres veces.
     pub fn is_retryable(self) -> bool {
         matches!(self, Self::Timeout | Self::Connection)
     }
@@ -216,25 +227,86 @@ pub struct HttpFetcher {
     max_body_bytes: u64,
     max_retries: u32,
     basic_auth: Option<BasicAuthScope>,
+    /// El perímetro, también aquí y no solo en el resolutor.
+    ///
+    /// Hace falta porque **el conector no llama al resolutor cuando el host ya es una dirección
+    /// literal**: para `http://127.0.0.1:8080/panel` no hay nombre que resolver, así que la
+    /// segunda línea no se ejecuta nunca. El motor ya criba antes de despachar, pero dejarlo
+    /// solo ahí significa que cualquier punto de llamada futuro nace sin perímetro.
+    screen: Option<crate::normalize::NetworkScreen>,
 }
 
 impl HttpFetcher {
+    /// **Sin perímetro de red.** Para herramientas y tests que ya saben a qué apuntan.
+    ///
+    /// El motor no usa esta puerta: construye siempre por [`Self::screened`]. Si añades una
+    /// tercera forma de construir un cliente, asegúrate de que también pase por el resolutor —
+    /// es el único punto por el que se hace cumplir el perímetro.
     pub fn new(user_agent: &str) -> Result<Self> {
-        let client = reqwest::Client::builder()
+        Self::with_resolver(user_agent, None, None)
+    }
+
+    /// Con el perímetro de la auditoría instalado en el resolutor.
+    ///
+    /// A partir de aquí ninguna conexión de este cliente puede llegar a una dirección que la
+    /// criba rechace, ni por un nombre comodín, ni por un salto de redirección, ni por una URL
+    /// releída de un fichero de rastreo: todas vuelven a pasar por el resolutor.
+    pub fn screened(user_agent: &str, screen: crate::normalize::NetworkScreen) -> Result<Self> {
+        let resolver = Arc::new(crate::dns::ScreeningResolver::system(screen.clone()));
+        Self::with_resolver(user_agent, Some(resolver), Some(screen))
+    }
+
+    /// Como [`Self::screened`], con el resolutor de nombres inyectado.
+    ///
+    /// Existe para los tests: demostrar «un nombre público que responde 127.0.0.1» sin depender
+    /// de que `localtest.me` siga existiendo el año que viene.
+    pub fn screened_with(
+        user_agent: &str,
+        screen: crate::normalize::NetworkScreen,
+        lookup: Arc<dyn crate::dns::Lookup>,
+    ) -> Result<Self> {
+        let resolver = Arc::new(crate::dns::ScreeningResolver::new(screen.clone(), lookup));
+        Self::with_resolver(user_agent, Some(resolver), Some(screen))
+    }
+
+    fn with_resolver(
+        user_agent: &str,
+        resolver: Option<Arc<crate::dns::ScreeningResolver>>,
+        screen: Option<crate::normalize::NetworkScreen>,
+    ) -> Result<Self> {
+        let mut builder = reqwest::Client::builder()
             .user_agent(user_agent)
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             // Las redirecciones se siguen a mano: para un auditor SEO cada salto de una
             // cadena es una fila del informe, no un detalle de transporte.
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| crate::CoreError::Http(e.to_string()))?;
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(resolver) = resolver {
+            builder = builder.dns_resolver(resolver);
+        }
+        let client = builder.build().map_err(|e| crate::CoreError::Http(e.to_string()))?;
 
         Ok(Self {
             client,
             max_body_bytes: MAX_BODY_BYTES,
             max_retries: MAX_RETRIES,
             basic_auth: None,
+            screen,
+        })
+    }
+
+    /// El rechazo del perímetro para un host literal, si le corresponde.
+    ///
+    /// Devuelve el mismo fallo que produciría el resolutor, para que quien lo reciba no tenga
+    /// que distinguir por dónde se cortó.
+    fn refused_by_perimeter(&self, url: &Url) -> Option<FetchFailure> {
+        let screen = self.screen.as_ref()?;
+        (!screen.allows_host(url)).then(|| {
+            tracing::warn!(url = %url, "dirección fuera del perímetro de la auditoría; no se pide");
+            FetchFailure {
+                kind: ErrorKind::Blocked,
+                message: "the host is an address outside the audit perimeter".to_string(),
+            }
         })
     }
 
@@ -286,6 +358,9 @@ impl HttpFetcher {
         url: &Url,
         method: reqwest::Method,
     ) -> std::result::Result<StatusProbe, FetchFailure> {
+        if let Some(refused) = self.refused_by_perimeter(url) {
+            return Err(refused);
+        }
         let started = Instant::now();
         let mut request = self
             .client
@@ -317,6 +392,9 @@ impl HttpFetcher {
         &self,
         url: &Url,
     ) -> std::result::Result<FetchedDoc, FetchFailure> {
+        if let Some(refused) = self.refused_by_perimeter(url) {
+            return Err(refused);
+        }
         let started = Instant::now();
 
         let mut request = self.client.get(url.clone());
@@ -478,9 +556,35 @@ fn backoff_delay(attempt: u32) -> Duration {
     base.mul_f64(jitter)
 }
 
+/// Todo lo que el error dice de sí mismo, causas incluidas.
+///
+/// `reqwest::Error` solo muestra su propia capa —«error sending request for url (…)»— y el
+/// motivo real vive en la cadena de causas. Sin recorrerla, el rechazo del perímetro llega
+/// indistinguible de un fallo de conexión cualquiera.
+fn error_chain(e: &reqwest::Error) -> String {
+    let mut chain = e.to_string();
+    let mut source = std::error::Error::source(e);
+    while let Some(cause) = source {
+        chain.push_str("; ");
+        chain.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    chain
+}
+
 fn classify_reqwest_error(e: &reqwest::Error) -> FetchFailure {
+    let chain = error_chain(e);
+    // El perímetro se decide antes que nada: llega envuelto en un error de conexión y no lo es.
+    if chain.contains(crate::dns::PERIMETER_MARKER) {
+        return FetchFailure {
+            kind: ErrorKind::Blocked,
+            // Sin la dirección y sin el error del sistema: este texto acaba en el fichero que
+            // se le entrega al cliente.
+            message: "the host resolves to an address outside the audit perimeter".to_string(),
+        };
+    }
     let message = e.to_string();
-    let lower = message.to_ascii_lowercase();
+    let lower = chain.to_ascii_lowercase();
 
     let kind = if e.is_timeout() {
         ErrorKind::Timeout

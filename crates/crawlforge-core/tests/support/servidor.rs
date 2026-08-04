@@ -338,6 +338,7 @@ impl ServidorDePruebas {
     }
 
     /// Misma URL, pero nombrando al host `localhost`: para el motor es otro dominio.
+    #[allow(dead_code)]
     pub fn url_como_otro_host(&self, ruta: &str) -> String {
         format!("http://localhost:{}{ruta}", self.puerto)
     }

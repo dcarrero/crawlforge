@@ -66,6 +66,10 @@ pub struct CrawlMetrics {
     /// estado. El resumen tiene que decir cuántas — un tope que trunca en silencio hace que
     /// el informe parezca completo cuando no lo está.
     pub externals_unchecked: u64,
+    /// URLs externas descubiertas por encima de `max_external_urls`: **ni siquiera se
+    /// registraron**. Es un aviso distinto del de arriba —aquellas están en el fichero sin
+    /// estado, estas no están— y el resumen tiene que decirlo por el mismo motivo.
+    pub externals_unregistered: u64,
     /// Duración del bucle de rastreo, sin el descubrimiento de sitemaps ni la pasada final.
     ///
     /// La eficiencia de paralelismo se calcula sobre esto y no sobre [`Self::elapsed`]: el suelo
@@ -450,7 +454,7 @@ pub async fn run_cancellable(
     progress: Option<ProgressCallback>,
     cancel: Option<CancelSignal>,
 ) -> Result<CrawlOutcome> {
-    dispatch(job, store_path, RunControls { progress, cancel, resume: None }).await
+    dispatch(job, store_path, RunControls { progress, cancel, resume: None, lookup: None }).await
 }
 
 /// Reanuda un rastreo interrumpido a partir de su fichero.
@@ -498,21 +502,51 @@ pub async fn resume_with_auth(
     cancel: Option<CancelSignal>,
     auth: Option<crate::job::HttpBasicAuth>,
 ) -> Result<CrawlOutcome> {
+    resume_inner(store_path, progress, cancel, auth, None).await
+}
+
+/// Como [`resume_with_auth`], con resolutor de nombres inyectado. **Solo para tests**: ver
+/// [`run_http_with_lookup`].
+#[doc(hidden)]
+pub async fn resume_with_lookup(
+    store_path: &Path,
+    lookup: Arc<dyn crate::dns::Lookup>,
+) -> Result<CrawlOutcome> {
+    resume_inner(store_path, None, None, None, Some(lookup)).await
+}
+
+async fn resume_inner(
+    store_path: &Path,
+    progress: Option<ProgressCallback>,
+    cancel: Option<CancelSignal>,
+    auth: Option<crate::job::HttpBasicAuth>,
+    lookup: Option<Arc<dyn crate::dns::Lookup>>,
+) -> Result<CrawlOutcome> {
     let (mut job, setup) = read_resume_plan(store_path)?;
     job.limits.http_basic_auth = auth;
-    dispatch(job, store_path, RunControls { progress, cancel, resume: Some(setup) }).await
+    dispatch(job, store_path, RunControls { progress, cancel, resume: Some(setup), lookup }).await
 }
 
 /// Lo que acompaña a un rastreo además del trabajo: observador, cancelación y, si es una
 /// reanudación, el estado recargado del fichero.
+#[derive(Default)]
 struct RunControls {
     progress: Option<ProgressCallback>,
     cancel: Option<CancelSignal>,
     resume: Option<ResumeSetup>,
+    /// Resolutor de nombres alternativo. **Solo lo pone un test**, por el mismo motivo que
+    /// [`run_http_with_lookup`]: sin él, «un nombre público que responde 127.0.0.1» no se puede
+    /// montar contra el servidor de pruebas, y depender de que un dominio comodín real siga
+    /// existiendo convertiría el test en una prueba de internet. El perímetro no se relaja.
+    lookup: Option<Arc<dyn crate::dns::Lookup>>,
 }
 
 /// Construye el fetcher y las semillas de cada modo y lanza el bucle común.
-async fn dispatch(job: CrawlJob, store_path: &Path, controls: RunControls) -> Result<CrawlOutcome> {
+async fn dispatch(
+    job: CrawlJob,
+    store_path: &Path,
+    mut controls: RunControls,
+) -> Result<CrawlOutcome> {
     // La exclusiva de escritura del fichero, antes de tocarlo y durante todo el rastreo,
     // pasada final incluida. Es lo que impide que dos procesos escriban el mismo fichero
     // —duplicando `links` y pisándose el cierre— y lo que hace que `resume` distinga un
@@ -525,9 +559,11 @@ async fn dispatch(job: CrawlJob, store_path: &Path, controls: RunControls) -> Re
     // modo y el préstamo termina antes del movimiento.
     match &job.mode {
         CrawlMode::Http { seed } => {
-            let seed = normalize::normalize(seed, &job.normalize_policy())?;
-            let fetcher = http_fetcher_for(&job, seed.normalized.host_str())?;
-            run_with(job, fetcher, vec![seed], store_path, controls).await
+            let seeds = vec![normalize::normalize(seed, &job.normalize_policy())?];
+            let seed_host = seeds[0].normalized.host_str();
+            let fetcher =
+                http_fetcher_for(&job, seed_host, network_screen(&seeds), controls.lookup.take())?;
+            run_with(job, fetcher, seeds, store_path, controls).await
         }
         CrawlMode::Filesystem { root, base } => {
             let base = Url::parse(base)?;
@@ -551,22 +587,87 @@ async fn dispatch(job: CrawlJob, store_path: &Path, controls: RunControls) -> Re
                 seeds.push(normalize::normalize(u, &policy)?);
             }
             // En una lista, «el host de la semilla» es el de la primera URL: el mismo criterio
-            // con el que `run_with` calcula `seed_host` para decidir qué es interno.
+            // con el que `run_with` calcula `seed_host` para decidir qué es interno. El
+            // perímetro, en cambio, ya **no** sale de la primera línea: sale de todas.
             let seed_host = seeds.first().and_then(|s| s.normalized.host_str());
-            let fetcher = http_fetcher_for(&job, seed_host)?;
+            let fetcher =
+                http_fetcher_for(&job, seed_host, network_screen(&seeds), controls.lookup.take())?;
             run_with(job, fetcher, seeds, store_path, controls).await
         }
     }
 }
 
-/// El fetcher HTTP de un trabajo, con la credencial acotada al host de la semilla si la hay.
+/// Un rastreo HTTP con el resolutor de nombres inyectado. **Existe para los tests.**
+///
+/// No forma parte de la API del producto y por eso está oculta de la documentación. Los tests
+/// de integración la necesitan porque el caso que hay que demostrar —«un nombre público que
+/// responde `127.0.0.1`»— solo se puede montar contra el servidor de pruebas si el motor
+/// pregunta a otro resolutor, y depender de que `localtest.me` siga existiendo el año que viene
+/// convertiría el test en una prueba de internet.
+///
+/// El perímetro es el mismo que el de [`run`]: se calcula de las semillas, no se relaja.
+#[doc(hidden)]
+pub async fn run_http_with_lookup(
+    job: CrawlJob,
+    store_path: &Path,
+    lookup: Arc<dyn crate::dns::Lookup>,
+) -> Result<CrawlOutcome> {
+    run_http_with_lookup_cancellable(job, store_path, lookup, None).await
+}
+
+/// Como [`run_http_with_lookup`], con señal de cancelación. **Existe para los tests.**
+///
+/// La necesita el que comprueba que las sondas cortadas se reencolan al reanudar: un corte por
+/// `max_duration` cierra el fichero como `done` —terminó, aunque truncado— y un rastreo
+/// terminado no se reanuda. Solo una cancelación deja el fichero reanudable.
+#[doc(hidden)]
+pub async fn run_http_with_lookup_cancellable(
+    job: CrawlJob,
+    store_path: &Path,
+    lookup: Arc<dyn crate::dns::Lookup>,
+    cancel: Option<CancelSignal>,
+) -> Result<CrawlOutcome> {
+    if !matches!(job.mode, CrawlMode::Http { .. }) {
+        return Err(crate::CoreError::Http("run_http_with_lookup only takes http mode".into()));
+    }
+    dispatch(
+        job,
+        store_path,
+        RunControls { cancel, lookup: Some(lookup), ..RunControls::default() },
+    )
+    .await
+}
+
+/// El perímetro de red de un rastreo: los hosts que el usuario nombró al lanzarlo.
+///
+/// Se calcula de las semillas y no de la primera de ellas. En modo lista `seeds` es el fichero
+/// del usuario en orden de fichero, y un fichero de lista muchas veces llega de fuera: con el
+/// criterio anterior, su primera línea decidía el perímetro de todas las demás.
+///
+/// `run_with` lo vuelve a calcular de las mismas semillas en vez de recibirlo: es una función
+/// pura de un dato que ambos ya tienen, y pasarlo por la firma obligaría a los tres modos a
+/// acarrearlo hasta un bucle que no lo necesita para nada más.
+fn network_screen(seeds: &[NormalizedUrl]) -> normalize::NetworkScreen {
+    normalize::NetworkScreen::for_seeds(seeds.iter().map(|s| &s.normalized))
+}
+
+/// El fetcher HTTP de un trabajo, con la credencial acotada al host de la semilla si la hay y
+/// el perímetro de red instalado en su resolutor.
 ///
 /// El acotado ocurre aquí, con el host **ya normalizado**: `fetch.rs` no decide a quién
 /// pertenece la credencial, solo la aplica al host que se le dio. Sin host —una semilla
 /// inverosímil sin autoridad— la credencial no se aplica a nada, que es el lado seguro.
-fn http_fetcher_for(job: &CrawlJob, seed_host: Option<&str>) -> Result<HttpFetcher> {
-    let mut fetcher = HttpFetcher::new(&job.limits.user_agent)?
-        .with_max_body_bytes(job.limits.max_size_per_url);
+fn http_fetcher_for(
+    job: &CrawlJob,
+    seed_host: Option<&str>,
+    screen: normalize::NetworkScreen,
+    lookup: Option<Arc<dyn crate::dns::Lookup>>,
+) -> Result<HttpFetcher> {
+    let mut fetcher = match lookup {
+        Some(l) => HttpFetcher::screened_with(&job.limits.user_agent, screen, l)?,
+        None => HttpFetcher::screened(&job.limits.user_agent, screen)?,
+    }
+    .with_max_body_bytes(job.limits.max_size_per_url);
     if let (Some(auth), Some(host)) = (&job.limits.http_basic_auth, seed_host) {
         fetcher = fetcher.with_basic_auth(host, auth);
     }
@@ -581,10 +682,10 @@ async fn run_with<F: Fetcher + 'static>(
     store_path: &Path,
     controls: RunControls,
 ) -> Result<CrawlOutcome> {
-    let RunControls { progress, mut cancel, resume } = controls;
+    let RunControls { progress, mut cancel, resume, lookup: _ } = controls;
+    let resuming = resume.is_some();
     let started = Instant::now();
     let policy = job.normalize_policy();
-    let resuming = resume.is_some();
     let crawl_id = match &resume {
         // Una reanudación es el mismo rastreo: mismo id, mismas filas, mismo fichero.
         Some(setup) => setup.crawl_id.clone(),
@@ -634,6 +735,15 @@ async fn run_with<F: Fetcher + 'static>(
         .and_then(|s| s.normalized.host_str())
         .unwrap_or_default()
         .to_string();
+
+    // El perímetro de red del rastreo. Ver [`network_screen`] y `normalize::NetworkScreen`.
+    //
+    // Es la primera de las dos líneas —la léxica, sobre el host escrito—; la que decide de
+    // verdad es el resolutor del cliente HTTP, que ya lo lleva instalado. Esta sirve para no
+    // abrir siquiera la conexión y para poder decir en la fila **por qué** no se sondeó.
+    //
+    // Es el mismo criterio con el que `ResumeScope` decide qué URLs de un fichero se releen.
+    let screen = network_screen(&seeds);
 
     {
         // `crawl_meta` se escribe antes de arrancar el escritor y con una conexión que se cierra
@@ -816,7 +926,11 @@ async fn run_with<F: Fetcher + 'static>(
                         continue;
                     }
                     let interno = normalize::is_internal(&n.normalized, &seed_host);
-                    if !interno && !job.limits.follow_external {
+                    // `follow_external` amplía el **alcance** del rastreo, no el perímetro de
+                    // red: una URL de sitemap que la criba rechaza no se pide ni con él puesto.
+                    let seguir_sitemap = interno
+                        || (job.limits.follow_external && screen.allows_host(&n.normalized));
+                    if !seguir_sitemap {
                         tracing::debug!(
                             url = %n.normalized,
                             "URL de sitemap fuera del sitio auditado: se ignora"
@@ -904,24 +1018,17 @@ async fn run_with<F: Fetcher + 'static>(
     // las externas quedan registradas sin estado, como siempre.
     let external_checks =
         job.limits.check_external && !job.limits.follow_external && fetcher.can_check_status();
-    // ¿Se le aplica el perímetro de red a las sondas? Solo si el sitio auditado está en
-    // internet.
-    //
-    // La criba (`normalize::is_probeable_host`) existe para que un sitio ajeno no pueda dirigir
-    // peticiones a la red del consultor. Si el rastreo apunta a `http://localhost:4321/` —un
-    // `astro dev`— o al pre de un cliente en la LAN de la oficina, quien lanzó el rastreo ya
-    // está dentro de esa red y lo hizo a propósito: cribar ahí no protegería de nada y
-    // rompería el caso de uso. La criba vale para lo que de verdad la motiva: un sitio público
-    // que enlaza a `169.254.169.254`.
-    //
-    // Es el mismo criterio con el que `ResumeScope` decide si mirar los hosts de un fichero.
-    let screen_local_network =
-        seeds.first().is_some_and(|s| normalize::is_probeable_host(&s.normalized));
     let mut externals = ExternalQueue::default();
     // Externas encoladas para comprobar, contra el tope `max_external`. Cuenta encoladas y no
     // comprobadas: así el tope decide en el descubrimiento y las descartadas se cuentan una
     // sola vez en `externals_unchecked`.
     let mut externals_enqueued: u64 = 0;
+    // Externas **registradas**, contra `max_external_urls`. Es un tope distinto del de las
+    // sondas y hace falta: medido en `--release`, una sola página de 9,3 MB con 350.000 `<a>` a
+    // hosts distintos dejaba 350.001 filas en `urls`, 87 MB de fichero y 279 MB de RSS con
+    // `max_urls: Some(1000)` y las sondas apagadas. Las externas no cuentan contra `max_urls` a
+    // propósito —ese presupuesto es de páginas del usuario— y hasta aquí nada más las acotaba.
+    let mut externals_registered: u64 = 0;
     // Sondas que quedaron a medias en una sesión anterior: filas externas, sin estado y sin
     // error, que el corte pilló en vuelo o en cola. Sin esto se perdían para siempre — la
     // reanudación solo relee las `pending`, y el frontier ya las tiene por vistas.
@@ -1069,6 +1176,23 @@ async fn run_with<F: Fetcher + 'static>(
                         ..Default::default()
                     }).await?;
                 }
+                // El perímetro rechazó la dirección al resolverla. No es un fallo del sitio, es
+                // una decisión nuestra, y tiene que quedar dicha como tal: una fila de error
+                // con `error_kind` acusaría al sitio auditado de algo que no ha hecho.
+                UrlOutcome::Failed(failure)
+                    if failure.kind == crate::fetch::ErrorKind::Blocked =>
+                {
+                    metrics.urls_excluded += 1;
+                    writer.send(CrawlResult {
+                        url: Some(excluded_row(
+                            &item,
+                            hash,
+                            ExclusionReason::LocalNetwork,
+                            in_sitemap.contains(&hash),
+                        )),
+                        ..Default::default()
+                    }).await?;
+                }
                 UrlOutcome::Failed(failure) => {
                     metrics.urls_errored += 1;
                     // Un recurso que no responde sigue siendo un recurso: la fila queda con
@@ -1079,6 +1203,26 @@ async fn run_with<F: Fetcher + 'static>(
                         resource,
                         ..Default::default()
                     }).await?;
+                }
+                // Igual que arriba, por el camino de la sonda: el nombre resolvió a una
+                // dirección fuera del perímetro. Se cuenta como «registrada sin comprobar» —que
+                // es lo que pasó— y **no** como sonda hecha ni como fallo del host ajeno: un
+                // rechazo nuestro no puede sumar a su racha de fallos ni salir en el informe
+                // como enlace roto.
+                UrlOutcome::ExternalChecked(Err(failure))
+                    if failure.kind == crate::fetch::ErrorKind::Blocked =>
+                {
+                    metrics.externals_unchecked += 1;
+                    let mut row = external_check_failed_row(&item, hash, &failure);
+                    row.error_kind = None;
+                    row.error_message = None;
+                    row.fetched_at = None;
+                    row.exclusion_reason = Some(ExclusionReason::LocalNetwork);
+                    tracing::debug!(
+                        url = %item.url,
+                        "la sonda externa resolvió fuera del perímetro; no se comprobó"
+                    );
+                    writer.send(CrawlResult { url: Some(row), ..Default::default() }).await?;
                 }
                 UrlOutcome::ExternalChecked(check) => {
                     // Solo estado: se rellena la fila de `urls` (y la de `resources` si la
@@ -1213,7 +1357,16 @@ async fn run_with<F: Fetcher + 'static>(
                                 continue;
                             }
                             let internal = normalize::is_internal(&n.normalized, &seed_host);
-                            if !internal && !job.limits.follow_external {
+                            // `follow_external` amplía el **alcance** del rastreo; no es un
+                            // permiso para llegar a la red del usuario. Sin esta segunda
+                            // condición la rama de abajo no se ejecutaba con él puesto y el
+                            // perímetro entero quedaba fuera del camino: comprobado, un
+                            // `config_json` con `follow_external: true` dentro de un `.sqlite`
+                            // compartido hacía que `resume` pidiera un servicio en loopback y
+                            // **guardara su título y su h1** en el fichero.
+                            let follow_this =
+                                job.limits.follow_external && screen.allows_host(&n.normalized);
+                            if !internal && !follow_this {
                                 // Las externas no se rastrean, pero sí se registran: el
                                 // informe necesita saber a dónde apunta el sitio. Y con
                                 // `check_external` —el defecto— además se les comprueba el
@@ -1222,8 +1375,14 @@ async fn run_with<F: Fetcher + 'static>(
                                 // enlaces a la misma externa entran aquí una sola vez.
                                 //
                                 // Lo que se decide aquí es **si se sonda**, no si se
-                                // registra: la fila se escribe siempre.
+                                // registra: la fila se escribe salvo que el registro haya
+                                // llegado a su propio tope.
                                 frontier.mark_seen(link_hash);
+                                if externals_registered >= job.limits.max_external_urls {
+                                    metrics.externals_unregistered += 1;
+                                    continue;
+                                }
+                                externals_registered += 1;
                                 metrics.urls_discovered += 1;
                                 let mut row = external_row(n, link_hash);
                                 if external_checks {
@@ -1233,7 +1392,7 @@ async fn run_with<F: Fetcher + 'static>(
                                         &filter,
                                         &job.limits,
                                         externals_enqueued,
-                                        screen_local_network,
+                                        &screen,
                                     );
                                     // El host ajeno también decide: puede estar cerrado por
                                     // fallos o haber agotado su propio tope.
@@ -1263,6 +1422,17 @@ async fn run_with<F: Fetcher + 'static>(
                                             "URL externa registrada sin comprobar su estado"
                                         );
                                     }
+                                } else if job.limits.follow_external {
+                                    // Con `follow_external` no hay sondas, así que llegar aquí
+                                    // solo puede significar que el perímetro rechazó la URL.
+                                    // La fila lo dice: si no, quedaría idéntica a una externa
+                                    // cualquiera y una reanudación la volvería a coger.
+                                    metrics.externals_unchecked += 1;
+                                    row.exclusion_reason = Some(ExclusionReason::LocalNetwork);
+                                    tracing::debug!(
+                                        url = %n.normalized,
+                                        "URL externa fuera del perímetro: no se rastrea"
+                                    );
                                 }
                                 writer.send(CrawlResult {
                                     url: Some(row),
@@ -1376,7 +1546,12 @@ async fn run_with<F: Fetcher + 'static>(
                                 }
                                 let destino_hash = n.hash();
                                 let interno = normalize::is_internal(&n.normalized, &seed_host);
-                                let seguir = interno || job.limits.follow_external;
+                                // Mismo criterio que en los enlaces: el perímetro manda sobre
+                                // `follow_external`. Un `/go/oferta` que redirige a una
+                                // dirección de la red del usuario no se sigue.
+                                let seguir = interno
+                                    || (job.limits.follow_external
+                                        && screen.allows_host(&n.normalized));
                                 // En modo lista, el mismo trato que un enlace: la fila del
                                 // destino se registra —sin ella `redirect_to` queda sin
                                 // resolver y las reglas de cadena no tienen grafo— y no se
@@ -1796,10 +1971,10 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
     // tercero. Dos defensas:
     //
     // 1. El objetivo declarado tiene que ser coherente con los metadatos del propio fichero.
-    // 2. `tier` e `ignore_robots` salen del `EntitlementSource` en vivo, nunca del fichero:
-    //    el `tier` embebido burlaría los límites del nivel y
-    //    un `ignore_robots` guardado es un permiso que nadie ha vuelto a conceder en esta
-    //    sesión — reanudar no tiene flag para pedirlo, así que el valor vivo es el defecto.
+    // 2. `tier`, `ignore_robots` y `follow_external` salen de la sesión en vivo, nunca del
+    //    fichero: el `tier` embebido burlaría los límites del nivel, y un `ignore_robots` o un
+    //    `follow_external` guardados son permisos que nadie ha vuelto a conceder en esta sesión
+    //    — reanudar no tiene flag para pedirlos, así que el valor vivo es el defecto.
     validate_resume_scope(&job, &base_url, &meta_mode, source_path.as_deref(), store_path)?;
     let mut job = job;
     // `DevSource` es hoy la única implementación en vivo (la misma que consulta la CLI al
@@ -1807,6 +1982,12 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
     use crate::entitlement::EntitlementSource as _;
     job.tier = crate::entitlement::DevSource::from_env()?.tier();
     job.limits.ignore_robots = false;
+    // `follow_external` no estaba aquí, y era la puerta más ancha de todas: un `.sqlite`
+    // compartido con `"follow_external":true` en su `config_json` convertía `resume` en un
+    // rastreo completo del host que dijera el fichero. Comprobado con semilla pública: `GET` a
+    // un servicio en loopback, `status=200`, y **el título y el h1 del panel interno guardados
+    // en el fichero**. La CLI ni siquiera tiene flag para pedirlo.
+    job.limits.follow_external = false;
     let job = job;
 
     let mut frontier = Frontier::new();
@@ -1829,7 +2010,36 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
     // una fila inyectada— con una `pending` apuntando a `169.254.169.254` hacía que `resume` la
     // pidiera con un `GET` completo y guardara el cuerpo: peor que la sonda de externas, que al
     // menos no descarga nada. El fichero es entrada no confiable; su lista de URLs también.
-    let scope = ResumeScope::of(&job, &base_url);
+    let mut scope = ResumeScope::of(&job, &base_url);
+    // **El objetivo de un rastreo nuevo lo declara la línea de comandos; el de una reanudación
+    // lo declara el fichero.** Esa es toda la diferencia, y es la que decide aquí.
+    //
+    // El perímetro deja alcanzar una dirección privada cuando *todos* los objetivos del rastreo
+    // son locales: es el `astro dev` y el pre del cliente en la LAN, y quien lanzó ese rastreo
+    // ya estaba dentro de esa red. En una reanudación ese razonamiento se cae, porque quien
+    // declara el objetivo no es quien lanza el comando: basta un `.sqlite` que diga
+    // `base_url = http://localhost:4321/` y traiga una fila externa inyectada para que la
+    // máquina que lo reanuda sondee su propio loopback. Comprobado: `HEAD /app/kibana`,
+    // `status=200` escrito en el fichero.
+    //
+    // Y el fichero es entrada no confiable **por diseño**: el producto existe para que un
+    // rastreo se copie y se envíe. Es la misma razón por la que aquí se neutralizan `tier`,
+    // `ignore_robots` y `follow_external`.
+    //
+    // Lo que cuesta: reanudar una auditoría local legítima deja sus sondas locales sin repetir,
+    // registradas con motivo `local_network` en vez de comprobadas. No se pierde nada en
+    // silencio, y quien lo necesite tiene la puerta buena — **relanzar `crawl`**, donde el
+    // objetivo vuelve a venir de la línea de comandos y el perímetro se abre con conocimiento
+    // de causa.
+    if scope.screen.is_local_audit() {
+        tracing::warn!(
+            base_url,
+            "the file declares a local target: on resume its network is not reachable, because \
+             that target comes from the file and not from the command line. Re-run `crawl` to \
+             audit it again."
+        );
+        scope.screen = scope.screen.without_local_audit();
+    }
 
     // Las pendientes vuelven a la cola con su profundidad guardada y en su orden de
     // descubrimiento: el frontier sirve por niveles, así que el BFS queda como estaba.
@@ -1902,11 +2112,12 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
             let Ok(parsed) = Url::parse(&url) else { continue };
             // El perímetro se vuelve a aplicar aquí, y no vale con que se aplicara al
             // descubrirlas: estas URLs vienen del fichero, no de un enlace recién resuelto.
-            // La criba de red interna, con el mismo criterio que en el rastreo: solo si el
-            // sitio auditado está en internet (ver `ResumeScope::screen_local`).
-            if !normalize::is_crawlable_scheme(&parsed)
-                || (scope.screen_local && !normalize::is_probeable_host(&parsed))
-            {
+            //
+            // Usaba `is_probeable_host` con guarda, que deja fuera `is_cloud_metadata`, la única
+            // criba que el código declara incondicional: un rastreo de `localhost` con un enlace
+            // a `169.254.169.254`, cortado y reanudado, mandaba la petición. Ahora es el mismo
+            // `NetworkScreen` del rastreo, que la incluye.
+            if !normalize::is_crawlable_scheme(&parsed) || !scope.screen.allows_host(&parsed) {
                 tracing::warn!(url, "reanudación: sonda externa fuera del perímetro; se descarta");
                 continue;
             }
@@ -1936,14 +2147,13 @@ struct ResumeScope {
     /// Hosts admitidos, en minúsculas. Uno en `http` y `filesystem`; los de la lista guardada
     /// en modo `list`, que legítimamente puede mezclar dominios.
     hosts: std::collections::HashSet<String>,
-    /// ¿Se aplica además la criba de red privada?
+    /// El perímetro de red, construido con esos mismos hosts como objetivos declarados.
     ///
-    /// **Solo cuando el propio objetivo del rastreo es público.** Auditar
+    /// Es el mismo objeto y el mismo criterio que usa el rastreo (`network_screen`): auditar
     /// `http://localhost:4321/` —un `astro dev`— o el pre de un cliente en la red de la oficina
-    /// es trabajo normal, y en ese caso el fichero no pide nada que el usuario no pidiera al
-    /// lanzarlo. Lo que la criba corta es lo otro: una URL de red interna colada en la lista de
-    /// un rastreo cuyo objetivo declarado es un sitio de internet.
-    screen_local: bool,
+    /// sigue funcionando, porque esos hosts son el objetivo; lo que no pasa es que una URL de
+    /// red interna colada en el fichero se pida por ser el fichero quien lo pide.
+    screen: normalize::NetworkScreen,
 }
 
 impl ResumeScope {
@@ -1957,10 +2167,8 @@ impl ResumeScope {
             CrawlMode::List { urls } => urls.iter().filter_map(|u| host_of(u)).collect(),
             _ => host_of(base_url).into_iter().collect(),
         };
-        let screen_local = Url::parse(base_url)
-            .ok()
-            .is_some_and(|u| normalize::is_probeable_host(&u));
-        Self { hosts, screen_local }
+        let screen = normalize::NetworkScreen::for_targets(hosts.iter());
+        Self { hosts, screen }
     }
 
     fn admits(&self, url: &Url) -> std::result::Result<(), &'static str> {
@@ -1971,8 +2179,10 @@ impl ResumeScope {
         if !self.hosts.contains(&host) {
             return Err("su host no es el del rastreo");
         }
-        if self.screen_local && !normalize::is_probeable_host(url) {
-            return Err("es una dirección de red interna y el rastreo es de un sitio público");
+        // Un host del rastreo ya es objetivo declarado, así que aquí solo puede caer lo que se
+        // criba **siempre**: el rango de metadatos de nube.
+        if !self.screen.allows_host(url) {
+            return Err("es una dirección que la auditoría no pide nunca");
         }
         Ok(())
     }
@@ -2174,6 +2384,7 @@ fn exclusion_reason_from_db(s: &str) -> Option<ExclusionReason> {
         "depth" => Some(ExclusionReason::Depth),
         "pattern" => Some(ExclusionReason::Pattern),
         "limit" => Some(ExclusionReason::Limit),
+        "local_network" => Some(ExclusionReason::LocalNetwork),
         _ => None,
     }
 }
@@ -2274,17 +2485,25 @@ impl NotProbed {
         }
     }
 
-    /// Lo que se deja escrito en `urls.exclusion_reason`, si el motivo es una decisión del
-    /// usuario y no una circunstancia de la red.
+    /// Lo que se deja escrito en `urls.exclusion_reason`, si el motivo es una propiedad de la
+    /// URL y no una circunstancia de la red de esta sesión.
     ///
-    /// Solo esos dos: son los que **no** deben reintentarse al reanudar —el `--exclude` y el
-    /// `nofollow` seguirán ahí— y son los que el informe puede explicar en términos del sitio.
-    /// Los demás dejan la fila como estaba, sin estado y sin motivo, que es lo que hace que
-    /// una reanudación vuelva a intentarlos: son de esta sesión, no del sitio.
+    /// Solo esos tres: son los que **no** deben reintentarse al reanudar —el `--exclude`, el
+    /// `nofollow` y la dirección de red interna seguirán siendo los mismos mañana— y son los
+    /// que el informe puede explicar en términos del sitio. Los demás dejan la fila como
+    /// estaba, sin estado y sin motivo, que es lo que hace que una reanudación vuelva a
+    /// intentarlos: son de esta sesión, no del sitio.
+    ///
+    /// `LocalNetwork` devolvía `None`, y eso dejaba la fila **idéntica** a la de una sonda que
+    /// el corte pilló en vuelo: el `SELECT` de la reanudación la volvía a coger y la petición
+    /// que la criba había rechazado salía en la sesión siguiente. Reproducido sin tocar el
+    /// fichero: rastreo local con un enlace a `169.254.169.254`, Ctrl-C, `resume`, y la
+    /// petición sale.
     fn exclusion_reason(self) -> Option<ExclusionReason> {
         match self {
             Self::Pattern => Some(ExclusionReason::Pattern),
             Self::Nofollow => Some(ExclusionReason::Nofollow),
+            Self::LocalNetwork => Some(ExclusionReason::LocalNetwork),
             _ => None,
         }
     }
@@ -2311,7 +2530,7 @@ fn why_not_probe(
     filter: &crate::pattern::UrlFilter,
     limits: &crate::job::CrawlLimits,
     enqueued: u64,
-    screen_local_network: bool,
+    screen: &normalize::NetworkScreen,
 ) -> Option<NotProbed> {
     if !filter.allows(url.as_str()) {
         return Some(NotProbed::Pattern);
@@ -2319,7 +2538,7 @@ fn why_not_probe(
     if limits.respect_nofollow && is_nofollow {
         return Some(NotProbed::Nofollow);
     }
-    if !normalize::is_probeable(url, screen_local_network) {
+    if !screen.allows_host(url) {
         return Some(NotProbed::LocalNetwork);
     }
     if enqueued >= limits.max_external {
@@ -3934,6 +4153,11 @@ mod tests {
         crate::pattern::UrlFilter::from_limits(&limites()).expect("sin patrones")
     }
 
+    /// El perímetro de un rastreo de un sitio público: ningún objetivo local declarado.
+    fn criba_publica() -> normalize::NetworkScreen {
+        normalize::NetworkScreen::for_targets(["ejemplo.es"])
+    }
+
     fn por_que_no(url: &str, nofollow: bool, filtro: &crate::pattern::UrlFilter) -> Option<NotProbed> {
         why_not_probe(
             &Url::parse(url).expect("URL de test válida"),
@@ -3941,7 +4165,7 @@ mod tests {
             filtro,
             &limites(),
             0,
-            true,
+            &criba_publica(),
         )
     }
 
@@ -3983,7 +4207,7 @@ mod tests {
                 &sin_filtro(),
                 &limits,
                 0,
-                true,
+                &criba_publica(),
             ),
             None
         );
@@ -4008,7 +4232,8 @@ mod tests {
     #[test]
     fn auditing_a_local_site_does_not_screen_the_local_network() {
         // Quien rastrea `http://localhost:4321/` ya está dentro de esa red y lo pidió él: la
-        // criba no protegería de nada y rompería el caso de uso. Ver `screen_local_network`.
+        // criba no protegería de nada y rompería el caso de uso.
+        let solo_local = normalize::NetworkScreen::for_targets(["localhost"]);
         assert_eq!(
             why_not_probe(
                 &Url::parse("http://127.0.0.1:9000/x").expect("URL válida"),
@@ -4016,9 +4241,65 @@ mod tests {
                 &sin_filtro(),
                 &limites(),
                 0,
-                false,
+                &solo_local,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn one_public_target_takes_the_local_exemption_away_from_the_whole_crawl() {
+        // El caso del modo lista: la excepción era un interruptor global que accionaba la
+        // primera línea del fichero del usuario. Ahora hace falta que **todos** los objetivos
+        // sean locales, así que una lista que mezcle un sitio de internet con uno local no
+        // abre la red del usuario a lo que enlace el de internet.
+        let mezcla = normalize::NetworkScreen::for_targets(["localhost", "cliente.es"]);
+        assert_eq!(
+            why_not_probe(
+                &Url::parse("http://127.0.0.1:9000/x").expect("URL válida"),
+                false,
+                &sin_filtro(),
+                &limites(),
+                0,
+                &mezcla,
+            ),
+            Some(NotProbed::LocalNetwork)
+        );
+        // El objetivo declarado sí se sigue alcanzando: es lo que el usuario pidió auditar.
+        assert_eq!(
+            why_not_probe(
+                &Url::parse("http://localhost:9000/x").expect("URL válida"),
+                false,
+                &sin_filtro(),
+                &limites(),
+                0,
+                &mezcla,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_line_without_a_host_no_longer_turns_the_screen_off() {
+        // Reproducido: con `mailto:contacto@cliente.es` de primera línea de la lista, la criba
+        // se apagaba para todas las demás y la víctima en loopback recibía la petición.
+        // `mailto:` no aporta host, así que ya no aporta nada.
+        let criba = normalize::NetworkScreen::for_seeds(
+            [Url::parse("mailto:contacto@cliente.es"), Url::parse("http://cliente.es/p1")]
+                .iter()
+                .filter_map(|u| u.as_ref().ok()),
+        );
+        assert!(!criba.is_local_audit(), "una línea sin host no vuelve local el rastreo");
+        assert_eq!(
+            why_not_probe(
+                &Url::parse("http://127.0.0.1:9000/admin").expect("URL válida"),
+                false,
+                &sin_filtro(),
+                &limites(),
+                0,
+                &criba,
+            ),
+            Some(NotProbed::LocalNetwork)
         );
     }
 
@@ -4032,7 +4313,7 @@ mod tests {
                 &sin_filtro(),
                 &limits,
                 limits.max_external,
-                true,
+                &criba_publica(),
             ),
             Some(NotProbed::Budget)
         );

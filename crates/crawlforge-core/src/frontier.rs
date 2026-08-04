@@ -52,6 +52,12 @@ pub enum ExclusionReason {
     Depth,
     Pattern,
     Limit,
+    /// El perímetro de la auditoría rechazó la dirección: loopback, red privada, `localhost`,
+    /// metadatos de nube… Ver `normalize::NetworkScreen`.
+    ///
+    /// Es un motivo propio y no la ausencia de motivo: sin él la fila queda indistinguible de
+    /// una sonda interrumpida y la reanudación la vuelve a encolar.
+    LocalNetwork,
 }
 
 impl ExclusionReason {
@@ -62,6 +68,7 @@ impl ExclusionReason {
             Self::Depth => "depth",
             Self::Pattern => "pattern",
             Self::Limit => "limit",
+            Self::LocalNetwork => "local_network",
         }
     }
 }

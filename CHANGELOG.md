@@ -19,6 +19,54 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.6.0] — 2026-08-04
+
+A second security review took the perimeter that 0.5.0 shipped and broke it, executing every
+case. This is what it took to close it properly.
+
+### Security
+
+- **The network perimeter now decides on the address actually dialled, not on the text of the
+  host.** The screen in 0.5.0 was lexical, and a lexical screen cannot defend against a name.
+  Public wildcard DNS services make that trivial and require the attacker to own nothing:
+  `localtest.me` and `lvh.me` resolve to `127.0.0.1`, and `nip.io` and `sslip.io` resolve to
+  whatever address you spell into the name — including `169.254.169.254.nip.io`, which walked
+  straight past the cloud-metadata exception that 0.5.0 documented as non-negotiable. Verified
+  end to end against a service on loopback, with the screen on: `HTTP 200`.
+
+  Name resolution now happens behind a resolver that filters the addresses before any of them
+  reaches a socket, and a name is rejected whole if **any** of its addresses is out of bounds —
+  keeping the public ones would let DNS pick, which is half of a rebinding attack. The lexical
+  screen stays as the first line, because a host written as a literal IP never reaches a
+  resolver at all.
+
+- **`--follow-external` no longer bypasses the perimeter.** It was consulted only on the probe
+  path, so a crawl with that scope reached the same addresses the probe could not — and worse,
+  with a full `GET` whose body was parsed and stored. A resumed crawl no longer inherits it from
+  the file either, for the same reason `tier` and `--ignore-robots` are not inherited. The CLI
+  has no such flag; both manuals said it did, and no longer do.
+
+- **The perimeter is decided by every target of the crawl, not by the first one.** In list mode
+  the first line of the file switched the screen off for all the others — and a line with no host
+  at all, such as a stray `mailto:`, switched it off entirely. List files often come from
+  elsewhere.
+
+- **A resumed crawl does not grant the local-network exception.** A crawl aimed at a local target
+  may reach that network, because whoever started it was already inside it. On a resume that
+  reasoning does not hold: the target is declared by the file, and a crawl file is untrusted input
+  by design — the product exists so that crawls can be copied and sent. A shared file claiming a
+  local target could make the machine that opened it probe its own loopback. What it costs is that
+  resuming a local audit leaves its local probes unrepeated and recorded, rather than checked; the
+  way to audit it again is to re-run `crawl`, where the target comes from the command line.
+
+### Fixed
+
+- The registration of external URLs is capped. One page with 350,000 outbound links produced
+  350,001 rows, an 87 MB file and 279 MB of RSS, with a 1,000-URL limit in force: external URLs do
+  not count against that budget, and nothing else counted them either.
+- More names screened by the first line: `.lan`, `home.arpa`, `.corp`, `fritz.box`, and the short
+  names that resolve inside a cluster or a cloud instance.
+
 ## [0.5.0] — 2026-08-04
 
 Everything here comes from a five-front review — security, performance, stability, usability and

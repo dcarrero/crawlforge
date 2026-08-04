@@ -31,6 +31,9 @@ concurrency: 8
 # ignore_robots: false
 
 # Rastrear también las URLs externas enlazadas (por defecto solo se comprueba su estado).
+# No tiene flag en la línea de comandos, y una reanudación lo ignora: el fichero de rastreo
+# se comparte, y un permiso guardado no es un permiso concedido en esta sesión. Sigue estando
+# sujeto al perímetro de red: no sirve para alcanzar direcciones de tu propia red.
 # follow_external: false
 
 # Comprobar el estado de las URLs externas enlazadas: una petición HEAD por URL única,
@@ -41,6 +44,13 @@ concurrency: 8
 # Tope de URLs externas comprobadas por rastreo. Al alcanzarlo, el resumen dice
 # cuántas quedaron sin comprobar.
 # max_external: 10000
+
+# Tope de URLs externas **registradas** por rastreo. Es otro tope: `max_external` acota las
+# que se comprueban, este acota las que llegan a tener fila. Una sola página hostil con
+# cientos de miles de enlaces a hosts distintos llenaba la tabla sin tocar `max_urls`, que
+# solo cuenta páginas del sitio auditado. Al alcanzarlo, el resumen dice cuántas quedaron
+# fuera; no marca el rastreo como truncado.
+# max_external_urls: 100000
 
 # Respetar rel="nofollow" al descubrir enlaces. Por defecto, sí.
 # respect_nofollow: true

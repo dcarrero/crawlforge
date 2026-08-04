@@ -9,6 +9,7 @@
 #[cfg(test)]
 mod alloc_probe;
 
+pub mod dns;
 pub mod engine;
 pub mod entitlement;
 pub mod error;

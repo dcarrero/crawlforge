@@ -228,6 +228,15 @@ pub mod msg {
             en: "{n} external links were not checked: the max_external cap was reached. Raise it with --max-external.",
             es: "{n} enlaces externos quedaron sin comprobar: se alcanzó el tope max_external. Súbelo con --max-external.",
         }
+        // El otro tope de externas: el del registro. Estas no están en el fichero, así que sin
+        // este aviso el informe no tendría ni una fila que delatara que faltan.
+        external_unregistered(n) {
+            en: "{n} external links were not even recorded: the max_external_urls cap was reached. \
+                 A single page linking to hundreds of thousands of hosts is what this cap is for.",
+            es: "{n} enlaces externos no llegaron ni a registrarse: se alcanzó el tope \
+                 max_external_urls. Una sola página que enlace a cientos de miles de hosts es \
+                 justo lo que este tope acota.",
+        }
         // La variante de fichero para un rastreo cortado: aquí no se puede afirmar que el
         // tope fuera el motivo — un truncado deja externas sin sondear igualmente.
         external_never_checked(n) {

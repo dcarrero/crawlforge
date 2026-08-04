@@ -120,6 +120,15 @@ fn truncation_lines(outcome: &CrawlOutcome, lang: Lang) -> Vec<Option<String>> {
             i18n::group_thousands(lang, outcome.metrics.externals_unchecked),
         )));
     }
+    // Y el tope del registro, que es el otro y deja aún menos rastro: estas externas no tienen
+    // fila en el fichero, así que si no se dicen aquí no se sabrán nunca.
+    if outcome.metrics.externals_unregistered > 0 {
+        out.push(None);
+        out.push(Some(msg::external_unregistered(
+            lang,
+            i18n::group_thousands(lang, outcome.metrics.externals_unregistered),
+        )));
+    }
     out
 }
 

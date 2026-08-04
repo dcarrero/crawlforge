@@ -403,8 +403,11 @@ Dicho por delante, para que no pierdas tiempo buscándolo:
 - **No renderiza JavaScript.** Un sitio cuyo contenido se monta en el navegador se verá vacío.
   Está previsto.
 - **No sigue los sitios externos.** De los enlaces salientes se comprueba el estado —que es lo que
-  hace saltar `HTTP-404-EXTERNAL`—, pero de otro dominio no se parsea ni se rastrea nada. Seguir uno
-  entero es `--follow-external`, y está apagado por defecto con motivo.
+  hace saltar `HTTP-404-EXTERNAL`—, pero de otro dominio no se parsea ni se rastrea nada. **No hay
+  flag `--follow-external`**: rastrear entero un sitio ajeno no es algo que la herramienta ofrezca
+  desde la línea de comandos. La clave `follow_external` existe en el fichero de configuración y
+  sigue apagada por defecto; una reanudación ignora lo que el fichero diga de ella, igual que
+  ignora un `ignore_robots` guardado.
 - **No hay interfaz gráfica** todavía.
 - **No hay programación de rastreos** ni panel de cartera. Fases 6 y 7.
 - **`HTTP-TEMP-REDIRECT`** no existe todavía: necesita un histórico de rastreos que aún no existe.
