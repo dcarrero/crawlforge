@@ -51,7 +51,12 @@ fn body_limit_for(content_type: Option<&str>, page_limit: u64) -> u64 {
     }
 }
 /// User-Agent por defecto. Identificarse honestamente y de forma verificable (§10).
-pub const DEFAULT_USER_AGENT: &str = "CrawlForge/1.0 (+https://crawlforge.app/bot)";
+///
+/// La URL no es decorativa: es lo que un administrador teclea cuando ve esto en sus logs y
+/// quiere saber quién le está pidiendo páginas. **Si deja de responder, esta cadena pasa de
+/// identificación a ruido**, así que cambiar el dominio aquí obliga a que esa página exista
+/// antes, no después.
+pub const DEFAULT_USER_AGENT: &str = "CrawlForge/1.0 (+https://crawlforge.org/bot)";
 
 /// Por qué falló la obtención de una URL. Se corresponde con `urls.error_kind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
