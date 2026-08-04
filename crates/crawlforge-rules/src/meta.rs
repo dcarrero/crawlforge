@@ -1,11 +1,11 @@
-//! `META` — títulos y meta descripciones. `docs/04-CATALOGO-REGLAS.md §4`.
+//! `META` — titles and meta descriptions. `docs/04-CATALOGO-REGLAS.md §4`.
 //!
-//! Este módulo es la plantilla del resto: [`MetaTitleMissing`] es el ejemplo de regla de página
-//! y [`MetaTitleDuplicate`] el de regla de conjunto.
+//! This module is the template for the rest: [`MetaTitleMissing`] is the example page rule and
+//! [`MetaTitleDuplicate`] the example site rule.
 //!
-//! Los umbrales de «demasiado largo» son de **ancho estimado en píxeles**, no de número de
-//! caracteres, porque es así como Google trunca. La tabla de anchos y el error que se le atribuye
-//! están en [`arial_advance_per_mille`].
+//! The "too long" thresholds are **estimated width in pixels**, not character counts, because
+//! that is how Google truncates. The advance table and the error attributed to it are in
+//! [`arial_advance_per_mille`].
 
 use crate::{Category, Issue, PageContext, PageRule, RuleMeta, Scope, Severity, SiteRule, Tier};
 use rusqlite::Connection;
@@ -204,60 +204,61 @@ pub static META_REFRESH: RuleMeta = RuleMeta {
     references: &[],
 };
 
-// ---------------------------------------------------------------- Ancho en píxeles
+// ---------------------------------------------------------------- Pixel width
 //
-// Google no corta el título ni la descripción por número de caracteres: los corta cuando no
-// caben en el ancho disponible del resultado. Contar caracteres da avisos falsos en los dos
-// sentidos —un título de sesenta íes cabe de sobra y uno de cuarenta y cinco emes no— y en
-// español el error es mayor: las palabras son más largas, las mayúsculas y las tildes están más
-// presentes, y «ÁRBOL» ocupa un 50 % más que «árbol» con los mismos cinco caracteres.
+// Google does not cut the title or the description at a character count: it cuts them when
+// they do not fit in the width available to the result. Counting characters gives false
+// warnings in both directions —a title of sixty i's fits with room to spare and one of
+// forty-five m's does not— and in Spanish the error is bigger: words are longer, capitals and
+// accents are more frequent, and "ÁRBOL" takes up 50% more than "árbol" with the same five
+// characters.
 
-/// Tamaño con el que Google renderiza el título del resultado en escritorio.
+/// Size Google renders the result title at on desktop.
 const TITLE_FONT_PX: f64 = 20.0;
-/// Tamaño con el que Google renderiza el fragmento de descripción en escritorio.
+/// Size Google renders the description snippet at on desktop.
 const DESC_FONT_PX: f64 = 14.0;
 
-/// Ancho máximo del título antes de que se corte, en píxeles. `docs/04-CATALOGO-REGLAS.md §4`.
+/// Maximum title width before it gets cut, in pixels. `docs/04-CATALOGO-REGLAS.md §4`.
 pub const TITLE_MAX_WIDTH_PX: f64 = 580.0;
-/// Ancho máximo de la descripción antes de que se corte, en píxeles.
+/// Maximum description width before it gets cut, in pixels.
 pub const DESC_MAX_WIDTH_PX: f64 = 990.0;
 
-/// Por debajo de esto el título desaprovecha el espacio del resultado. En caracteres a propósito:
-/// el aviso es «te falta texto que escribir», y eso se cuenta, no se mide.
+/// Below this the title wastes the space the result offers. In characters on purpose: the
+/// warning is "you are missing text to write", and that is counted, not measured.
 pub const TITLE_MIN_CHARS: usize = 30;
-/// Por debajo de esto la descripción desaprovecha el espacio del fragmento.
+/// Below this the description wastes the snippet's space.
 pub const DESC_MIN_CHARS: usize = 70;
 
-/// Ancho de avance de un carácter en Arial Regular, en milésimas de em.
+/// Advance width of a character in Arial Regular, in thousandths of an em.
 ///
-/// **De dónde sale la tabla:** son las anchuras de avance de Arial Regular, expresadas en la
-/// unidad de los ficheros AFM (milésimas de em, la misma escala que la tabla `hmtx` de un
-/// TrueType con 1000 unidades por em). Arial se diseñó como sustituto métricamente compatible de
-/// Helvetica, así que en todo el rango ASCII comparte avances con la Helvetica de las catorce
-/// fuentes base de PostScript, cuyas métricas son públicas. Los caracteres se agrupan en clases
-/// porque dentro de cada clase el avance es literalmente el mismo valor: `A`, `B`, `E`, `K`, `P`,
-/// `S`, `V`, `X` e `Y` miden 667 los nueve.
+/// **Where the table comes from:** these are the advance widths of Arial Regular, expressed in
+/// the unit AFM files use (thousandths of an em, the same scale as the `hmtx` table of a
+/// TrueType with 1000 units per em). Arial was designed as a metrically compatible substitute
+/// for Helvetica, so across the whole ASCII range it shares advances with the Helvetica of the
+/// fourteen PostScript base fonts, whose metrics are public. Characters are grouped in classes
+/// because within each class the advance is literally the same value: `A`, `B`, `E`, `K`, `P`,
+/// `S`, `V`, `X` and `Y` measure 667, all nine of them.
 ///
-/// **Qué error tiene:**
+/// **What error it carries:**
 ///
-/// - Sobre prosa latina normal se queda por debajo del 2 % frente a lo que mide un navegador. Lo
-///   que se ignora es el *kerning* —Arial acerca pares como `AV` o `To`— y el redondeo a
-///   subpíxel del rasterizador, y los dos restan ancho, así que la estimación se equivoca por
-///   arriba: avisa un poco antes de tiempo, nunca un poco tarde.
-/// - Las vocales acentuadas y la `ñ` miden lo que su letra base, lo cual es exacto en Arial.
-/// - Fuera de Latin-1 —CJK, emoji, símbolos matemáticos— todo cae en el valor por defecto y el
-///   error es grande. Se acepta: un título en japonés no lo renderiza Google con Arial, y la
-///   regla no pretende ser un motor de composición.
+/// - On normal Latin prose it stays under 2% of what a browser measures. What it ignores is
+///   *kerning* —Arial pulls pairs like `AV` or `To` together— and the rasterizer's subpixel
+///   rounding, and both subtract width, so the estimate errs upward: it warns a little early,
+///   never a little late.
+/// - Accented vowels and `ñ` measure the same as their base letter, which is exact in Arial.
+/// - Outside Latin-1 —CJK, emoji, mathematical symbols— everything falls into the default value
+///   and the error is large. Accepted: Google does not render a Japanese title in Arial, and
+///   the rule does not pretend to be a text layout engine.
 ///
-/// El core tiene una función equivalente para rellenar las columnas `pages.title_px` y
-/// `pages.meta_desc_px`. Está duplicada porque la dependencia va del core a las reglas y no al
-/// revés; [`estimated_width_px`] es `pub` para que la consolidación futura pueda ir en esa
-/// dirección y no en la contraria.
+/// The core has an equivalent function to fill the `pages.title_px` and `pages.meta_desc_px`
+/// columns. It is duplicated because the dependency goes from the core to the rules and not the
+/// other way around; [`estimated_width_px`] is `pub` so a future consolidation can go in that
+/// direction and not the opposite one.
 fn arial_advance_per_mille(c: char) -> u64 {
     match c {
-        // Clase estrecha: lo único que baja de un cuarto de em.
+        // Narrow class: the only things below a quarter of an em.
         'i' | 'j' | 'l' | 'í' | 'ì' | 'î' | 'ï' => 222,
-        // La `'` tipográfica es aún más estrecha (191), pero no merece una clase propia.
+        // The typographic `'` is even narrower (191), but does not deserve a class of its own.
         '\'' | '’' => 191,
         ' ' | '.' | ',' | ':' | ';' | '!' | '|' | '/' | '\\' | '[' | ']' | 'f' | 't' | 'I'
         | 'Í' | 'Ï' => 278,
@@ -274,31 +275,31 @@ fn arial_advance_per_mille(c: char) -> u64 {
         '%' => 889,
         'W' => 944,
         '@' => 1015,
-        // Minúsculas restantes, dígitos y el resto de la puntuación media. Es también el valor
-        // que reciben los caracteres que la tabla no conoce.
+        // Remaining lowercase, the digits and the rest of the medium punctuation. Also the
+        // value that characters unknown to the table receive.
         _ => 556,
     }
 }
 
-/// Ancho estimado de un texto renderizado en Arial al tamaño dado, en píxeles.
+/// Estimated width of a text rendered in Arial at the given size, in pixels.
 pub fn estimated_width_px(text: &str, font_size_px: f64) -> f64 {
     let por_millar: u64 = text.chars().map(arial_advance_per_mille).sum();
     por_millar as f64 * font_size_px / 1000.0
 }
 
-/// Ancho estimado de un título en el resultado de búsqueda (Arial 20 px).
+/// Estimated width of a title in the search result (Arial 20 px).
 pub fn title_width_px(title: &str) -> f64 {
     estimated_width_px(title.trim(), TITLE_FONT_PX)
 }
 
-/// Ancho estimado de una meta descripción en el fragmento (Arial 14 px).
+/// Estimated width of a meta description in the snippet (Arial 14 px).
 pub fn description_width_px(description: &str) -> f64 {
     estimated_width_px(description.trim(), DESC_FONT_PX)
 }
 
-/// Página indexable sin `<title>`.
+/// Indexable page without a `<title>`.
 ///
-/// Solo se aplica a páginas indexables: avisar del título de una página con `noindex` es ruido.
+/// It only applies to indexable pages: warning about the title of a `noindex` page is noise.
 pub struct MetaTitleMissing;
 
 impl PageRule for MetaTitleMissing {
@@ -318,13 +319,13 @@ impl PageRule for MetaTitleMissing {
     }
 }
 
-/// La ruta base de una URL de paginación, si la ruta lo es.
+/// The base path of a pagination URL, if the path is one.
 ///
-/// Reconoce exactamente el sufijo `/page/<n>` o `/pagina/<n>`, con o sin barra final: son las
-/// dos formas vistas en rastreos reales (el permalink por defecto de WordPress en inglés y su
-/// traducción). **A propósito no es una lista larga de patrones**: cada patrón nuevo es una
-/// oportunidad de degradar un duplicado real, así que solo entra lo que un rastreo haya
-/// demostrado. `/category/x/page/2/` → `Some("/category/x")`; `/category/x/` → `None`.
+/// It recognizes exactly the `/page/<n>` or `/pagina/<n>` suffix, with or without a trailing
+/// slash: the two forms seen in real crawls (WordPress's default permalink in English and its
+/// Spanish translation). **Deliberately not a long list of patterns**: every new pattern is a
+/// chance to downgrade a real duplicate, so only what a crawl has demonstrated gets in.
+/// `/category/x/page/2/` → `Some("/category/x")`; `/category/x/` → `None`.
 fn pagination_base(path: &str) -> Option<&str> {
     let sin_barra = path.trim_end_matches('/');
     let (resto, numero) = sin_barra.rsplit_once('/')?;
@@ -335,19 +336,19 @@ fn pagination_base(path: &str) -> Option<&str> {
     (segmento == "page" || segmento == "pagina").then_some(base)
 }
 
-/// Dos o más páginas indexables comparten el mismo `<title>`.
+/// Two or more indexable pages share the same `<title>`.
 ///
-/// Necesita el rastreo completo: es el ejemplo canónico de por qué existen las [`SiteRule`].
-/// El `group_key` agrupa las páginas que comparten título para que la UI las presente juntas.
+/// It needs the full crawl: it is the canonical example of why [`SiteRule`] exists. The
+/// `group_key` groups the pages sharing a title so the UI can present them together.
 ///
-/// **La serie paginada de un mismo archivo baja a `low`.** El dato es cierto —`/category/x/` y
-/// sus `/page/N/` comparten título— pero es lo que WordPress produce de serie en cada archivo
-/// paginado, y en un rastreo real esas series eran 38 de los 40 hallazgos `high` de la regla:
-/// un aviso alto que sale en todos los WordPress del mundo deja de leerse, y con él los
-/// duplicados que sí compiten. La condición es estricta: **todas** las páginas del grupo tienen
-/// que reducirse a una misma base al quitar el sufijo de paginación ([`pagination_base`]); si el
-/// título lo comparten dos archivos distintos, o un archivo y un artículo, el grupo entero
-/// conserva su severidad. El detalle lo declara con `pagination_series`.
+/// **The paginated series of a single archive drops to `low`.** The fact is true —`/category/x/`
+/// and its `/page/N/` share a title— but it is what WordPress produces out of the box on every
+/// paginated archive, and in a real crawl those series were 38 of the rule's 40 `high`
+/// findings: a high warning that fires on every WordPress in the world stops being read, and
+/// with it the duplicates that do compete. The condition is strict: **all** pages in the group
+/// must collapse to the same base once the pagination suffix is removed ([`pagination_base`]);
+/// if the title is shared by two different archives, or by an archive and an article, the whole
+/// group keeps its severity. The detail declares it with `pagination_series`.
 pub struct MetaTitleDuplicate;
 
 impl SiteRule for MetaTitleDuplicate {
@@ -383,8 +384,9 @@ impl SiteRule for MetaTitleDuplicate {
             filas.push((hash, title, n, path.unwrap_or_default()));
         }
 
-        // Un grupo es una serie paginada si todas sus rutas colapsan a la misma base al quitar
-        // el sufijo `/page/N`, y al menos una lo llevaba. Se calcula por título, no por fila.
+        // A group is a paginated series if all its paths collapse to the same base once the
+        // `/page/N` suffix is removed, and at least one carried it. Computed per title, not per
+        // row.
         let mut bases: std::collections::HashMap<&str, (Option<&str>, bool)> =
             std::collections::HashMap::new();
         for (_, title, _, path) in &filas {
@@ -392,9 +394,9 @@ impl SiteRule for MetaTitleDuplicate {
             let normalizada = base.unwrap_or_else(|| path.trim_end_matches('/'));
             let entrada = bases.entry(title.as_str()).or_insert((Some(normalizada), false));
             if entrada.0 != Some(normalizada) {
-                entrada.0 = None; // dos bases distintas: no es una sola serie
+                entrada.0 = None; // two distinct bases: not a single series
             }
-            entrada.1 |= base.is_some(); // alguna página del grupo es una /page/N
+            entrada.1 |= base.is_some(); // some page in the group is a /page/N
         }
 
         let mut out = Vec::new();
@@ -421,9 +423,9 @@ impl SiteRule for MetaTitleDuplicate {
     }
 }
 
-/// El título no cabe en el resultado de búsqueda.
+/// The title does not fit in the search result.
 ///
-/// El umbral es de ancho, no de longitud: ver [`arial_advance_per_mille`] para el porqué.
+/// The threshold is width, not length: see [`arial_advance_per_mille`] for why.
 pub struct MetaTitleTooLong;
 
 impl PageRule for MetaTitleTooLong {
@@ -447,10 +449,10 @@ impl PageRule for MetaTitleTooLong {
     }
 }
 
-/// El título deja sin usar el espacio del resultado de búsqueda.
+/// The title leaves the search result's space unused.
 ///
-/// Aquí sí se cuentan caracteres: el consejo es «escribe más texto», y un aviso en píxeles
-/// obligaría a explicarle al usuario cuántas letras le faltan.
+/// Characters are counted here, deliberately: the advice is "write more text", and a warning in
+/// pixels would force explaining to the user how many letters they are short of.
 pub struct MetaTitleTooShort;
 
 impl PageRule for MetaTitleTooShort {
@@ -474,10 +476,10 @@ impl PageRule for MetaTitleTooShort {
     }
 }
 
-/// Más de una etiqueta `<title>` en la página.
+/// More than one `<title>` tag on the page.
 ///
-/// El recuento lo hace el parser, que ya descarta el `<title>` de un `<svg>`: ése es el nombre
-/// accesible de un icono, no un título de página.
+/// The counting is done by the parser, which already discards the `<title>` of an `<svg>`:
+/// that one is the accessible name of an icon, not a page title.
 pub struct MetaTitleMultiple;
 
 impl PageRule for MetaTitleMultiple {
@@ -494,7 +496,7 @@ impl PageRule for MetaTitleMultiple {
     }
 }
 
-/// Página indexable sin meta descripción.
+/// Indexable page without a meta description.
 pub struct MetaDescMissing;
 
 impl PageRule for MetaDescMissing {
@@ -514,7 +516,7 @@ impl PageRule for MetaDescMissing {
     }
 }
 
-/// La descripción no cabe en el fragmento del resultado.
+/// The description does not fit in the result's snippet.
 pub struct MetaDescTooLong;
 
 impl PageRule for MetaDescTooLong {
@@ -538,7 +540,7 @@ impl PageRule for MetaDescTooLong {
     }
 }
 
-/// La descripción desaprovecha el espacio del fragmento.
+/// The description wastes the snippet's space.
 pub struct MetaDescTooShort;
 
 impl PageRule for MetaDescTooShort {
@@ -561,7 +563,7 @@ impl PageRule for MetaDescTooShort {
     }
 }
 
-/// Página indexable sin `<meta name="viewport">`.
+/// Indexable page without `<meta name="viewport">`.
 pub struct MetaViewportMissing;
 
 impl PageRule for MetaViewportMissing {
@@ -581,10 +583,10 @@ impl PageRule for MetaViewportMissing {
     }
 }
 
-/// La página redirige con `<meta http-equiv="refresh">`.
+/// The page redirects with `<meta http-equiv="refresh">`.
 ///
-/// El valor de `content` viaja en el detalle porque el retardo cambia el diagnóstico: `0` es una
-/// redirección disfrazada y cualquier otro número es además una trampa para el botón de volver.
+/// The `content` value travels in the detail because the delay changes the diagnosis: `0` is a
+/// redirect in disguise and any other number is, on top of that, a trap for the back button.
 pub struct MetaRefresh;
 
 impl PageRule for MetaRefresh {
@@ -604,12 +606,12 @@ impl PageRule for MetaRefresh {
     }
 }
 
-/// Dos o más páginas indexables comparten la misma meta descripción.
+/// Two or more indexable pages share the same meta description.
 ///
-/// Calcada de [`MetaTitleDuplicate`] a propósito: la misma consulta sobre otra columna. La
-/// comparación es exacta, sin normalizar espacios ni mayúsculas, porque dos descripciones que
-/// solo difieren en el espaciado son dos descripciones distintas para el índice y hay que poder
-/// verlo en el diff.
+/// Deliberately modeled on [`MetaTitleDuplicate`]: the same query over another column. The
+/// comparison is exact, without normalizing whitespace or case, because two descriptions that
+/// only differ in spacing are two distinct descriptions to the index and that has to be visible
+/// in the diff.
 pub struct MetaDescDuplicate;
 
 impl SiteRule for MetaDescDuplicate {
@@ -654,10 +656,11 @@ impl SiteRule for MetaDescDuplicate {
     }
 }
 
-/// El título sobre el que tiene sentido opinar de longitud o de ancho.
+/// The title worth judging for length or width.
 ///
-/// `None` cuando la página no es HTML indexable o cuando no hay título: de la ausencia ya avisa
-/// [`MetaTitleMissing`], y añadir «además es corto» sería el mismo defecto contado dos veces.
+/// `None` when the page is not indexable HTML or when there is no title: [`MetaTitleMissing`]
+/// already reports the absence, and adding "and it is short, too" would be the same defect
+/// counted twice.
 fn titulo_util<'a>(ctx: &PageContext<'a>) -> Option<&'a str> {
     if !ctx.is_html || !ctx.is_indexable {
         return None;
@@ -665,8 +668,8 @@ fn titulo_util<'a>(ctx: &PageContext<'a>) -> Option<&'a str> {
     ctx.title.map(str::trim).filter(|t| !t.is_empty())
 }
 
-/// La descripción sobre la que tiene sentido opinar. Mismo criterio que [`titulo_util`]: de la
-/// ausencia avisa [`MetaDescMissing`].
+/// The description worth judging. Same criterion as [`titulo_util`]: [`MetaDescMissing`]
+/// reports the absence.
 fn descripcion_util<'a>(ctx: &PageContext<'a>) -> Option<&'a str> {
     if !ctx.is_html || !ctx.is_indexable {
         return None;
@@ -696,7 +699,7 @@ pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
 mod tests {
     use super::*;
 
-    /// Una página sana de la que partir. Cada test rompe solo lo que le interesa.
+    /// A healthy page to start from. Each test breaks only what it cares about.
     fn ctx<'a>() -> PageContext<'a> {
         let mut c = PageContext::indexable_html("https://ejemplo.es/a");
         c.title = Some("Un título correcto y suficientemente descriptivo");
@@ -705,12 +708,12 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_cuando_hay_titulo() {
+    fn a_page_with_a_title_produces_no_finding() {
         assert!(MetaTitleMissing.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn avisa_cuando_falta_el_titulo() {
+    fn a_missing_title_produces_a_finding() {
         let mut c = ctx();
         c.title = None;
         let issues = MetaTitleMissing.evaluate(&c);
@@ -720,15 +723,16 @@ mod tests {
     }
 
     #[test]
-    fn un_titulo_de_solo_espacios_cuenta_como_ausente() {
+    fn a_whitespace_only_title_counts_as_missing() {
         let mut c = ctx();
         c.title = Some("   \n\t ");
         assert_eq!(MetaTitleMissing.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn no_avisa_en_una_pagina_no_indexable() {
-        // Un `noindex` sin título no es un problema: la página no va a aparecer en resultados.
+    fn a_missing_title_on_a_non_indexable_page_is_not_flagged() {
+        // A `noindex` without a title is not a problem: the page is not going to show up in
+        // results.
         let mut c = ctx();
         c.title = None;
         c.is_indexable = false;
@@ -736,27 +740,27 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_sobre_algo_que_no_es_html() {
+    fn a_missing_title_outside_html_is_not_flagged() {
         let mut c = ctx();
         c.title = None;
         c.is_html = false;
         assert!(MetaTitleMissing.evaluate(&c).is_empty());
     }
 
-    // ------------------------------------------------------------ Ancho en píxeles
+    // ------------------------------------------------------------ Pixel width
 
-    /// Igualdad de flotantes con tolerancia. Los valores esperados están calculados a mano desde
-    /// la tabla de avances, así que la tolerancia solo cubre el redondeo binario.
+    /// Float equality with tolerance. The expected values are computed by hand from the advance
+    /// table, so the tolerance only covers binary rounding.
     fn casi(a: f64, b: f64) {
         assert!((a - b).abs() < 1e-6, "{a} != {b}");
     }
 
     #[test]
-    fn el_ancho_estimado_reproduce_los_avances_de_arial() {
-        // Diez íes son 10 × 222 milésimas de em; a 20 px, 44,4 px.
+    fn the_estimated_width_reproduces_arial_advances() {
+        // Ten i's are 10 × 222 thousandths of an em; at 20 px, 44.4 px.
         casi(title_width_px("iiiiiiiiii"), 44.4);
-        // Diez emes son 10 × 833; a 20 px, 166,6 px. Casi cuatro veces más con los mismos diez
-        // caracteres: esto es todo el argumento contra contar letras.
+        // Ten m's are 10 × 833; at 20 px, 166.6 px. Almost four times as much with the same ten
+        // characters: this is the entire argument against counting letters.
         casi(title_width_px("MMMMMMMMMM"), 166.6);
         casi(title_width_px("Hola"), 41.12);
         casi(description_width_px("Hola"), 28.784);
@@ -764,38 +768,39 @@ mod tests {
     }
 
     #[test]
-    fn en_espanol_las_mayusculas_y_las_tildes_cambian_el_ancho() {
-        // Cinco caracteres los dos, y medio centenar de píxeles de diferencia. En un idioma con
-        // tildes y con palabras largas, contar caracteres se equivoca más que en inglés.
+    fn in_spanish_capitals_and_accents_change_the_width() {
+        // Five characters each, and some fifty pixels of difference. In a language with accents
+        // and long words, counting characters errs more than in English.
         casi(title_width_px("ÁRBOL"), 67.8);
         casi(title_width_px("árbol"), 44.46);
-        // La vocal acentuada mide lo que su base, que es exacto en Arial.
+        // The accented vowel measures the same as its base, which is exact in Arial.
         casi(title_width_px("a"), title_width_px("á"));
         casi(title_width_px("o"), title_width_px("ó"));
-        // La `í` no: pierde el punto y conserva el avance de la `i`.
+        // Not the `í`: it loses the dot and keeps the `i`'s advance.
         casi(title_width_px("i"), title_width_px("í"));
     }
 
     #[test]
-    fn el_ancho_ignora_los_espacios_de_los_extremos() {
+    fn the_width_ignores_surrounding_whitespace() {
         casi(title_width_px("  Hola  "), title_width_px("Hola"));
     }
 
     #[test]
-    fn un_caracter_desconocido_cae_en_el_valor_por_defecto() {
-        // Fuera de Latin-1 la tabla no opina; se documenta que ahí el error es grande.
+    fn an_unknown_character_falls_back_to_the_default_advance() {
+        // Outside Latin-1 the table has no opinion; it is documented that the error there is
+        // large.
         casi(title_width_px("漢"), title_width_px("a"));
     }
 
     // ------------------------------------------------------------ META-TITLE-TOO-LONG
 
     #[test]
-    fn no_avisa_de_un_titulo_que_cabe() {
+    fn a_title_that_fits_produces_no_finding() {
         assert!(MetaTitleTooLong.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn avisa_de_un_titulo_que_no_cabe() {
+    fn a_title_that_does_not_fit_produces_a_finding() {
         let mut c = ctx();
         c.title = Some(
             "Guía completa de auditoría técnica SEO para sitios WordPress y Astro en 2026, \
@@ -806,29 +811,29 @@ mod tests {
         assert_eq!(issues[0].rule_id, "META-TITLE-TOO-LONG");
         assert_eq!(issues[0].severity, Severity::Medium);
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("width_px"), "el detalle lleva el ancho medido: {detalle}");
+        assert!(detalle.contains("width_px"), "the detail carries the measured width: {detalle}");
     }
 
     #[test]
-    fn el_umbral_del_titulo_se_mide_justo_en_el_limite() {
-        // Una `n` mide 556 milésimas de em: a 20 px son 11,12 px. Cincuenta y dos caben en
-        // 578,24 px y cincuenta y tres se van a 589,36 px, con el límite en 580.
+    fn the_title_threshold_is_measured_right_at_the_limit() {
+        // An `n` measures 556 thousandths of an em: at 20 px that is 11.12 px. Fifty-two fit in
+        // 578.24 px and fifty-three go to 589.36 px, with the limit at 580.
         let justo = "n".repeat(52);
         let mut c = ctx();
         c.title = Some(&justo);
         casi(title_width_px(&justo), 578.24);
-        assert!(MetaTitleTooLong.evaluate(&c).is_empty(), "578,24 px caben en 580");
+        assert!(MetaTitleTooLong.evaluate(&c).is_empty(), "578.24 px fit in 580");
 
         let pasado = "n".repeat(53);
         let mut c = ctx();
         c.title = Some(&pasado);
         casi(title_width_px(&pasado), 589.36);
-        assert_eq!(MetaTitleTooLong.evaluate(&c).len(), 1, "589,36 px no caben en 580");
+        assert_eq!(MetaTitleTooLong.evaluate(&c).len(), 1, "589.36 px do not fit in 580");
     }
 
     #[test]
-    fn el_ancho_del_titulo_no_se_juzga_si_no_hay_titulo() {
-        // De la ausencia avisa META-TITLE-MISSING; contarla dos veces sería ruido.
+    fn title_width_is_not_judged_when_there_is_no_title() {
+        // META-TITLE-MISSING reports the absence; counting it twice would be noise.
         let mut c = ctx();
         c.title = None;
         assert!(MetaTitleTooLong.evaluate(&c).is_empty());
@@ -836,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn el_ancho_del_titulo_no_se_juzga_fuera_de_una_pagina_indexable() {
+    fn title_width_is_not_judged_outside_an_indexable_page() {
         let largo = "n".repeat(80);
         let mut c = ctx();
         c.title = Some(&largo);
@@ -850,7 +855,7 @@ mod tests {
     // ------------------------------------------------------------ META-TITLE-TOO-SHORT
 
     #[test]
-    fn avisa_de_un_titulo_corto() {
+    fn a_short_title_produces_a_finding() {
         let mut c = ctx();
         c.title = Some("Contacto");
         let issues = MetaTitleTooShort.evaluate(&c);
@@ -860,7 +865,7 @@ mod tests {
     }
 
     #[test]
-    fn el_umbral_del_titulo_corto_esta_en_treinta_caracteres() {
+    fn the_short_title_threshold_sits_at_thirty_characters() {
         let veintinueve = "a".repeat(29);
         let mut c = ctx();
         c.title = Some(&veintinueve);
@@ -869,23 +874,23 @@ mod tests {
         let treinta = "a".repeat(30);
         let mut c = ctx();
         c.title = Some(&treinta);
-        assert!(MetaTitleTooShort.evaluate(&c).is_empty(), "treinta caracteres ya está bien");
+        assert!(MetaTitleTooShort.evaluate(&c).is_empty(), "thirty characters is already fine");
     }
 
     #[test]
-    fn el_titulo_corto_se_cuenta_en_caracteres_no_en_bytes() {
-        // «Añádelo» son siete caracteres y nueve bytes. Contar bytes convertiría cada tilde en
-        // texto que no existe, y en español eso pasa en todas las páginas.
+    fn a_short_title_is_counted_in_characters_not_bytes() {
+        // "Añádelo" is seven characters and nine bytes. Counting bytes would turn every accent
+        // into text that does not exist, and in Spanish that happens on every page.
         let mut c = ctx();
         c.title = Some("Añádelo");
         let issues = MetaTitleTooShort.evaluate(&c);
         assert_eq!(issues.len(), 1);
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"chars\":7"), "siete caracteres, no nueve: {detalle}");
+        assert!(detalle.contains("\"chars\":7"), "seven characters, not nine: {detalle}");
     }
 
     #[test]
-    fn un_titulo_corto_no_se_juzga_fuera_de_una_pagina_indexable() {
+    fn a_short_title_is_not_judged_outside_an_indexable_page() {
         let mut c = ctx();
         c.title = Some("Corto");
         c.is_indexable = false;
@@ -898,7 +903,7 @@ mod tests {
     // ------------------------------------------------------------ META-TITLE-MULTIPLE
 
     #[test]
-    fn no_avisa_con_un_solo_titulo() {
+    fn a_single_title_produces_no_finding() {
         assert!(MetaTitleMultiple.evaluate(&ctx()).is_empty());
         let mut c = ctx();
         c.title_count = 0;
@@ -906,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn avisa_con_dos_titulos() {
+    fn two_title_tags_produce_a_finding() {
         let mut c = ctx();
         c.title_count = 2;
         let issues = MetaTitleMultiple.evaluate(&c);
@@ -917,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn los_titulos_repetidos_no_se_juzgan_fuera_de_una_pagina_indexable() {
+    fn repeated_titles_are_not_judged_outside_an_indexable_page() {
         let mut c = ctx();
         c.title_count = 3;
         c.is_indexable = false;
@@ -929,7 +934,7 @@ mod tests {
 
     // ------------------------------------------------------------ META-DESC-*
 
-    /// Una página sana con descripción, para las reglas de descripción.
+    /// A healthy page with a description, for the description rules.
     fn ctx_con_descripcion<'a>() -> PageContext<'a> {
         let mut c = ctx();
         c.meta_description = Some(
@@ -940,7 +945,7 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_cuando_hay_descripcion() {
+    fn a_page_with_a_description_produces_no_finding() {
         let c = ctx_con_descripcion();
         assert!(MetaDescMissing.evaluate(&c).is_empty());
         assert!(MetaDescTooLong.evaluate(&c).is_empty());
@@ -948,7 +953,7 @@ mod tests {
     }
 
     #[test]
-    fn avisa_cuando_falta_la_descripcion() {
+    fn a_missing_description_produces_a_finding() {
         let c = ctx();
         let issues = MetaDescMissing.evaluate(&c);
         assert_eq!(issues.len(), 1);
@@ -957,16 +962,16 @@ mod tests {
     }
 
     #[test]
-    fn una_descripcion_de_solo_espacios_cuenta_como_ausente() {
+    fn a_whitespace_only_description_counts_as_missing() {
         let mut c = ctx();
         c.meta_description = Some("  \n ");
         assert_eq!(MetaDescMissing.evaluate(&c).len(), 1);
-        // Y no dispara además la de descripción corta: es un solo defecto.
+        // And it does not additionally trigger the short-description rule: it is one defect.
         assert!(MetaDescTooShort.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn la_descripcion_ausente_no_se_juzga_fuera_de_una_pagina_indexable() {
+    fn a_missing_description_is_not_judged_outside_an_indexable_page() {
         let mut c = ctx();
         c.is_indexable = false;
         assert!(MetaDescMissing.evaluate(&c).is_empty());
@@ -976,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn avisa_de_una_descripcion_que_no_cabe() {
+    fn a_description_that_does_not_fit_produces_a_finding() {
         let mut c = ctx_con_descripcion();
         c.meta_description = Some(
             "Auditoría técnica SEO de escritorio para agencias y equipos que gestionan decenas \
@@ -990,24 +995,24 @@ mod tests {
     }
 
     #[test]
-    fn el_umbral_de_la_descripcion_se_mide_justo_en_el_limite() {
-        // A 14 px una `n` mide 7,784 px: 127 caben en 988,57 px y 128 se van a 996,35 px, con el
-        // límite en 990.
+    fn the_description_threshold_is_measured_right_at_the_limit() {
+        // At 14 px an `n` measures 7.784 px: 127 fit in 988.57 px and 128 go to 996.35 px, with
+        // the limit at 990.
         let justo = "n".repeat(127);
         let mut c = ctx_con_descripcion();
         c.meta_description = Some(&justo);
         casi(description_width_px(&justo), 988.568);
-        assert!(MetaDescTooLong.evaluate(&c).is_empty(), "988,57 px caben en 990");
+        assert!(MetaDescTooLong.evaluate(&c).is_empty(), "988.57 px fit in 990");
 
         let pasado = "n".repeat(128);
         let mut c = ctx_con_descripcion();
         c.meta_description = Some(&pasado);
         casi(description_width_px(&pasado), 996.352);
-        assert_eq!(MetaDescTooLong.evaluate(&c).len(), 1, "996,35 px no caben en 990");
+        assert_eq!(MetaDescTooLong.evaluate(&c).len(), 1, "996.35 px do not fit in 990");
     }
 
     #[test]
-    fn avisa_de_una_descripcion_corta() {
+    fn a_short_description_produces_a_finding() {
         let mut c = ctx_con_descripcion();
         c.meta_description = Some("Página de contacto.");
         let issues = MetaDescTooShort.evaluate(&c);
@@ -1016,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn el_umbral_de_la_descripcion_corta_esta_en_setenta_caracteres() {
+    fn the_short_description_threshold_sits_at_seventy_characters() {
         let sesenta_y_nueve = "a".repeat(69);
         let mut c = ctx_con_descripcion();
         c.meta_description = Some(&sesenta_y_nueve);
@@ -1025,11 +1030,11 @@ mod tests {
         let setenta = "a".repeat(70);
         let mut c = ctx_con_descripcion();
         c.meta_description = Some(&setenta);
-        assert!(MetaDescTooShort.evaluate(&c).is_empty(), "setenta caracteres ya está bien");
+        assert!(MetaDescTooShort.evaluate(&c).is_empty(), "seventy characters is already fine");
     }
 
     #[test]
-    fn el_ancho_de_la_descripcion_no_se_juzga_fuera_de_una_pagina_indexable() {
+    fn description_width_is_not_judged_outside_an_indexable_page() {
         let larga = "n".repeat(200);
         let mut c = ctx_con_descripcion();
         c.meta_description = Some(&larga);
@@ -1041,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn una_descripcion_corta_no_se_juzga_fuera_de_una_pagina_indexable() {
+    fn a_short_description_is_not_judged_outside_an_indexable_page() {
         let mut c = ctx_con_descripcion();
         c.meta_description = Some("Corta.");
         c.is_indexable = false;
@@ -1054,14 +1059,14 @@ mod tests {
     // ------------------------------------------------------------ META-VIEWPORT-MISSING
 
     #[test]
-    fn no_avisa_cuando_hay_viewport() {
+    fn a_page_with_a_viewport_produces_no_finding() {
         let mut c = ctx();
         c.viewport = Some("width=device-width, initial-scale=1");
         assert!(MetaViewportMissing.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn avisa_cuando_falta_el_viewport() {
+    fn a_missing_viewport_produces_a_finding() {
         let issues = MetaViewportMissing.evaluate(&ctx());
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].rule_id, "META-VIEWPORT-MISSING");
@@ -1069,15 +1074,16 @@ mod tests {
     }
 
     #[test]
-    fn un_viewport_vacio_cuenta_como_ausente() {
-        // `<meta name="viewport" content="">` no configura nada, y el móvil vuelve a los 980 px.
+    fn an_empty_viewport_counts_as_missing() {
+        // `<meta name="viewport" content="">` configures nothing, and the phone goes back to
+        // the 980 px layout.
         let mut c = ctx();
         c.viewport = Some("   ");
         assert_eq!(MetaViewportMissing.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn el_viewport_no_se_juzga_fuera_de_una_pagina_indexable() {
+    fn the_viewport_is_not_judged_outside_an_indexable_page() {
         let mut c = ctx();
         c.is_indexable = false;
         assert!(MetaViewportMissing.evaluate(&c).is_empty());
@@ -1089,12 +1095,12 @@ mod tests {
     // ------------------------------------------------------------ META-REFRESH
 
     #[test]
-    fn no_avisa_sin_meta_refresh() {
+    fn a_page_without_meta_refresh_produces_no_finding() {
         assert!(MetaRefresh.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn avisa_con_meta_refresh() {
+    fn a_meta_refresh_produces_a_finding() {
         let mut c = ctx();
         c.meta_refresh = Some("0;url=/destino/");
         let issues = MetaRefresh.evaluate(&c);
@@ -1102,28 +1108,28 @@ mod tests {
         assert_eq!(issues[0].rule_id, "META-REFRESH");
         assert_eq!(issues[0].severity, Severity::High);
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("0;url=/destino/"), "el detalle lleva el content: {detalle}");
+        assert!(detalle.contains("0;url=/destino/"), "the detail carries the content: {detalle}");
     }
 
     #[test]
-    fn un_meta_refresh_sin_destino_tambien_avisa() {
-        // `content="30"` recarga la propia página. No es una redirección, pero sí un refresco
-        // automático que el usuario no pidió, y la condición del catálogo es el uso de la
-        // etiqueta.
+    fn a_meta_refresh_without_a_target_is_also_reported() {
+        // `content="30"` reloads the page itself. It is not a redirect, but it is an automatic
+        // refresh the user did not ask for, and the catalogue's condition is the use of the
+        // tag.
         let mut c = ctx();
         c.meta_refresh = Some("30");
         assert_eq!(MetaRefresh.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn un_meta_refresh_vacio_no_avisa() {
+    fn an_empty_meta_refresh_produces_no_finding() {
         let mut c = ctx();
         c.meta_refresh = Some("  ");
         assert!(MetaRefresh.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn el_meta_refresh_no_se_juzga_fuera_de_una_pagina_indexable() {
+    fn meta_refresh_is_not_judged_outside_an_indexable_page() {
         let mut c = ctx();
         c.meta_refresh = Some("0;url=/destino/");
         c.is_indexable = false;
@@ -1136,23 +1142,23 @@ mod tests {
     // ------------------------------------------------------------ META-TITLE-DUPLICATE
 
     #[test]
-    fn la_base_de_paginacion_se_reconoce_y_solo_ella() {
+    fn the_pagination_base_is_recognized_and_nothing_else() {
         assert_eq!(pagination_base("/category/seo/page/2/"), Some("/category/seo"));
         assert_eq!(pagination_base("/category/seo/page/2"), Some("/category/seo"));
         assert_eq!(pagination_base("/noticias/pagina/40"), Some("/noticias"));
-        assert_eq!(pagination_base("/page/2/"), Some(""), "paginación de la raíz");
+        assert_eq!(pagination_base("/page/2/"), Some(""), "pagination of the root");
         assert_eq!(pagination_base("/category/seo/"), None);
-        assert_eq!(pagination_base("/post-con-numero/2019/"), None, "un año no es paginación");
+        assert_eq!(pagination_base("/post-con-numero/2019/"), None, "a year is not pagination");
         assert_eq!(pagination_base("/page/dos/"), None);
         assert_eq!(pagination_base("/"), None);
     }
 
-    /// Solo las columnas que la consulta de títulos lee: `(url_hash, title, is_indexable, path)`.
-    /// El esquema de verdad lo ejercita el fixture, como en las descripciones.
+    /// Only the columns the title query reads: `(url_hash, title, is_indexable, path)`.
+    /// The real schema is exercised by the fixture, as with the descriptions.
     fn conexion_con_titulos(filas: &[(i64, Option<&str>, i64, &str)]) -> Connection {
         let conn = match Connection::open_in_memory() {
             Ok(c) => c,
-            Err(e) => panic!("abrir sqlite en memoria: {e}"),
+            Err(e) => panic!("open in-memory sqlite: {e}"),
         };
         conn.execute_batch(
             "CREATE TABLE urls (id INTEGER PRIMARY KEY, url_hash INTEGER NOT NULL, path TEXT);
@@ -1162,29 +1168,30 @@ mod tests {
                  is_indexable INTEGER NOT NULL
              );",
         )
-        .expect("crear el esquema mínimo");
+        .expect("create the minimal schema");
         for (i, (hash, title, indexable, path)) in filas.iter().enumerate() {
             let id = i as i64 + 1;
             conn.execute("INSERT INTO urls (id, url_hash, path) VALUES (?1, ?2, ?3)", (id, hash, path))
-                .expect("insertar url");
+                .expect("insert url");
             conn.execute(
                 "INSERT INTO pages (url_id, title, is_indexable) VALUES (?1, ?2, ?3)",
                 (id, title, indexable),
             )
-            .expect("insertar página");
+            .expect("insert page");
         }
         conn
     }
 
     #[test]
-    fn dos_articulos_con_el_mismo_titulo_siguen_siendo_un_duplicado_alto() {
-        // El caso real de un-diario: el mismo artículo publicado dos veces con slug distinto.
-        // Compiten de verdad por la misma consulta, y ahí la severidad de la regla es la justa.
+    fn two_articles_with_the_same_title_are_still_a_high_duplicate() {
+        // The real case from un-diario: the same article published twice under a different slug.
+        // They genuinely compete for the same query, and there the rule's severity is the right
+        // one.
         let conn = conexion_con_titulos(&[
             (10, Some("El mismo artículo"), 1, "/articulo/"),
             (20, Some("El mismo artículo"), 1, "/articulo-2/"),
         ]);
-        let hallazgos = MetaTitleDuplicate.evaluate(&conn).expect("consultar");
+        let hallazgos = MetaTitleDuplicate.evaluate(&conn).expect("query");
         assert_eq!(hallazgos.len(), 2);
         for (_, issue) in &hallazgos {
             assert_eq!(issue.severity, Severity::High);
@@ -1194,68 +1201,71 @@ mod tests {
     }
 
     #[test]
-    fn la_serie_paginada_de_un_archivo_baja_a_low() {
-        // El caso real de un WordPress: /category/x/ y sus /page/N/ comparten título porque es lo
-        // que WordPress produce de serie en cada archivo paginado. El dato sigue en el informe
-        // —es cierto— pero como `low` y declarado en el detalle: 38 de los 40 `high` de la
-        // regla en ese rastreo eran esto.
+    fn the_paginated_series_of_one_archive_drops_to_low() {
+        // The real case from a WordPress: /category/x/ and its /page/N/ share a title because
+        // that is what WordPress produces out of the box on every paginated archive. The fact
+        // stays in the report —it is true— but as `low` and declared in the detail: 38 of the
+        // rule's 40 `high` findings in that crawl were this.
         let conn = conexion_con_titulos(&[
             (10, Some("Casos de éxito"), 1, "/category/casos-de-exito/"),
             (20, Some("Casos de éxito"), 1, "/category/casos-de-exito/page/2/"),
             (30, Some("Casos de éxito"), 1, "/category/casos-de-exito/page/3/"),
         ]);
-        let hallazgos = MetaTitleDuplicate.evaluate(&conn).expect("consultar");
-        assert_eq!(hallazgos.len(), 3, "la serie se reporta, no se silencia");
+        let hallazgos = MetaTitleDuplicate.evaluate(&conn).expect("query");
+        assert_eq!(hallazgos.len(), 3, "the series is reported, not silenced");
         for (_, issue) in &hallazgos {
-            assert_eq!(issue.severity, Severity::Low, "una serie paginada no es un duplicado alto");
+            assert_eq!(issue.severity, Severity::Low, "a paginated series is not a high-severity duplicate");
             let detalle = issue.detail_json.as_deref().unwrap_or_default();
             assert!(detalle.contains("\"pagination_series\":true"), "{detalle}");
         }
     }
 
     #[test]
-    fn la_paginacion_en_espanol_tambien_es_una_serie() {
+    fn spanish_pagination_is_also_a_series() {
         let conn = conexion_con_titulos(&[
             (10, Some("Noticias"), 1, "/noticias"),
             (20, Some("Noticias"), 1, "/noticias/pagina/5"),
         ]);
-        let hallazgos = MetaTitleDuplicate.evaluate(&conn).expect("consultar");
+        let hallazgos = MetaTitleDuplicate.evaluate(&conn).expect("query");
         assert!(hallazgos.iter().all(|(_, i)| i.severity == Severity::Low));
     }
 
     #[test]
-    fn dos_archivos_distintos_con_el_mismo_titulo_no_son_una_serie() {
-        // Mismo título en la paginación de dos categorías distintas: eso sí es un duplicado de
-        // configuración, no la serie esperable de un solo archivo.
+    fn two_different_archives_with_the_same_title_are_not_a_series() {
+        // The same title across the pagination of two different categories: that is a real
+        // configuration duplicate, not the expected series of a single archive.
         let conn = conexion_con_titulos(&[
             (10, Some("Archivo"), 1, "/category/a/page/2/"),
             (20, Some("Archivo"), 1, "/category/b/page/2/"),
         ]);
-        let hallazgos = MetaTitleDuplicate.evaluate(&conn).expect("consultar");
+        let hallazgos = MetaTitleDuplicate.evaluate(&conn).expect("query");
         assert!(hallazgos.iter().all(|(_, i)| i.severity == Severity::High));
     }
 
     #[test]
-    fn una_serie_necesita_al_menos_una_pagina_de_paginacion() {
-        // Dos rutas iguales tras normalizar la barra final no bastan: sin ningún /page/N no hay
-        // serie, hay dos páginas con el mismo título.
+    fn a_series_needs_at_least_one_pagination_page() {
+        // Two paths equal after normalizing the trailing slash are not enough: without any
+        // /page/N there is no series, just two pages with the same title.
         let conn = conexion_con_titulos(&[
             (10, Some("Duplicado"), 1, "/seccion/"),
             (20, Some("Duplicado"), 1, "/seccion"),
         ]);
-        let hallazgos = MetaTitleDuplicate.evaluate(&conn).expect("consultar");
+        let hallazgos = MetaTitleDuplicate.evaluate(&conn).expect("query");
         assert!(hallazgos.iter().all(|(_, i)| i.severity == Severity::High));
     }
 
     // ------------------------------------------------------------ META-DESC-DUPLICATE
 
-    /// Solo las tres columnas que la consulta lee. El esquema de verdad lo ejercita
-    /// `crawlforge-core/tests/fixtures_de_reglas.rs`, que rastrea el fixture: aquí no se puede
-    /// cargar la migración porque `crawlforge-rules` no conoce al core.
+    /// Only the three columns the query reads, and that is a choice, not a limitation: the
+    /// migration *can* be loaded here —`http.rs` does it in this same crate with a relative
+    /// `include_str!`, since it is a path and not a crate dependency— but these tests only
+    /// exercise a `SELECT` over three columns and the full schema would add nothing. The real
+    /// schema is exercised by `crawlforge-core/tests/fixtures_de_reglas.rs`, which crawls the
+    /// fixture end to end.
     fn conexion_con_paginas(filas: &[(i64, Option<&str>, i64)]) -> Connection {
         let conn = match Connection::open_in_memory() {
             Ok(c) => c,
-            Err(e) => panic!("abrir sqlite en memoria: {e}"),
+            Err(e) => panic!("open in-memory sqlite: {e}"),
         };
         conn.execute_batch(
             "CREATE TABLE urls (id INTEGER PRIMARY KEY, url_hash INTEGER NOT NULL);
@@ -1265,58 +1275,58 @@ mod tests {
                  is_indexable INTEGER NOT NULL
              );",
         )
-        .expect("crear el esquema mínimo");
+        .expect("create the minimal schema");
         for (i, (hash, desc, indexable)) in filas.iter().enumerate() {
             let id = i as i64 + 1;
             conn.execute("INSERT INTO urls (id, url_hash) VALUES (?1, ?2)", (id, hash))
-                .expect("insertar url");
+                .expect("insert url");
             conn.execute(
                 "INSERT INTO pages (url_id, meta_description, is_indexable) VALUES (?1, ?2, ?3)",
                 (id, desc, indexable),
             )
-            .expect("insertar página");
+            .expect("insert page");
         }
         conn
     }
 
     #[test]
-    fn no_avisa_con_descripciones_distintas() {
+    fn distinct_descriptions_produce_no_finding() {
         let conn = conexion_con_paginas(&[(10, Some("Primera"), 1), (20, Some("Segunda"), 1)]);
-        let hallazgos = MetaDescDuplicate.evaluate(&conn).expect("consultar");
+        let hallazgos = MetaDescDuplicate.evaluate(&conn).expect("query");
         assert!(hallazgos.is_empty());
     }
 
     #[test]
-    fn avisa_de_la_descripcion_repetida_en_las_dos_paginas() {
+    fn a_repeated_description_is_reported_on_both_pages() {
         let conn = conexion_con_paginas(&[
             (10, Some("La misma de siempre"), 1),
             (20, Some("La misma de siempre"), 1),
             (30, Some("Otra"), 1),
         ]);
-        let hallazgos = MetaDescDuplicate.evaluate(&conn).expect("consultar");
-        assert_eq!(hallazgos.len(), 2, "el hallazgo se anota en cada página implicada");
+        let hallazgos = MetaDescDuplicate.evaluate(&conn).expect("query");
+        assert_eq!(hallazgos.len(), 2, "the finding is recorded on every page involved");
         let hashes: Vec<Option<i64>> = hallazgos.iter().map(|(h, _)| *h).collect();
         assert!(hashes.contains(&Some(10)) && hashes.contains(&Some(20)));
-        // Las dos comparten `group_key`, que es lo que permite a la UI decir «en 2 páginas».
+        // Both share the `group_key`, which is what lets the UI say "on 2 pages".
         assert_eq!(hallazgos[0].1.group_key, hallazgos[1].1.group_key);
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
         assert!(detalle.contains("\"pages\":2"), "{detalle}");
     }
 
     #[test]
-    fn las_paginas_no_indexables_no_cuentan_como_duplicados() {
-        // Una descripción repetida entre una página con `noindex` y otra sin él no compite en
-        // resultados: no hay dos fragmentos iguales que Google pueda mostrar.
+    fn non_indexable_pages_do_not_count_as_duplicates() {
+        // A description repeated between a `noindex` page and one without it does not compete
+        // in results: there are no two identical snippets Google could show.
         let conn = conexion_con_paginas(&[(10, Some("Repetida"), 1), (20, Some("Repetida"), 0)]);
-        assert!(MetaDescDuplicate.evaluate(&conn).expect("consultar").is_empty());
+        assert!(MetaDescDuplicate.evaluate(&conn).expect("query").is_empty());
     }
 
     #[test]
-    fn las_descripciones_ausentes_o_vacias_no_son_duplicados() {
-        // Tres páginas sin descripción no son «tres descripciones iguales»: de eso avisa
-        // META-DESC-MISSING una vez por página.
+    fn missing_or_empty_descriptions_are_not_duplicates() {
+        // Three pages without a description are not "three identical descriptions":
+        // META-DESC-MISSING reports that, once per page.
         let conn =
             conexion_con_paginas(&[(10, None, 1), (20, None, 1), (30, Some("  "), 1), (40, Some("  "), 1)]);
-        assert!(MetaDescDuplicate.evaluate(&conn).expect("consultar").is_empty());
+        assert!(MetaDescDuplicate.evaluate(&conn).expect("query").is_empty());
     }
 }

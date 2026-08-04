@@ -211,6 +211,16 @@ pub mod msg {
             en: "Crawl truncated by {reason}. The findings shown are those found up to that point.",
             es: "Rastreo truncado por {reason}. Los hallazgos mostrados son los encontrados hasta ese punto.",
         }
+        // `list_mode` no es un corte: el rastreo hizo exactamente lo que se le pidió, así que
+        // decirle al usuario «tu rastreo se truncó» sería mentir. Lo que sí hay que decirle es
+        // la consecuencia de auditar un conjunto y no un sitio.
+        crawl_list_mode_note() {
+            en: "List crawl: only the URLs you provided were audited. Rules that need the \
+                 site's complete link graph (orphans, incoming links, depth) are not evaluated.",
+            es: "Rastreo en modo lista: solo se auditaron las URLs que diste. Las reglas que \
+                 necesitan el grafo completo del sitio (huérfanas, enlaces entrantes, \
+                 profundidad) no se evalúan.",
+        }
         // El tope de externas no trunca el rastreo del sitio —ese es `crawl_truncated`— pero
         // dejar enlaces sin comprobar en silencio haría que el informe pareciera completo sin
         // serlo, así que se dice cuántos quedaron fuera.
@@ -624,6 +634,15 @@ pub mod msg {
             en: " by {reason}",
             es: " por {reason}",
         }
+        // La variante de `warn_truncated` para `list_mode`: el rastreo no se cortó — es que
+        // un rastreo en modo lista nunca ve más que su lista. La consecuencia para el diff es
+        // la misma (las ausencias no se pueden afirmar) y el motivo, distinto.
+        warn_list_mode(side) {
+            en: "The '{side}' crawl is a list crawl: it only saw the URLs it was given. What \
+                 disappeared or got resolved cannot be asserted.",
+            es: "El rastreo «{side}» es de modo lista: solo vio las URLs que se le dieron. Lo \
+                 que desapareció o se resolvió no se puede afirmar.",
+        }
         warn_unfinished(side, status) {
             en: "The '{side}' crawl did not finish (status '{status}'). Its absences mean nothing.",
             es: "El rastreo «{side}» no terminó (estado «{status}»). Sus ausencias no significan nada.",
@@ -860,6 +879,16 @@ pub mod msg {
                  that point, not the whole site.",
             es: "> **Rastreo truncado** (`{reason}`). Los recuentos son de lo rastreado hasta \
                  ese punto, no del sitio entero.",
+        }
+        // Para `truncated_reason = 'list_mode'`: el rastreo no se cortó, auditó su lista
+        // entera. El informe tiene que decir eso, no «truncado».
+        report_list_mode_note() {
+            en: "> **List crawl.** Only the listed URLs were audited: the counts describe \
+                 that set, not the whole site, and rules that need the site's complete link \
+                 graph are not evaluated.",
+            es: "> **Rastreo en modo lista.** Solo se auditaron las URLs de la lista: los \
+                 recuentos describen ese conjunto, no el sitio entero, y las reglas que \
+                 necesitan el grafo completo del sitio no se evalúan.",
         }
         th_metric() {
             en: "Metric",
@@ -1173,32 +1202,32 @@ mod tests {
 
     #[test]
     fn sin_flag_ni_variable_se_responde_en_ingles() {
-        assert_eq!(resolve_pure(None, None).expect("resolver"), Lang::En);
+        assert_eq!(resolve_pure(None, None).expect("resolve"), Lang::En);
     }
 
     #[test]
     fn la_variable_de_entorno_gobierna_cuando_no_hay_flag() {
-        assert_eq!(resolve_pure(None, Some("es")).expect("resolver"), Lang::Es);
-        assert_eq!(resolve_pure(None, Some("ES-es")).expect("resolver"), Lang::Es);
-        assert_eq!(resolve_pure(None, Some("en")).expect("resolver"), Lang::En);
+        assert_eq!(resolve_pure(None, Some("es")).expect("resolve"), Lang::Es);
+        assert_eq!(resolve_pure(None, Some("ES-es")).expect("resolve"), Lang::Es);
+        assert_eq!(resolve_pure(None, Some("en")).expect("resolve"), Lang::En);
     }
 
     #[test]
     fn el_flag_gana_a_la_variable_de_entorno() {
-        assert_eq!(resolve_pure(Some("en"), Some("es")).expect("resolver"), Lang::En);
-        assert_eq!(resolve_pure(Some("es"), Some("en")).expect("resolver"), Lang::Es);
+        assert_eq!(resolve_pure(Some("en"), Some("es")).expect("resolve"), Lang::En);
+        assert_eq!(resolve_pure(Some("es"), Some("en")).expect("resolve"), Lang::Es);
     }
 
     #[test]
     fn un_flag_desconocido_es_un_error_y_no_un_silencio() {
-        let err = resolve_pure(Some("fr"), None).expect_err("fr no existe");
+        let err = resolve_pure(Some("fr"), None).expect_err("fr does not exist");
         assert!(err.to_string().contains("fr"), "{err}");
     }
 
     #[test]
     fn una_variable_de_entorno_rota_cae_al_ingles_sin_romper_el_comando() {
         // Una CRAWLFORGE_LANG con errata no debe inutilizar todos los comandos de la máquina.
-        assert_eq!(resolve_pure(None, Some("klingon")).expect("resolver"), Lang::En);
+        assert_eq!(resolve_pure(None, Some("klingon")).expect("resolve"), Lang::En);
     }
 
     // ── Números por idioma ───────────────────────────────────────────────────
@@ -1256,14 +1285,14 @@ mod tests {
             (msg::error_store_locked(Lang::En, "x"), msg::error_store_locked(Lang::Es, "x")),
             (msg::interrupt_after_done(Lang::En), msg::interrupt_after_done(Lang::Es)),
         ] {
-            assert_ne!(en, es, "la columna española no puede ser el inglés copiado");
+            assert_ne!(en, es, "the Spanish column must not be the English copied over");
         }
 
         for (aviso, pista) in [
             (msg::resume_robots_not_inherited(Lang::En), "Re-run the original crawl"),
             (msg::resume_robots_not_inherited(Lang::Es), "Vuelve a lanzar el rastreo"),
         ] {
-            assert!(aviso.contains(pista), "el aviso tiene que decir cómo recuperarlo: {aviso}");
+            assert!(aviso.contains(pista), "the notice must say how to get it back: {aviso}");
         }
     }
 

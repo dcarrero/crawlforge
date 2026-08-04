@@ -887,7 +887,7 @@ mod tests {
         let dir = std::env::temp_dir()
             .join(format!("crawlforge-inspect-{}-{nombre}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("crear el directorio temporal");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }
 
@@ -897,7 +897,7 @@ mod tests {
     fn store_de_prueba(nombre: &str) -> PathBuf {
         let dir = tmpdir(nombre);
         let path = dir.join("crawl.sqlite");
-        let conn = crawlforge_core::store::open_writer(&path).expect("crear el rastreo");
+        let conn = crawlforge_core::store::open_writer(&path).expect("create the crawl file");
         conn.execute(
             "INSERT INTO crawl_meta (id, project_id, project_name, base_url, mode, started_at,
                                      status, config_json, core_version, rules_version,
@@ -924,7 +924,7 @@ mod tests {
                     code
                 ],
             )
-            .expect("insertar url");
+            .expect("insert url");
         };
         url(1, "https://ejemplo.es/", 1, "done", Some(200));
         url(2, "https://ejemplo.es/blog/", 1, "done", Some(200));
@@ -939,7 +939,7 @@ mod tests {
             url(100 + i, &format!("https://ejemplo.es/archivo/p{i:02}/"), 1, "done", Some(200));
         }
         conn.execute("UPDATE urls SET redirect_to = 4 WHERE id = 3", [])
-            .expect("marcar la redirección");
+            .expect("mark the redirect");
 
         conn.execute(
             "INSERT INTO pages (url_id, title, title_len, meta_description, meta_desc_len, h1,
@@ -948,13 +948,13 @@ mod tests {
                      'Últimas entradas', 500, 'https://ejemplo.es/blog/', 1, 1)",
             [],
         )
-        .expect("page del blog");
+        .expect("blog page");
         conn.execute(
             "INSERT INTO pages (url_id, title, is_indexable, indexability_reason)
              VALUES (1, 'Ejemplo', 0, 'noindex')",
             [],
         )
-        .expect("page de la portada");
+        .expect("homepage page");
 
         let link = |from: i64, to: i64, anchor: &str, region: &str, nofollow: i64| {
             conn.execute(
@@ -963,7 +963,7 @@ mod tests {
                  VALUES (?1, ?2, ?3, ?4, 'a', ?5, 1)",
                 rusqlite::params![from, to, anchor, nofollow, region],
             )
-            .expect("insertar link");
+            .expect("insert link");
         };
         link(1, 2, "Blog", "nav", 0);
         link(4, 2, "Vuelve al blog", "main", 0);
@@ -981,7 +981,7 @@ mod tests {
              VALUES (2, 6, 'Logotipo de Ejemplo', 1), (2, 7, NULL, 0)",
             [],
         )
-        .expect("imágenes");
+        .expect("images");
 
         conn.execute(
             "INSERT INTO issues (url_id, rule_id, severity, category)
@@ -991,14 +991,14 @@ mod tests {
                     (NULL, 'SITEMAP-MISSING', 'medium', 'sitemap')",
             [],
         )
-        .expect("hallazgos");
+        .expect("findings");
         drop(conn);
         path
     }
 
     fn ficha(store: &Path, input: &str) -> String {
         render_card(store, input, ListLimit::N(DEFAULT_LIMIT), "terminal", Lang::En)
-            .expect("la ficha debe generarse")
+            .expect("the card must render")
     }
 
     // ── Lo que enseña la ficha ───────────────────────────────────────────────
@@ -1009,27 +1009,27 @@ mod tests {
         let s = ficha(&store, "https://ejemplo.es/blog/");
 
         // Estado.
-        assert!(s.contains("200"), "el código HTTP: {s}");
-        assert!(s.contains("text/html"), "el tipo de contenido: {s}");
-        assert!(s.contains("120 ms"), "el tiempo de respuesta: {s}");
+        assert!(s.contains("200"), "the HTTP status code: {s}");
+        assert!(s.contains("text/html"), "the content type: {s}");
+        assert!(s.contains("120 ms"), "the response time: {s}");
         // Extracción.
-        assert!(s.contains("El blog de Ejemplo"), "el título: {s}");
-        assert!(s.contains("Las novedades de Ejemplo."), "la meta description: {s}");
-        assert!(s.contains("Últimas entradas"), "el h1: {s}");
-        assert!(s.contains("500"), "el recuento de palabras: {s}");
-        assert!(s.contains("self"), "el canonical a sí misma se dice, no se repite: {s}");
+        assert!(s.contains("El blog de Ejemplo"), "the title: {s}");
+        assert!(s.contains("Las novedades de Ejemplo."), "the meta description: {s}");
+        assert!(s.contains("Últimas entradas"), "the h1: {s}");
+        assert!(s.contains("500"), "the word count: {s}");
+        assert!(s.contains("self"), "a self-canonical is stated, not repeated: {s}");
         // Hallazgos de la URL, con severidad; el hallazgo de sitio (url_id NULL) no es suyo.
         assert!(s.contains("META-DESC-MISSING"), "{s}");
         assert!(s.contains("high"), "{s}");
-        assert!(s.contains("×2"), "dos filas de la misma regla se agrupan: {s}");
-        assert!(!s.contains("SITEMAP-MISSING"), "lo de sitio no se cuelga de una URL: {s}");
+        assert!(s.contains("×2"), "two rows of the same rule are grouped: {s}");
+        assert!(!s.contains("SITEMAP-MISSING"), "site-wide findings do not hang off a URL: {s}");
     }
 
     #[test]
     fn una_pagina_no_indexable_dice_su_motivo() {
         let store = store_de_prueba("noindex");
         let s = ficha(&store, "https://ejemplo.es/");
-        assert!(s.contains("noindex"), "el motivo es el valor de la columna: {s}");
+        assert!(s.contains("noindex"), "the reason is the column value: {s}");
     }
 
     #[test]
@@ -1056,23 +1056,23 @@ mod tests {
     fn el_enlace_de_contenido_va_antes_que_el_de_plantilla() {
         let store = store_de_prueba("orden");
         let s = ficha(&store, "https://ejemplo.es/blog/");
-        let main = s.find("\"Vuelve al blog\"").expect("el enlace de contenido está");
-        let nav = s.find("\"Blog\"").expect("el de plantilla también");
-        assert!(main < nav, "el de contenido se lista primero: {s}");
+        let main = s.find("\"Vuelve al blog\"").expect("the content link is there");
+        let nav = s.find("\"Blog\"").expect("the template one too");
+        assert!(main < nav, "the content link is listed first: {s}");
     }
 
     #[test]
     fn los_entrantes_se_cortan_al_limite_y_dicen_como_verlos_todos() {
         let store = store_de_prueba("corte");
         let s = render_card(&store, "https://ejemplo.es/blog/", ListLimit::N(5), "terminal", Lang::En)
-            .expect("la ficha debe generarse");
+            .expect("the card must render");
 
         // Se cuenta dentro de la sección de entrantes: otras secciones también listan URLs.
-        let inicio = s.find("Inlinks").expect("hay sección de entrantes");
-        let fin = s.find("Outlinks").expect("hay sección de salientes");
+        let inicio = s.find("Inlinks").expect("there is an inlinks section");
+        let fin = s.find("Outlinks").expect("there is an outlinks section");
         let seccion = &s[inicio..fin];
         let lineas_con_url = seccion.lines().filter(|l| l.contains("— https://")).count();
-        assert_eq!(lineas_con_url, 5, "se listan exactamente las pedidas: {seccion}");
+        assert_eq!(lineas_con_url, 5, "exactly the requested ones are listed: {seccion}");
         // El corte dice el comando exacto, con el fichero y la URL entre comillas.
         assert!(s.contains("--limit all"), "{s}");
         assert!(s.contains("crawlforge inspect"), "{s}");
@@ -1085,9 +1085,9 @@ mod tests {
     fn limit_all_lista_todas_las_paginas_sin_corte() {
         let store = store_de_prueba("todo");
         let s = render_card(&store, "https://ejemplo.es/blog/", ListLimit::All, "terminal", Lang::En)
-            .expect("la ficha debe generarse");
-        assert!(s.contains("/archivo/p29/"), "la última página del archivo sale: {s}");
-        assert!(!s.contains("--limit all"), "sin corte no hay línea de corte: {s}");
+            .expect("the card must render");
+        assert!(s.contains("/archivo/p29/"), "the last archive page shows up: {s}");
+        assert!(!s.contains("--limit all"), "without truncation there is no truncation line: {s}");
     }
 
     #[test]
@@ -1113,7 +1113,7 @@ mod tests {
             let s = ficha(&store, entrada);
             assert!(
                 s.contains("El blog de Ejemplo"),
-                "'{entrada}' debe resolver a la ficha del blog: {s}"
+                "'{entrada}' must resolve to the blog card: {s}"
             );
         }
     }
@@ -1128,12 +1128,12 @@ mod tests {
             "terminal",
             Lang::En,
         )
-        .expect_err("una URL que no está es un error");
+        .expect_err("a URL that is not there is an error");
         let msg = format!("{err:#}");
         assert!(msg.contains("is not in this crawl"), "{msg}");
         assert!(
             msg.contains("https://ejemplo.es/contacto"),
-            "sugiere lo más parecido en vez de solo negar: {msg}"
+            "suggests the closest match instead of just denying: {msg}"
         );
     }
 
@@ -1141,10 +1141,10 @@ mod tests {
     fn una_entrada_sin_nada_parecido_no_inventa_sugerencias() {
         let store = store_de_prueba("sin-parecidas");
         let err = render_card(&store, "zzz-que-no-existe", ListLimit::N(20), "terminal", Lang::En)
-            .expect_err("no está");
+            .expect_err("not there");
         let msg = format!("{err:#}");
         assert!(msg.contains("is not in this crawl"), "{msg}");
-        assert!(!msg.contains("closest"), "sin parecidas no hay lista vacía: {msg}");
+        assert!(!msg.contains("closest"), "with no close matches there is no empty list: {msg}");
     }
 
     // ── Redirecciones, salientes, imágenes y estados ─────────────────────────
@@ -1156,8 +1156,8 @@ mod tests {
         assert!(s.contains("Redirect chain"), "{s}");
         assert!(s.contains("301"), "{s}");
         let p301 = s.find("301").expect("301");
-        let destino = s.rfind("https://ejemplo.es/contacto/").expect("el destino sale");
-        assert!(p301 < destino, "el salto antes que el destino: {s}");
+        let destino = s.rfind("https://ejemplo.es/contacto/").expect("the target shows up");
+        assert!(p301 < destino, "the hop before the target: {s}");
     }
 
     #[test]
@@ -1165,14 +1165,14 @@ mod tests {
         // Un fichero fabricado puede traer a→b→a: sin guarda, la ficha no termina nunca.
         let store = store_de_prueba("bucle");
         {
-            let conn = rusqlite::Connection::open(&store).expect("abrir para viciar");
+            let conn = rusqlite::Connection::open(&store).expect("open to tamper");
             conn.execute("UPDATE urls SET redirect_to = 3 WHERE id = 4", [])
-                .expect("cerrar el bucle");
+                .expect("close the loop");
             conn.execute("UPDATE urls SET status_code = 301 WHERE id = 4", [])
-                .expect("que parezca redirección");
+                .expect("make it look like a redirect");
         }
         let s = ficha(&store, "https://ejemplo.es/contacto");
-        assert!(s.contains("redirect loop"), "el bucle se nombra en vez de colgarse: {s}");
+        assert!(s.contains("redirect loop"), "the loop is named instead of hanging: {s}");
     }
 
     #[test]
@@ -1203,7 +1203,7 @@ mod tests {
         let s = ficha(&store, "https://ejemplo.es/logo.png");
         assert!(s.contains("Used as an image"), "{s}");
         assert!(s.contains("embedded 1 times on 1 pages"), "{s}");
-        assert!(s.contains("https://ejemplo.es/blog/"), "quién la usa: {s}");
+        assert!(s.contains("https://ejemplo.es/blog/"), "who uses it: {s}");
     }
 
     #[test]
@@ -1222,18 +1222,18 @@ mod tests {
     fn el_formato_md_es_markdown_pegable() {
         let store = store_de_prueba("md");
         let s = render_card(&store, "https://ejemplo.es/blog/", ListLimit::N(20), "md", Lang::En)
-            .expect("la ficha en md debe generarse");
+            .expect("the md card must render");
         assert!(s.starts_with("# https://ejemplo.es/blog/"), "{s}");
-        assert!(s.contains("\n## "), "las secciones son encabezados: {s}");
-        assert!(s.contains("- **"), "los pares etiqueta-valor son lista: {s}");
-        assert!(!s.contains("──"), "sin cajas de terminal dentro del markdown: {s}");
+        assert!(s.contains("\n## "), "sections are headings: {s}");
+        assert!(s.contains("- **"), "label-value pairs are a list: {s}");
+        assert!(!s.contains("──"), "no terminal boxes inside the markdown: {s}");
     }
 
     #[test]
     fn un_formato_desconocido_es_un_error_que_lista_los_validos() {
         let store = store_de_prueba("formato");
         let err = render_card(&store, "https://ejemplo.es/blog/", ListLimit::N(20), "pdf", Lang::En)
-            .expect_err("pdf no existe");
+            .expect_err("pdf does not exist");
         let msg = err.to_string();
         assert!(msg.contains("terminal") && msg.contains("md"), "{msg}");
     }
@@ -1248,7 +1248,7 @@ mod tests {
             "terminal",
             Lang::Es,
         )
-        .expect("la ficha debe generarse");
+        .expect("the card must render");
         assert!(s.contains("Enlaces entrantes (33)"), "{s}");
         assert!(s.contains("Hallazgos"), "{s}");
         assert!(s.contains("lista completa:"), "{s}");
@@ -1265,16 +1265,16 @@ mod tests {
         // secuencias de escape no debe poder pintar el terminal de quien inspecciona.
         let store = store_de_prueba("control");
         {
-            let conn = rusqlite::Connection::open(&store).expect("abrir para viciar");
+            let conn = rusqlite::Connection::open(&store).expect("open to tamper");
             conn.execute(
                 "UPDATE links SET anchor = 'ancla' || char(27) || '[31mroja' WHERE anchor = 'Vuelve al blog'",
                 [],
             )
-            .expect("inyectar el escape");
+            .expect("inject the escape");
         }
         let s = ficha(&store, "https://ejemplo.es/blog/");
-        assert!(!s.contains('\u{1b}'), "ningún escape sobrevive: {s:?}");
-        assert!(s.contains("anclaroja") || s.contains("ancla"), "el texto útil queda: {s}");
+        assert!(!s.contains('\u{1b}'), "no escape survives: {s:?}");
+        assert!(s.contains("anclaroja") || s.contains("ancla"), "the useful text remains: {s}");
     }
 
     #[test]
@@ -1283,7 +1283,7 @@ mod tests {
         let antes = std::fs::metadata(&store).and_then(|m| m.modified()).expect("mtime");
         let _ = ficha(&store, "https://ejemplo.es/blog/");
         let despues = std::fs::metadata(&store).and_then(|m| m.modified()).expect("mtime");
-        assert_eq!(antes, despues, "inspeccionar jamás escribe");
+        assert_eq!(antes, despues, "inspecting never writes");
     }
 
     // ── El flag --limit ──────────────────────────────────────────────────────
@@ -1294,8 +1294,8 @@ mod tests {
         assert_eq!(parse_limit("all"), Ok(ListLimit::All));
         assert_eq!(parse_limit("ALL"), Ok(ListLimit::All));
         for malo in ["0", "-3", "muchos", ""] {
-            let err = parse_limit(malo).expect_err("fuera del contrato");
-            assert!(err.contains("all"), "el error dice el contrato: {err}");
+            let err = parse_limit(malo).expect_err("outside the contract");
+            assert!(err.contains("all"), "the error states the contract: {err}");
         }
     }
 

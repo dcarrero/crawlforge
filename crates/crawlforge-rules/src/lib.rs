@@ -1,26 +1,26 @@
-//! Catálogo de reglas de auditoría. Ver `docs/04-CATALOGO-REGLAS.md`.
+//! The audit rule catalog. See `docs/04-CATALOGO-REGLAS.md`.
 //!
-//! Crate aparte a propósito: **las reglas son el producto** y evolucionan a otro ritmo que el
-//! motor.
+//! A separate crate on purpose: **the rules are the product** and they evolve at a different
+//! pace than the engine.
 //!
-//! Dos modos de evaluación:
+//! Two evaluation modes:
 //!
-//! - [`PageRule`] se evalúa durante el rastreo, en streaming, sobre una página suelta. Barato.
-//! - [`SiteRule`] necesita el rastreo completo (duplicados, huérfanas, profundidad) y se
-//!   ejecuta en una pasada final con SQL sobre el almacén.
+//! - [`PageRule`] is evaluated during the crawl, in streaming, over a single page. Cheap.
+//! - [`SiteRule`] needs the complete crawl (duplicates, orphans, depth) and runs in a final
+//!   pass with SQL over the store.
 //!
-//! # Cómo se añade una regla
+//! # How a rule is added
 //!
-//! 1. Declara su [`RuleMeta`] como `pub static` en el módulo de su categoría. El ID es para
-//!    siempre: un diff histórico depende de que no cambie de significado.
-//! 2. Implementa [`PageRule`] o [`SiteRule`] sobre un struct vacío.
-//! 3. Añádela a la función `page_rules()` o `site_rules()` de su módulo.
-//! 4. Escribe su fixture en `fixtures/<RULE-ID>.html` y su test en el módulo. **Las dos cosas,
-//!    sin excepción.** Un test comprueba que ninguna regla se queda sin fixture, y otro que el
-//!    fixture dispara la regla al rastrearlo de verdad.
+//! 1. Declare its [`RuleMeta`] as a `pub static` in its category's module. The ID is forever:
+//!    a historical diff depends on it never changing meaning.
+//! 2. Implement [`PageRule`] or [`SiteRule`] on an empty struct.
+//! 3. Add it to its module's `page_rules()` or `site_rules()` function.
+//! 4. Write its fixture in `fixtures/<RULE-ID>.html` and its test in the module. **Both, no
+//!    exceptions.** One test checks that no rule is left without a fixture, and another that
+//!    the fixture triggers the rule when actually crawled.
 //!
-//! `MetaTitleMissing` y `MetaTitleDuplicate` son los dos ejemplos a copiar: una de página y una
-//! de conjunto, con su meta, su evaluación y sus tests.
+//! `MetaTitleMissing` and `MetaTitleDuplicate` are the two examples to copy: one page rule and
+//! one site rule, with their meta, their evaluation and their tests.
 
 use rusqlite::Connection;
 
@@ -32,6 +32,11 @@ pub mod http;
 pub mod index;
 pub mod meta;
 pub mod social;
+
+/// The complete published schema for unit tests. One list, guarded by a test that reads the
+/// `migrations/` directory — never write a per-module migration list again.
+#[cfg(test)]
+mod test_schema;
 
 pub use index::{deep_page_shape, DeepPageShape};
 
@@ -57,7 +62,7 @@ impl Severity {
     }
 }
 
-/// Familia de la regla. Se corresponde con el prefijo del ID y con las secciones de
+/// The rule's family. Maps to the ID prefix and to the sections of
 /// `docs/04-CATALOGO-REGLAS.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -94,8 +99,8 @@ impl Category {
         }
     }
 
-    /// Prefijos de ID admitidos para esta categoría. Un test comprueba que el ID de cada regla
-    /// empieza por uno de ellos: es la forma de que la categoría y el ID no se contradigan.
+    /// ID prefixes accepted for this category. A test checks that every rule's ID starts with
+    /// one of them: it is how the category and the ID are kept from contradicting each other.
     pub fn id_prefixes(self) -> &'static [&'static str] {
         match self {
             Self::Indexability => &["INDEX"],
@@ -114,7 +119,7 @@ impl Category {
     }
 }
 
-/// Nivel a partir del cual una regla se aplica.
+/// Tier from which a rule applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
@@ -123,21 +128,21 @@ pub enum Tier {
     Agency,
 }
 
-/// Cuándo se puede decidir la regla.
+/// When the rule can be decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
-    /// Con la página delante, durante el rastreo.
+    /// With the page in front of you, during the crawl.
     Page,
-    /// Solo con el rastreo terminado: duplicados, huérfanas, cadenas de redirección.
+    /// Only once the crawl is done: duplicates, orphans, redirect chains.
     Site,
 }
 
-/// Referencia normativa de un hallazgo.
+/// Normative reference for a finding.
 ///
-/// Existe desde ya, vacía en casi todas las reglas, porque el futuro bloque de
-/// accesibilidad tiene que citar WCAG 2.1 AA, EN 301 549 y la Directiva UE 2019/882, y añadir
-/// el campo entonces obligaría a tocar las ~85 reglas. Ver `docs/04-CATALOGO-REGLAS.md §12`.
+/// It exists from day one, empty in almost every rule, because the future accessibility block
+/// has to cite WCAG 2.1 AA, EN 301 549 and EU Directive 2019/882, and adding the field then
+/// would mean touching all ~85 rules. See `docs/04-CATALOGO-REGLAS.md §12`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reference {
     pub standard: &'static str,
@@ -145,23 +150,23 @@ pub struct Reference {
     pub url: &'static str,
 }
 
-/// Todo lo que se sabe de una regla sin evaluarla.
+/// Everything known about a rule without evaluating it.
 ///
-/// Está separado de la implementación para que la CLI y las UI puedan listar el catálogo, y para
-/// que los textos vivan **en el crate** y no en cada interfaz: si el nombre de una regla estuviera
-/// en la app de macOS, Windows y la CLI dirían cosas distintas.
+/// Kept separate from the implementation so the CLI and the UIs can list the catalog, and so
+/// the texts live **in the crate** and not in each interface: if a rule's name lived in the
+/// macOS app, Windows and the CLI would say different things.
 #[derive(Debug, Clone, Copy)]
 pub struct RuleMeta {
-    /// `CATEGORIA-SUJETO-CONDICION`, en inglés y estable para siempre.
+    /// `CATEGORY-SUBJECT-CONDITION`, in English and stable forever.
     pub id: &'static str,
     pub severity: Severity,
     pub category: Category,
     pub min_tier: Tier,
     pub scope: Scope,
-    /// Nombre corto, para la columna de una tabla.
+    /// Short name, for a table column.
     pub name_es: &'static str,
     pub name_en: &'static str,
-    /// Qué es y por qué importa. Es lo que el usuario lee para decidir si le hace caso.
+    /// What it is and why it matters. It is what the user reads to decide whether to act on it.
     pub desc_es: &'static str,
     pub desc_en: &'static str,
     pub references: &'static [Reference],
@@ -183,16 +188,16 @@ impl RuleMeta {
     }
 }
 
-/// Idiomas del catálogo.
+/// Catalog languages.
 ///
-/// **El inglés es el idioma de origen y el español una traducción**, no al revés: es el orden en
-/// que se publica el producto y el que decide qué texto manda cuando los dos discrepan.
+/// **English is the source language and Spanish a translation**, not the other way around: it
+/// is the order the product ships in, and it decides which text wins when the two disagree.
 ///
-/// Los dos existen desde el día uno, no como retrofit. Cuando entre un tercer idioma, los campos
-/// `name_*` y `desc_*` de [`RuleMeta`] dejarán de servir —no se puede añadir un par de campos por
-/// idioma a cincuenta reglas— y habrá que mover los textos a un catálogo aparte indexado por
-/// idioma. La API de [`RuleMeta::name`] y [`RuleMeta::description`] ya está pensada para que ese
-/// cambio no se note fuera de este crate.
+/// Both exist from day one, not as a retrofit. When a third language comes in, the `name_*` and
+/// `desc_*` fields of [`RuleMeta`] will stop working —you cannot add a pair of fields per
+/// language to fifty rules— and the texts will have to move to a separate catalog indexed by
+/// language. The [`RuleMeta::name`] and [`RuleMeta::description`] API is already shaped so that
+/// change goes unnoticed outside this crate.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Lang {
     #[default]
@@ -212,21 +217,21 @@ impl Lang {
 
 pub const RULES_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Un hallazgo. Se corresponde con una fila de `issues`.
+/// A finding. Maps to one row of `issues`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issue {
     pub rule_id: &'static str,
     pub severity: Severity,
     pub category: Category,
     pub detail_json: Option<String>,
-    /// Agrupa hallazgos equivalentes: el hash del título repetido, por ejemplo. Permite que la
-    /// UI diga «este título está en 14 páginas» en vez de listar 14 hallazgos sueltos.
+    /// Groups equivalent findings: the hash of a duplicated title, for example. Lets the UI
+    /// say "this title is on 14 pages" instead of listing 14 loose findings.
     pub group_key: Option<String>,
 }
 
 impl Issue {
-    /// Un hallazgo de esta regla, sin detalle. Copia severidad y categoría de la meta para que
-    /// no puedan desincronizarse.
+    /// A finding for this rule, with no detail. Copies severity and category from the meta so
+    /// they cannot drift apart.
     pub fn new(meta: &'static RuleMeta) -> Self {
         Self {
             rule_id: meta.id,
@@ -237,22 +242,22 @@ impl Issue {
         }
     }
 
-    /// Detalle en JSON. Es lo que la UI usa para explicar el hallazgo concreto: el título que se
-    /// repite, los milisegundos que tardó, la URL de destino.
+    /// Detail as JSON. It is what the UI uses to explain the concrete finding: the title being
+    /// duplicated, the milliseconds it took, the destination URL.
     pub fn with_detail(mut self, detail: serde_json::Value) -> Self {
         self.detail_json = Some(detail.to_string());
         self
     }
 
-    /// Ajusta la severidad de **este hallazgo**, apartándola de la que declara la regla.
+    /// Adjusts the severity of **this finding**, moving it away from what the rule declares.
     ///
-    /// La severidad de [`RuleMeta`] es la del caso general; hay hallazgos donde el mismo dato
-    /// pesa distinto y la regla lo sabe con certeza —un `noindex` en la portada no es un
-    /// `noindex` en una etiqueta; un título repetido dentro de una serie paginada no es el mismo
-    /// defecto que dos artículos compitiendo—. Este método existe para esos casos y solo para
-    /// ellos: el ajuste tiene que estar razonado en la regla que lo hace, y el `detail_json`
-    /// tiene que decir por qué, porque una severidad que cambia sin explicación en el informe es
-    /// peor que una constante equivocada.
+    /// The severity in [`RuleMeta`] is the general case's; there are findings where the same
+    /// fact weighs differently and the rule knows it for certain —a `noindex` on the home page
+    /// is not a `noindex` on a tag page; a title repeated within a paginated series is not the
+    /// same defect as two articles competing—. This method exists for those cases and only for
+    /// them: the adjustment has to be reasoned in the rule that makes it, and the `detail_json`
+    /// has to say why, because a severity that changes without explanation in the report is
+    /// worse than a wrong constant.
     pub fn with_severity(mut self, severity: Severity) -> Self {
         self.severity = severity;
         self
@@ -264,16 +269,16 @@ impl Issue {
     }
 }
 
-/// Una imagen de la página, tal como la ve una regla.
+/// An image on the page, as a rule sees it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ImageView<'a> {
     pub src: &'a str,
-    /// `None` es «sin atributo `alt`»; `Some("")` es un `alt=""` deliberado de imagen
-    /// decorativa. Son cosas distintas y hay una regla para cada una.
+    /// `None` is "no `alt` attribute"; `Some("")` is a deliberate decorative-image `alt=""`.
+    /// They are different things and there is a rule for each.
     pub alt: Option<&'a str>,
     pub width_attr: Option<i64>,
     pub height_attr: Option<i64>,
-    /// Texto del `<a>` que envuelve la imagen. `None` si no va dentro de un enlace.
+    /// Text of the `<a>` wrapping the image. `None` if it is not inside a link.
     pub anchor_text: Option<&'a str>,
 }
 
@@ -283,38 +288,40 @@ impl ImageView<'_> {
     }
 }
 
-/// Un enlace o recurso de la página.
+/// A link or resource on the page.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LinkView<'a> {
-    /// El `href` **tal como venía en el HTML**: puede ser relativo, absoluto o sin esquema.
+    /// The `href` **exactly as it came in the HTML**: it can be relative, absolute or
+    /// scheme-less.
     ///
-    /// No se resuelve a absoluto a propósito. Resolverlo obligaría a construir una cadena nueva
-    /// por enlace, y en un sitio muy enlazado eso son millones de asignaciones que ninguna regla
-    /// necesita: `is_internal` ya viene resuelto, y las reglas que miran el esquema —contenido
-    /// mixto— quieren precisamente saber si el HTML dice `http://` de forma explícita, porque un
-    /// enlace relativo hereda el de la página y nunca es contenido mixto.
+    /// It is not resolved to absolute on purpose. Resolving it would mean building a new
+    /// string per link, and on a heavily linked site that is millions of allocations no rule
+    /// needs: `is_internal` already arrives resolved, and the rules that look at the scheme
+    /// —mixed content— want precisely to know whether the HTML says `http://` explicitly,
+    /// because a relative link inherits the page's scheme and is never mixed content.
     pub href: &'a str,
     pub anchor: Option<&'a str>,
     pub is_nofollow: bool,
     pub is_internal: bool,
-    /// `true` para `<img>`, `<script src>` y `<link rel=stylesheet>`: son recursos que la página
-    /// carga, no enlaces que el usuario sigue.
+    /// `true` for `<img>`, `<script src>` and `<link rel=stylesheet>`: resources the page
+    /// loads, not links the user follows.
     pub is_resource: bool,
-    /// `true` si el destino es infraestructura del CDN y no contenido del sitio.
+    /// `true` if the destination is CDN infrastructure and not site content.
     ///
-    /// Hoy significa `/cdn-cgi/`, el prefijo reservado de Cloudflare. Lo que lo hizo necesario:
-    /// Cloudflare reescribe las direcciones de correo del HTML como
-    /// `/cdn-cgi/l/email-protection#…` con `rel=nofollow`, y eso hacía que
-    /// `INDEX-NOFOLLOW-INTERNAL` avisara en 39 de 40 páginas de un sitio real por algo que nadie
-    /// puso ahí ni puede quitar. Una regla que habla de los enlaces del sitio debe ignorarlos.
+    /// Today it means `/cdn-cgi/`, Cloudflare's reserved prefix. What made it necessary:
+    /// Cloudflare rewrites the email addresses in the HTML as
+    /// `/cdn-cgi/l/email-protection#…` with `rel=nofollow`, and that made
+    /// `INDEX-NOFOLLOW-INTERNAL` warn on 39 of 40 pages of a real site about something nobody
+    /// put there and nobody can remove. A rule that talks about the site's links must ignore
+    /// them.
     pub is_infrastructure: bool,
 }
 
-/// Lo que una regla de página necesita saber para decidir.
+/// What a page rule needs to know in order to decide.
 ///
-/// Es deliberadamente plano y prestado: se construye una vez por página durante el rastreo y
-/// no debe obligar a copiar cadenas. Implementa [`Default`] para que un test solo tenga que
-/// escribir los campos que le importan; para el caso normal, [`PageContext::indexable_html`].
+/// Deliberately flat and borrowed: it is built once per page during the crawl and must not
+/// force string copies. Implements [`Default`] so a test only has to write the fields it cares
+/// about; for the normal case, [`PageContext::indexable_html`].
 #[derive(Debug, Clone, Default)]
 pub struct PageContext<'a> {
     pub url: &'a str,
@@ -322,10 +329,10 @@ pub struct PageContext<'a> {
     pub is_html: bool,
     pub is_internal: bool,
     pub is_https: bool,
-    /// La URL está bloqueada por `robots.txt` pero se llegó a ella por un enlace interno.
+    /// The URL is blocked by `robots.txt` but was reached through an internal link.
     pub blocked_by_robots: bool,
     pub content_type: Option<&'a str>,
-    /// Time to first byte. `None` en el modo `filesystem`, donde no significa nada.
+    /// Time to first byte. `None` in `filesystem` mode, where it means nothing.
     pub ttfb_ms: Option<u32>,
     pub html_bytes: u64,
     pub title: Option<&'a str>,
@@ -338,54 +345,56 @@ pub struct PageContext<'a> {
     pub lang: Option<&'a str>,
     pub h1: Option<&'a str>,
     pub h1_count: u32,
-    /// Niveles de los encabezados en el orden en que aparecen. `[1, 2, 4]` es un salto.
+    /// Heading levels in the order they appear. `[1, 2, 4]` is a skip.
     pub heading_levels: &'a [u8],
-    /// Texto de cada encabezado, en el mismo orden que [`Self::heading_levels`].
+    /// Text of each heading, in the same order as [`Self::heading_levels`].
     ///
-    /// Existe porque el diagnóstico de un salto de encabezados **es su texto**: el `detail_json`
-    /// de `CONTENT-HEADING-SKIP` decía `{"from":1,"to":4}` en 16.764 páginas de un rastreo real
-    /// y hubo que abrir el HTML a mano para descubrir que el culpable era un único
-    /// `<h4>` de la firma del autor. Los tests pueden dejarlo vacío: la regla trata la ausencia
-    /// de texto como «no se sabe», nunca como error.
+    /// It exists because the diagnosis of a heading skip **is its text**: the `detail_json` of
+    /// `CONTENT-HEADING-SKIP` said `{"from":1,"to":4}` on 16,764 pages of a real crawl and the
+    /// HTML had to be opened by hand to discover that the culprit was a single `<h4>` in the
+    /// author's signature. Tests may leave it empty: the rule treats missing text as "unknown",
+    /// never as an error.
     pub heading_texts: &'a [&'a str],
-    /// Canonical resuelto a absoluto.
+    /// Canonical resolved to absolute.
     pub canonical: Option<&'a str>,
-    /// Canonical tal como venía en el HTML, para distinguir el relativo del absoluto.
+    /// Canonical exactly as it came in the HTML, to tell relative from absolute.
     pub canonical_raw: Option<&'a str>,
     pub canonical_count: u32,
     pub is_indexable: bool,
     pub word_count: u32,
     pub images: &'a [ImageView<'a>],
     pub links: &'a [LinkView<'a>],
-    /// `(código, href)` de cada `link rel=alternate hreflang`, con el href **tal como venía en
-    /// el HTML**: igual que en [`LinkView::href`], puede ser relativo. Quien compare destinos
-    /// tiene que resolverlo contra [`Self::url`].
+    /// `(code, href)` of each `link rel=alternate hreflang`, with the href **exactly as it
+    /// came in the HTML**: as in [`LinkView::href`], it can be relative. Whoever compares
+    /// destinations has to resolve it against [`Self::url`].
     pub hreflang: &'a [(&'a str, &'a str)],
-    /// Claves Open Graph presentes: `og:title`, `og:image`…
+    /// Open Graph keys present: `og:title`, `og:image`…
     pub og_keys: &'a [&'a str],
 }
 
 impl<'a> PageContext<'a> {
-    /// ¿La respuesta sirvió contenido con éxito (2xx)?
+    /// Did the response serve content successfully (2xx)?
     ///
-    /// Es la puerta de entrada de las reglas que auditan **el HTML servido** —imágenes, enlaces,
-    /// canonicals, hreflang— y que no filtran por `is_indexable`. Sin ella, la plantilla de error
-    /// del tema se audita una vez por cada URL rota: en un rastreo real, cada 404 producía tres
-    /// hallazgos —el 404, el logo sin nombre accesible y el nofollow del pie— cuando el único
-    /// accionable es el 404, que ya tiene su regla `HTTP`. Un 301 con cuerpo HTML tampoco se
-    /// audita: ese cuerpo no lo ve nadie, el navegador y Google siguen la redirección.
+    /// It is the entry gate for the rules that audit **the served HTML** —images, links,
+    /// canonicals, hreflang— and that do not filter on `is_indexable`. Without it, the theme's
+    /// error template gets audited once per broken URL: in a real crawl, every 404 produced
+    /// three findings —the 404, the logo with no accessible name and the footer's nofollow—
+    /// when the only actionable one is the 404, which already has its `HTTP` rule. A 301 with
+    /// an HTML body is not audited either: nobody sees that body, the browser and Google
+    /// follow the redirect.
     ///
-    /// Las reglas cuya conclusión **es** el código de estado (`HTTP-5XX`) o que miden el servidor
-    /// y no el HTML (`HTTP-SLOW-RESPONSE`: un TTFB lento lo es con cualquier estado) no la usan.
+    /// The rules whose conclusion **is** the status code (`HTTP-5XX`) or that measure the
+    /// server and not the HTML (`HTTP-SLOW-RESPONSE`: a slow TTFB is slow whatever the status)
+    /// do not use it.
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status)
     }
 
-    /// Una página HTML interna, indexable y sana. **Pensado para los tests:** deja que cada uno
-    /// escriba solo el defecto que quiere provocar, en vez de veintiocho campos.
+    /// An internal, indexable, healthy HTML page. **Meant for tests:** lets each one write
+    /// only the defect it wants to provoke, instead of thirty fields.
     ///
-    /// El `word_count` va por encima del umbral de `CONTENT-THIN` a propósito, para que el test
-    /// de una regla no dispare otra por descuido.
+    /// The `word_count` sits above the `CONTENT-THIN` threshold on purpose, so one rule's test
+    /// does not trip another by accident.
     pub fn indexable_html(url: &'a str) -> Self {
         Self {
             url,
@@ -401,7 +410,7 @@ impl<'a> PageContext<'a> {
     }
 }
 
-/// Regla evaluable sobre una sola página, durante el rastreo.
+/// Rule evaluable over a single page, during the crawl.
 pub trait PageRule: Send + Sync {
     fn meta(&self) -> &'static RuleMeta;
     fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue>;
@@ -420,10 +429,10 @@ pub trait PageRule: Send + Sync {
     }
 }
 
-/// Regla que necesita el rastreo entero. Se ejecuta al final, con SQL sobre el almacén.
+/// Rule that needs the whole crawl. Runs at the end, with SQL over the store.
 pub trait SiteRule: Send + Sync {
     fn meta(&self) -> &'static RuleMeta;
-    /// Devuelve `(url_hash, issue)`. Un `None` en el hash es un hallazgo de sitio.
+    /// Returns `(url_hash, issue)`. A `None` hash is a site-wide finding.
     fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>>;
 
     fn id(&self) -> &'static str {
@@ -440,7 +449,7 @@ pub trait SiteRule: Send + Sync {
     }
 }
 
-/// Todas las reglas de página del catálogo, en orden de categoría.
+/// Every page rule in the catalog, in category order.
 pub fn page_rules() -> Vec<Box<dyn PageRule>> {
     let mut out = Vec::new();
     out.extend(index::page_rules());
@@ -454,7 +463,7 @@ pub fn page_rules() -> Vec<Box<dyn PageRule>> {
     out
 }
 
-/// Todas las reglas de conjunto del catálogo, en orden de categoría.
+/// Every site rule in the catalog, in category order.
 pub fn site_rules() -> Vec<Box<dyn SiteRule>> {
     let mut out = Vec::new();
     out.extend(index::site_rules());
@@ -468,41 +477,41 @@ pub fn site_rules() -> Vec<Box<dyn SiteRule>> {
     out
 }
 
-/// El catálogo completo, para `crawlforge rules` y para la lista de la UI.
+/// The complete catalog, for `crawlforge rules` and for the UI's list.
 ///
-/// Se deriva del registro en vez de mantener una lista aparte: una regla implementada pero no
-/// registrada no aparecería, y una registrada no puede faltar aquí.
+/// Derived from the registry instead of maintaining a separate list: a rule implemented but
+/// not registered would not show up, and a registered one cannot be missing here.
 pub fn catalog() -> Vec<&'static RuleMeta> {
     let mut out: Vec<&'static RuleMeta> = page_rules().iter().map(|r| r.meta()).collect();
     out.extend(site_rules().iter().map(|r| r.meta()));
     out
 }
 
-/// Reglas que no se pueden afirmar sobre un rastreo truncado.
+/// Rules that cannot be asserted over a truncated crawl.
 ///
-/// Su conclusión depende de que el grafo de enlaces esté **completo**. Si el rastreo se cortó
-/// —por el tope del nivel gratuito, por `--max-urls` o por tiempo—, las URLs que quedaron
-/// pendientes no tienen enlaces salientes registrados, así que el grafo tiene agujeros y las dos
-/// preguntas que hacen estas reglas se contestan mal:
+/// Their conclusion depends on the link graph being **complete**. If the crawl was cut short
+/// —by the free tier's cap, by `--max-urls` or by time—, the URLs left pending have no
+/// outgoing links recorded, so the graph has holes and the two questions these rules ask get
+/// answered wrong:
 ///
-/// - «¿a cuántos clics está esta página?» — inalcanzable en el grafo parcial no es lo mismo que
-///   profunda en el sitio.
-/// - «¿nadie enlaza a esta página?» — puede que la enlace una de las que no se rastrearon.
+/// - "how many clicks away is this page?" — unreachable in the partial graph is not the same
+///   as deep in the site.
+/// - "does nobody link to this page?" — one of the pages that never got crawled might.
 ///
-/// **Esto se descubrió ejecutando**, no escribiendo: un rastreo de 40 URLs de un blog real dio
-/// `INDEX-DEEP-PAGE` en 39 de 40 páginas. Las páginas venían del sitemap y la portada solo
-/// enlazaba a una de ellas, así que el recorrido no llegaba a ninguna. En el nivel gratuito, que
-/// corta a 1.000 URLs, ese falso positivo habría salido en todos los sitios grandes.
+/// **This was discovered by running**, not by writing: a 40-URL crawl of a real blog flagged
+/// `INDEX-DEEP-PAGE` on 39 of 40 pages. The pages came from the sitemap and the home page only
+/// linked to one of them, so the traversal reached none. On the free tier, which cuts at
+/// 1,000 URLs, that false positive would have shown up on every large site.
 ///
-/// El motor las descarta cuando `crawl_meta.truncated` no es nulo. Es preferible no decir nada a
-/// decir algo falso: un auditor con un 97% de falsos positivos en una regla deja de mirar el
-/// informe entero.
-/// `INDEX-ORPHAN-PAGE` se sumó el 2026-08-01 por el mismo motivo, encontrado otra vez rastreando:
-/// una página descargada a la que nadie enlaza **de entre lo que se llegó a rastrear** no es
-/// huérfana, es una página cuyo enlazador quedó fuera del corte. La migración 005 quitó de esa
-/// regla el otro falso positivo, el de las imágenes; este solo se puede quitar callando.
-/// `INDEX-SECTION-DISCONNECTED` nació dentro de esta lista: «inalcanzable desde la portada» es
-/// exactamente la afirmación que un grafo con agujeros no puede sostener.
+/// The engine drops them when `crawl_meta.truncated` is not null. Saying nothing beats saying
+/// something false: an auditor with 97% false positives in one rule gets its whole report
+/// ignored.
+/// `INDEX-ORPHAN-PAGE` joined on 2026-08-01 for the same reason, found once again by crawling:
+/// a downloaded page that nobody links to **among what got crawled** is not an orphan, it is a
+/// page whose linker fell outside the cut. Migration 005 removed that rule's other false
+/// positive, the images one; this one can only be removed by staying silent.
+/// `INDEX-SECTION-DISCONNECTED` was born inside this list: "unreachable from the home page" is
+/// exactly the claim a graph with holes cannot sustain.
 pub const REQUIERE_GRAFO_COMPLETO: &[&str] = &[
     "INDEX-DEEP-PAGE",
     "INDEX-NO-INTERNAL-LINKS-IN",
@@ -510,23 +519,23 @@ pub const REQUIERE_GRAFO_COMPLETO: &[&str] = &[
     "INDEX-SECTION-DISCONNECTED",
 ];
 
-/// Prefijos de ruta que son infraestructura del CDN, no contenido del sitio.
+/// Path prefixes that are CDN infrastructure, not site content.
 ///
-/// **Duplica `crawlforge_core::frontier::INFRASTRUCTURE_PATH_PREFIXES` a propósito**, igual que
-/// `index::declares_noindex` duplica `job::has_noindex`: este crate no conoce al core y la
-/// dirección de la dependencia es la contraria. Las dos listas tienen que coincidir.
+/// **Duplicates `crawlforge_core::frontier::INFRASTRUCTURE_PATH_PREFIXES` on purpose**, just
+/// as `index::declares_noindex` duplicates `job::has_noindex`: this crate does not know the
+/// core and the dependency points the other way. The two lists have to match.
 ///
-/// La necesitan las reglas de **sitio**: el filtro de página ya llega hecho en
-/// [`LinkView::is_infrastructure`], pero una regla SQL como `INDEX-ROBOTS-BLOCKED` lee `urls`
-/// directamente y tiene que excluir estas rutas ella misma. Lo que lo hizo necesario: Cloudflare
-/// inyecta enlaces a `/cdn-cgi/` **y** los bloquea con `Disallow: /cdn-cgi/` en el robots.txt
-/// que él mismo gestiona, así que los tres hallazgos `critical` de un rastreo real eran cosas
-/// que el dueño del sitio no puso y no puede arreglar.
+/// The **site** rules need it: the page-level filter already arrives resolved in
+/// [`LinkView::is_infrastructure`], but a SQL rule like `INDEX-ROBOTS-BLOCKED` reads `urls`
+/// directly and has to exclude these paths itself. What made it necessary: Cloudflare injects
+/// links to `/cdn-cgi/` **and** blocks them with `Disallow: /cdn-cgi/` in the robots.txt it
+/// manages itself, so the three `critical` findings of a real crawl were things the site
+/// owner did not put there and cannot fix.
 pub const INFRASTRUCTURE_PATH_PREFIXES: &[&str] = &["/cdn-cgi/"];
 
-/// Condición SQL «la columna de ruta no es infraestructura del CDN», derivada de
-/// [`INFRASTRUCTURE_PATH_PREFIXES`] para que la lista viva en un solo sitio. Los prefijos son
-/// literales del propio crate —nunca entrada del usuario—, por eso pueden interpolarse.
+/// SQL condition "the path column is not CDN infrastructure", derived from
+/// [`INFRASTRUCTURE_PATH_PREFIXES`] so the list lives in a single place. The prefixes are
+/// literals from this very crate —never user input—, which is why they can be interpolated.
 pub fn sql_not_infrastructure(path_column: &str) -> String {
     INFRASTRUCTURE_PATH_PREFIXES
         .iter()
@@ -535,40 +544,40 @@ pub fn sql_not_infrastructure(path_column: &str) -> String {
         .join(" AND ")
 }
 
-/// ¿La regla necesita un rastreo completo para poder afirmar lo que afirma?
+/// Does the rule need a complete crawl to assert what it asserts?
 pub fn requiere_grafo_completo(rule_id: &str) -> bool {
     REQUIERE_GRAFO_COMPLETO.contains(&rule_id)
 }
 
-/// Páginas a partir de las cuales un grupo de hallazgos con el mismo `group_key` se considera
-/// **un defecto de plantilla** y se presenta como un solo hallazgo con recuento.
+/// Pages from which a group of findings with the same `group_key` is considered **a template
+/// defect** and is presented as a single finding with a count.
 ///
-/// El número sale de medir cinco rastreos reales (2026-08-01): los grupos que de verdad eran la
-/// plantilla —el enlace del pie de un medio, el `<h5>CONTACTO` del pie de una agencia— tenían
-/// 645, 11.799 y 18.085 páginas; los grupos que eran coincidencia tenían como mucho 7. Con 30
-/// hay un margen de 4x sobre la mayor coincidencia observada y de 20x bajo la menor plantilla
-/// observada: si un rastreo futuro cae en medio, el que está mal es este número, no el criterio.
+/// The number comes from measuring five real crawls (2026-08-01): the groups that really were
+/// the template —a news site's footer link, the `<h5>CONTACTO` in an agency's footer— had
+/// 645, 11,799 and 18,085 pages; the groups that were coincidence had at most 7. With 30
+/// there is a 4x margin over the largest observed coincidence and 20x under the smallest
+/// observed template: if a future crawl lands in between, what is wrong is this number, not
+/// the criterion.
 pub const TEMPLATE_GROUP_MIN_PAGES: i64 = 30;
 
-/// La cláusula de rastreo pequeño: por debajo de [`TEMPLATE_GROUP_MIN_PAGES`] páginas afectadas,
-/// un grupo sigue siendo plantilla si cubre al menos este porcentaje de las páginas rastreadas.
-/// Un rastreo de prueba de 20 páginas con el defecto del pie en 18 es la misma plantilla que en
-/// el sitio completo.
+/// The small-crawl clause: below [`TEMPLATE_GROUP_MIN_PAGES`] affected pages, a group is
+/// still a template if it covers at least this percentage of the crawled pages. A 20-page
+/// test crawl with the footer defect on 18 of them is the same template as on the full site.
 pub const TEMPLATE_GROUP_MIN_SHARE_PCT: i64 = 80;
 
-/// Suelo absoluto de la cláusula porcentual: dos páginas con el mismo `group_key` no son una
-/// plantilla, son dos páginas.
+/// Absolute floor of the percentage clause: two pages with the same `group_key` are not a
+/// template, they are two pages.
 pub const TEMPLATE_GROUP_FLOOR_PAGES: i64 = 5;
 
-/// ¿Un grupo de `group_pages` hallazgos con el mismo `group_key`, en un rastreo con
-/// `total_pages` páginas HTML, es un defecto de plantilla?
+/// Is a group of `group_pages` findings sharing a `group_key`, in a crawl with `total_pages`
+/// HTML pages, a template defect?
 ///
-/// Vive en este crate y no en la CLI porque es semántica del hallazgo, no maquetación: la app de
-/// macOS y la de Windows tienen que colapsar exactamente los mismos grupos que el informe de la
-/// CLI, o el mismo fichero contaría cosas distintas según dónde se abra.
+/// It lives in this crate and not in the CLI because it is finding semantics, not layout: the
+/// macOS and Windows apps have to collapse exactly the same groups as the CLI report, or the
+/// same file would count different things depending on where it is opened.
 ///
-/// El colapso es **solo de presentación**: cada página afectada conserva su fila en `issues`,
-/// porque quien exporta o consulta por SQL necesita saber exactamente qué páginas son.
+/// The collapse is **presentation only**: every affected page keeps its row in `issues`,
+/// because whoever exports or queries via SQL needs to know exactly which pages they are.
 pub fn is_template_group(group_pages: i64, total_pages: i64) -> bool {
     if group_pages >= TEMPLATE_GROUP_MIN_PAGES {
         return true;
@@ -578,56 +587,56 @@ pub fn is_template_group(group_pages: i64, total_pages: i64) -> bool {
         && group_pages * 100 >= total_pages * TEMPLATE_GROUP_MIN_SHARE_PCT
 }
 
-/// Porcentaje de páginas rastreadas a partir del cual una regla es **dominante**: el problema
-/// es una propiedad del sitio, no una lista de páginas que arreglar una a una.
+/// Percentage of crawled pages from which a rule is **pervasive**: the problem is a property
+/// of the site, not a list of pages to fix one by one.
 ///
-/// Es el segundo colapso de presentación, hermano de [`is_template_group`] y para el caso que
-/// aquel no puede cubrir: hallazgos masivos **ciertos y sin causa común hashable**. En el
-/// rastreo completo de un medio real (216.349 páginas), `INDEX-DEEP-PAGE` dio 202.392 hallazgos
-/// todos verdaderos —cada página es genuinamente distinta, no hay `group_key` que compartan— y
-/// un informe que abre con esa cifra no se lee, exactamente igual que cuando eran falsos
-/// positivos.
+/// It is the second presentation collapse, sibling of [`is_template_group`] and meant for the
+/// case that one cannot cover: massive findings that are **true and share no hashable common
+/// cause**. In the full crawl of a real news site (216,349 pages), `INDEX-DEEP-PAGE` produced
+/// 202,392 findings, all true —each page is genuinely different, there is no `group_key` they
+/// share— and a report opening with that figure does not get read, exactly as when they were
+/// false positives.
 ///
-/// El número sale de medir seis rastreos reales (2026-08-03): las reglas cuya causa era de
-/// verdad sistémica —la arquitectura del archivo, el sufijo de título de la plantilla, la
-/// lentitud del servidor, el `noindex` de un plugin— afectaban a entre el 41,6% y el 100% de
-/// las páginas; las que eran listas de páginas a arreglar una a una (imágenes pesadas,
-/// descripciones largas, contenido escaso) quedaban en el 37,6% o menos. El 40 parte ese hueco:
-/// si un rastreo futuro cae en medio, el que está mal es este número, no el criterio.
+/// The number comes from measuring six real crawls (2026-08-03): the rules whose cause really
+/// was systemic —the archive's architecture, the template's title suffix, the server's
+/// slowness, a plugin's `noindex`— affected between 41.6% and 100% of the pages; the ones
+/// that were lists of pages to fix one by one (heavy images, long descriptions, thin content)
+/// stayed at 37.6% or less. 40 splits that gap: if a future crawl lands in between, what is
+/// wrong is this number, not the criterion.
 pub const PERVASIVE_MIN_SHARE_PCT: i64 = 40;
 
-/// Suelo absoluto de [`is_pervasive`]: por debajo de estas páginas afectadas, el recuento se
-/// lee de un vistazo y reformularlo como porcentaje no aporta nada (3 de 6 páginas no son «el
-/// 50% del sitio», son tres páginas).
+/// Absolute floor of [`is_pervasive`]: below this many affected pages, the count reads at a
+/// glance and restating it as a percentage adds nothing (3 of 6 pages are not "50% of the
+/// site", they are three pages).
 pub const PERVASIVE_MIN_PAGES: i64 = 20;
 
-/// ¿Una regla con `affected_pages` páginas afectadas, en un rastreo de `total_pages` páginas
-/// HTML, es un problema dominante del sitio?
+/// Is a rule with `affected_pages` affected pages, in a crawl of `total_pages` HTML pages, a
+/// pervasive problem of the site?
 ///
-/// Vive en este crate por la misma razón que [`is_template_group`]: es semántica del hallazgo,
-/// no maquetación, y las apps tienen que reformular exactamente las mismas reglas que la CLI.
+/// It lives in this crate for the same reason as [`is_template_group`]: it is finding
+/// semantics, not layout, and the apps have to reformulate exactly the same rules as the CLI.
 ///
-/// **El colapso que gobierna es solo de presentación y nunca resta información**: la línea del
-/// informe conserva el recuento y le añade el porcentaje; cada página afectada conserva su fila
-/// en `issues`, el export la lleva, y `report --rule` la lista. Por eso es seguro aplicarlo a
-/// cualquier severidad: una regla `critical` que afecta al 90% del sitio sigue enseñando su
-/// recuento entero, solo que además dice que es el 90%.
+/// **The collapse it governs is presentation only and never subtracts information**: the
+/// report line keeps the count and adds the percentage; every affected page keeps its row in
+/// `issues`, the export carries it, and `report --rule` lists it. That is why it is safe to
+/// apply at any severity: a `critical` rule affecting 90% of the site still shows its full
+/// count, it just also says it is 90%.
 pub fn is_pervasive(affected_pages: i64, total_pages: i64) -> bool {
     affected_pages >= PERVASIVE_MIN_PAGES
         && total_pages > 0
         && affected_pages * 100 >= total_pages * PERVASIVE_MIN_SHARE_PCT
 }
 
-/// Ruta del fixture de una regla, si existe.
+/// Path of a rule's fixture, if it exists.
 ///
-/// Cada regla tiene su caso de prueba en `fixtures/`, de una de estas dos formas:
+/// Every rule has its test case in `fixtures/`, in one of these two forms:
 ///
-/// - `fixtures/<RULE-ID>.html` — una página basta para provocar el defecto.
-/// - `fixtures/<RULE-ID>/` — hacen falta varias páginas: duplicados, enlaces roto, huérfanas.
+/// - `fixtures/<RULE-ID>.html` — one page is enough to provoke the defect.
+/// - `fixtures/<RULE-ID>/` — several pages are needed: duplicates, broken links, orphans.
 ///
-/// El rastreo de verdad de estos ficheros está en `crawlforge-core/tests/fixtures_de_reglas.rs`:
-/// aquí no se puede, porque el parser vive en el core y el core depende de este crate, no al
-/// revés.
+/// The actual crawl of these files lives in `crawlforge-core/tests/fixtures_de_reglas.rs`: it
+/// cannot happen here, because the parser lives in the core and the core depends on this
+/// crate, not the other way around.
 pub fn fixture_path(rule_id: &str) -> Option<std::path::PathBuf> {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
     let fichero = base.join(format!("{rule_id}.html"));
@@ -638,12 +647,12 @@ pub fn fixture_path(rule_id: &str) -> Option<std::path::PathBuf> {
     directorio.is_dir().then_some(directorio)
 }
 
-/// Las reglas de página que aplican a un nivel. El límite se aplica **en el core**, no en la UI.
+/// The page rules that apply to a tier. The limit is enforced **in the core**, not in the UI.
 pub fn page_rules_for_tier(tier: Tier) -> Vec<Box<dyn PageRule>> {
     page_rules().into_iter().filter(|r| r.min_tier() <= tier).collect()
 }
 
-/// Las reglas de conjunto que aplican a un nivel.
+/// The site rules that apply to a tier.
 pub fn site_rules_for_tier(tier: Tier) -> Vec<Box<dyn SiteRule>> {
     site_rules().into_iter().filter(|r| r.min_tier() <= tier).collect()
 }
@@ -654,20 +663,20 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn ningun_id_esta_repetido() {
+    fn no_id_is_duplicated() {
         let mut vistos = HashSet::new();
         for meta in catalog() {
-            assert!(vistos.insert(meta.id), "ID duplicado en el catálogo: {}", meta.id);
+            assert!(vistos.insert(meta.id), "duplicate ID in the catalog: {}", meta.id);
         }
     }
 
     #[test]
-    fn el_id_concuerda_con_su_categoria() {
+    fn the_id_matches_its_category() {
         for meta in catalog() {
             let prefijos = meta.category.id_prefixes();
             assert!(
                 prefijos.iter().any(|p| meta.id.starts_with(p)),
-                "{} está en la categoría {:?}, que espera un ID que empiece por {:?}",
+                "{} is in category {:?}, which expects an ID starting with {:?}",
                 meta.id,
                 meta.category,
                 prefijos
@@ -676,20 +685,20 @@ mod tests {
     }
 
     #[test]
-    fn toda_regla_tiene_textos_en_los_dos_idiomas() {
-        // Las cadenas de UI van siempre por el sistema de localización, y el catálogo es la
-        // primera de esas superficies. Una regla sin traducir se vería en inglés en la app en
-        // español, que es exactamente lo que el proyecto no hace.
+    fn every_rule_has_texts_in_both_languages() {
+        // UI strings always go through the localization system, and the catalog is the first
+        // of those surfaces. An untranslated rule would show up in English inside the Spanish
+        // app, which is exactly what this project does not do.
         for meta in catalog() {
             for (lang, nombre, desc) in [
                 (Lang::Es, meta.name_es, meta.desc_es),
                 (Lang::En, meta.name_en, meta.desc_en),
             ] {
-                assert!(!nombre.trim().is_empty(), "{} sin nombre en {:?}", meta.id, lang);
-                assert!(!desc.trim().is_empty(), "{} sin descripción en {:?}", meta.id, lang);
+                assert!(!nombre.trim().is_empty(), "{} has no name in {:?}", meta.id, lang);
+                assert!(!desc.trim().is_empty(), "{} has no description in {:?}", meta.id, lang);
                 assert!(
                     desc.trim().chars().count() > 20,
-                    "la descripción de {} en {:?} no explica nada: {:?}",
+                    "the description of {} in {:?} explains nothing: {:?}",
                     meta.id,
                     lang,
                     desc
@@ -699,17 +708,17 @@ mod tests {
     }
 
     #[test]
-    fn el_alcance_declarado_coincide_con_el_trait_que_implementa() {
+    fn the_declared_scope_matches_the_implemented_trait() {
         for rule in page_rules() {
-            assert_eq!(rule.meta().scope, Scope::Page, "{} es una PageRule", rule.id());
+            assert_eq!(rule.meta().scope, Scope::Page, "{} is a PageRule", rule.id());
         }
         for rule in site_rules() {
-            assert_eq!(rule.meta().scope, Scope::Site, "{} es una SiteRule", rule.id());
+            assert_eq!(rule.meta().scope, Scope::Site, "{} is a SiteRule", rule.id());
         }
     }
 
     #[test]
-    fn el_nivel_free_no_incluye_reglas_de_pago() {
+    fn the_free_tier_includes_no_paid_rules() {
         for rule in page_rules_for_tier(Tier::Free) {
             assert_eq!(rule.min_tier(), Tier::Free, "{}", rule.id());
         }
@@ -719,15 +728,15 @@ mod tests {
     }
 
     #[test]
-    fn el_nivel_pro_incluye_las_reglas_free() {
+    fn the_pro_tier_includes_the_free_rules() {
         assert!(
             page_rules_for_tier(Tier::Pro).len() >= page_rules_for_tier(Tier::Free).len(),
-            "Pro tiene que ser un superconjunto de Free"
+            "Pro must be a superset of Free"
         );
     }
 
     #[test]
-    fn los_idiomas_se_leen_de_una_cadena() {
+    fn languages_parse_from_a_string() {
         assert_eq!(Lang::parse("es"), Some(Lang::Es));
         assert_eq!(Lang::parse("ES-es"), Some(Lang::Es));
         assert_eq!(Lang::parse("en"), Some(Lang::En));
@@ -735,9 +744,9 @@ mod tests {
     }
 
     #[test]
-    fn ninguna_regla_se_queda_sin_fixture() {
-        // «Cada regla del catálogo necesita un fixture HTML y un test. Sin excepción — las
-        // reglas son el producto.» Esto es esa frase, ejecutable.
+    fn no_rule_is_left_without_a_fixture() {
+        // "Every rule in the catalog needs an HTML fixture and a test. No exceptions — the
+        // rules are the product." This is that sentence, executable.
         let sin_fixture: Vec<&str> = catalog()
             .iter()
             .filter(|m| fixture_path(m.id).is_none())
@@ -745,14 +754,14 @@ mod tests {
             .collect();
         assert!(
             sin_fixture.is_empty(),
-            "estas reglas no tienen fixture en crates/crawlforge-rules/fixtures/: {sin_fixture:?}"
+            "these rules have no fixture in crates/crawlforge-rules/fixtures/: {sin_fixture:?}"
         );
     }
 
     #[test]
-    fn no_hay_fixtures_huerfanos() {
-        // Un fixture cuyo nombre no corresponde a ninguna regla es casi siempre un ID mal
-        // escrito, y el test anterior no lo vería.
+    fn there_are_no_orphan_fixtures() {
+        // A fixture whose name matches no rule is almost always a misspelled ID, and the
+        // previous test would not see it.
         let ids: HashSet<&str> = catalog().iter().map(|m| m.id).collect();
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
         let Ok(entradas) = std::fs::read_dir(&base) else {
@@ -766,60 +775,60 @@ mod tests {
                 huerfanos.push(nombre);
             }
         }
-        assert!(huerfanos.is_empty(), "fixtures que no corresponden a ninguna regla: {huerfanos:?}");
+        assert!(huerfanos.is_empty(), "fixtures that do not correspond to any rule: {huerfanos:?}");
     }
 
     #[test]
-    fn un_grupo_de_plantilla_se_reconoce_por_tamano_absoluto() {
-        // Los medidos en rastreos reales: 645, 11.799 y 18.085 páginas son plantilla…
+    fn a_template_group_is_recognized_by_absolute_size() {
+        // The ones measured in real crawls: 645, 11,799 and 18,085 pages are a template…
         assert!(is_template_group(645, 1_549));
         assert!(is_template_group(11_799, 18_134));
         assert!(is_template_group(18_085, 18_134));
-        // …y las coincidencias observadas (≤7 páginas en 18.134) no lo son.
+        // …and the observed coincidences (≤7 pages out of 18,134) are not.
         assert!(!is_template_group(7, 18_134));
         assert!(!is_template_group(2, 18_134));
     }
 
     #[test]
-    fn en_un_rastreo_pequeno_manda_el_porcentaje() {
-        // 18 de 20 páginas es el pie de la plantilla aunque no llegue al umbral absoluto.
+    fn in_a_small_crawl_the_percentage_rules() {
+        // 18 of 20 pages is the template's footer even without reaching the absolute threshold.
         assert!(is_template_group(18, 20));
-        // 4 de 5 cumple el porcentaje pero no el suelo: dos o cuatro páginas no son plantilla.
+        // 4 of 5 meets the percentage but not the floor: two or four pages are not a template.
         assert!(!is_template_group(4, 5));
-        // 10 de 40 no cubre el sitio ni llega al umbral absoluto.
+        // 10 of 40 neither covers the site nor reaches the absolute threshold.
         assert!(!is_template_group(10, 40));
-        // Sin páginas no hay porcentaje que valga.
+        // With no pages there is no percentage to speak of.
         assert!(!is_template_group(10, 0));
     }
 
     #[test]
-    fn una_regla_dominante_se_reconoce_por_su_cuota_del_sitio() {
-        // Los medidos en rastreos reales: las causas sistémicas iban del 41,6% al 100%…
-        assert!(is_pervasive(202_392, 216_349)); // INDEX-DEEP-PAGE, el archivo sin atajos
-        assert!(is_pervasive(103_028, 216_349)); // HTTP-SLOW-RESPONSE, el servidor
-        assert!(is_pervasive(848, 1_549)); // INDEX-NOINDEX, el plugin SEO
-        assert!(is_pervasive(645, 1_549)); // CONTENT-HEADING-SKIP, la plantilla
-        // …y las listas de páginas a arreglar una a una quedaban en el 37,6% o menos.
-        assert!(!is_pervasive(61_479, 216_349)); // META-DESC-TOO-LONG, 28,4%
-        assert!(!is_pervasive(213, 567)); // META-DESC-TOO-LONG, 37,6%
-        assert!(!is_pervasive(1_384, 3_975)); // CONTENT-THIN, 34,8%
+    fn a_pervasive_rule_is_recognized_by_its_share_of_the_site() {
+        // The ones measured in real crawls: systemic causes ranged from 41.6% to 100%…
+        assert!(is_pervasive(202_392, 216_349)); // INDEX-DEEP-PAGE, the archive with no shortcuts
+        assert!(is_pervasive(103_028, 216_349)); // HTTP-SLOW-RESPONSE, the server
+        assert!(is_pervasive(848, 1_549)); // INDEX-NOINDEX, the SEO plugin
+        assert!(is_pervasive(645, 1_549)); // CONTENT-HEADING-SKIP, the template
+        // …and the lists of pages to fix one by one stayed at 37.6% or less.
+        assert!(!is_pervasive(61_479, 216_349)); // META-DESC-TOO-LONG, 28.4%
+        assert!(!is_pervasive(213, 567)); // META-DESC-TOO-LONG, 37.6%
+        assert!(!is_pervasive(1_384, 3_975)); // CONTENT-THIN, 34.8%
     }
 
     #[test]
-    fn pocas_paginas_no_son_dominantes_por_alto_que_sea_su_porcentaje() {
-        // 3 de 6 páginas no son «el 50% del sitio»: son tres páginas, y se leen de un vistazo.
+    fn few_pages_are_not_pervasive_however_high_their_percentage() {
+        // 3 of 6 pages are not "50% of the site": they are three pages, and read at a glance.
         assert!(!is_pervasive(3, 6));
         assert!(!is_pervasive(19, 20));
-        // El suelo exacto sí entra si cubre la cuota.
+        // The exact floor does qualify if it covers the share.
         assert!(is_pervasive(20, 40));
-        // Sin páginas no hay porcentaje que valga.
+        // With no pages there is no percentage to speak of.
         assert!(!is_pervasive(20, 0));
     }
 
     #[test]
-    fn el_contexto_de_prueba_no_dispara_ninguna_regla_de_pagina() {
-        // Si una página sana provocara hallazgos, todos los tests de todas las reglas estarían
-        // midiendo ruido. Este test es el que sostiene a los demás.
+    fn the_test_context_triggers_no_page_rule() {
+        // If a healthy page produced findings, every test of every rule would be measuring
+        // noise. This test is the one holding up all the others.
         let mut ctx = PageContext::indexable_html("https://ejemplo.es/a");
         ctx.title = Some("Un título suficientemente largo para no avisar");
         ctx.title_count = 1;
@@ -839,6 +848,6 @@ mod tests {
 
         let hallazgos: Vec<&str> =
             page_rules().iter().flat_map(|r| r.evaluate(&ctx)).map(|i| i.rule_id).collect();
-        assert!(hallazgos.is_empty(), "una página sana no debe dar hallazgos: {hallazgos:?}");
+        assert!(hallazgos.is_empty(), "a healthy page must not yield findings: {hallazgos:?}");
     }
 }

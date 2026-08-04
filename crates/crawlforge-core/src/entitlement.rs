@@ -1,4 +1,4 @@
-//! Niveles y derechos de uso. Ver `docs/07-MONETIZACION.md §3`.
+//! Niveles y derechos de uso.
 //!
 //! # Por qué existe esto ya, con una sola implementación
 //!
@@ -18,13 +18,13 @@
 //! `Tier::Free` corta a 1.000 URLs por rastreo, pero **dentro de ese límite no se oculta ningún
 //! hallazgo**: las ~59 reglas del catálogo gratuito se evalúan enteras. Limitar el número de URLs
 //! como hace Screaming Frog con sus 500 genera frustración; limitar el flujo de trabajo —diffs,
-//! cartera, exportaciones, adaptadores— genera conversión. Ver `docs/00-VISION.md §6`.
+//! cartera, exportaciones, adaptadores— genera conversión.
 
 use crate::error::{CoreError, Result};
 
 pub use crawlforge_rules::Tier;
 
-/// Funciones que un nivel habilita o no. `docs/07-MONETIZACION.md §3`.
+/// Funciones que un nivel habilita o no.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
     UnlimitedUrls,
@@ -73,7 +73,7 @@ pub struct Limits {
     pub max_portfolio_sites: Option<u32>,
 }
 
-/// URLs por rastreo en el nivel gratuito. `docs/07-MONETIZACION.md §2`.
+/// URLs por rastreo en el nivel gratuito.
 pub const FREE_MAX_URLS: u64 = 1_000;
 
 impl Limits {
@@ -126,7 +126,7 @@ pub trait EntitlementSource: Send + Sync {
 /// Nivel forzado, para desarrollo y para la CLI.
 ///
 /// Lee `CRAWLFORGE_TIER`. Sin variable, `Tier::Agency`: la CLI es una función de ese nivel
-/// (`docs/07-MONETIZACION.md §2`) y es además la herramienta de uso interno.
+/// y es además la herramienta de uso interno.
 #[derive(Debug, Clone, Copy)]
 pub struct DevSource {
     tier: Tier,

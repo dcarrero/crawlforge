@@ -1,60 +1,61 @@
-//! `HTTP` — códigos de estado y redirecciones. `docs/04-CATALOGO-REGLAS.md §3`.
+//! `HTTP` — status codes and redirects. `docs/04-CATALOGO-REGLAS.md §3`.
 //!
-//! # `HTTP-TEMP-REDIRECT` no está aquí, y no es un olvido
+//! # `HTTP-TEMP-REDIRECT` is not here, and that is not an oversight
 //!
-//! Su condición catalogada es «302/307 **permanente en el tiempo** (aparece en 2+ rastreos)», y
-//! comparar dos rastreos exige un histórico de comparaciones que todavía no existe. Con un solo
-//! fichero de rastreo delante no hay forma de distinguir un 302 legítimo —un mantenimiento, un
-//! A/B, una promoción de temporada— de uno que lleva dos años puesto, y avisar de todos los 302
-//! sería exactamente el ruido que hace que un auditor se ignore. Se implementará cuando exista
-//! el diff, no antes.
+//! Its catalogued condition is "302/307 **permanent over time** (shows up in 2+ crawls)", and
+//! comparing two crawls requires a comparison history that does not exist yet. With a single
+//! crawl file in front of you there is no way to tell a legitimate 302 —a maintenance window, an
+//! A/B test, a seasonal promotion— from one that has been in place for two years, and warning
+//! about every 302 would be exactly the noise that gets an auditor ignored. It will be
+//! implemented when the diff exists, not before.
 //!
-//! # Cómo se recorren las redirecciones
+//! # How the redirects are walked
 //!
-//! El motor guarda cada salto como una fila de `urls` con `redirect_to` apuntando a la
-//! siguiente (`docs/02-MODELO-DATOS.md §3.2`). Las tres reglas de cadena cargan en memoria
-//! **solo las filas que redirigen** —unas pocas docenas en cualquier rastreo real— y recorren
-//! ese grafo en Rust, en vez de con un `WITH RECURSIVE`. Dos motivos: la detección de ciclos se
-//! lee, y un solo recorrido resuelve las tres preguntas (cuántos saltos, si vuelve sobre sí
-//! mismo, y en qué acaba).
+//! The engine stores every hop as a row of `urls` with `redirect_to` pointing at the next one
+//! (`docs/02-MODELO-DATOS.md §3.2`). The three chain rules load into memory **only the rows
+//! that redirect** —a few dozen in any real crawl— and walk that graph in Rust, instead of with
+//! a `WITH RECURSIVE`. Two reasons: the cycle detection stays readable, and a single walk
+//! answers all three questions (how many hops, whether it comes back on itself, and where it
+//! ends).
 
 use crate::{Category, Issue, PageContext, PageRule, RuleMeta, Scope, Severity, SiteRule, Tier};
 use rusqlite::Connection;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// TTFB por encima del cual se avisa, en milisegundos.
+/// TTFB above which a finding is raised, in milliseconds.
 ///
-/// El umbral del catálogo (§3) es 1.000 ms: es el punto en que la latencia deja de ser un
-/// detalle y empieza a costar rastreo y conversión. Se compara con `>`, así que 1.000 ms justos
-/// no avisan.
+/// The catalogue threshold (§3) is 1,000 ms: the point where latency stops being a detail and
+/// starts costing crawl budget and conversions. The comparison is `>`, so exactly 1,000 ms does
+/// not warn.
 pub const SLOW_RESPONSE_MS: u32 = 1_000;
 
-/// Tamaño de HTML por encima del cual se avisa. 500 KB del catálogo, en KiB (512.000 bytes).
+/// HTML size above which a finding is raised. The catalogue's 500 KB, in KiB (512,000 bytes).
 ///
-/// Es el HTML solo, sin imágenes ni CSS ni JS: medio megabyte de marcado es casi siempre una
-/// plantilla que vuelca la base de datos entera en la página.
+/// This is the HTML alone, without images, CSS or JS: half a megabyte of markup is almost
+/// always a template dumping the entire database into the page.
 pub const LARGE_PAGE_BYTES: u64 = 500 * 1024;
 
-/// Saltos a partir de los cuales una redirección deja de ser una redirección y es una cadena.
+/// Hops at which a redirect stops being a redirect and becomes a chain.
 ///
-/// Uno es normal y correcto (`/viejo` → `/nuevo`). Dos ya es una cadena: pierde parte del
-/// PageRank en cada salto, multiplica la latencia del usuario y suele significar que hay dos
-/// reglas de reescritura pisándose.
+/// One is normal and correct (`/old` → `/new`). Two is already a chain: it loses part of the
+/// PageRank on every hop, multiplies the user's latency, and usually means two rewrite rules
+/// are stepping on each other.
 pub const REDIRECT_CHAIN_MIN_HOPS: usize = 2;
 
-/// Tope de saltos que se recorren antes de rendirse.
+/// Cap on the hops walked before giving up.
 ///
-/// Existe por seguridad, no por semántica: la detección de ciclos ya corta los bucles, y esto
-/// solo protege de un grafo patológico. Una cadena que llega a 20 saltos ya está denunciada.
+/// It exists for safety, not semantics: the cycle detection already cuts the loops, and this
+/// only protects against a pathological graph. A chain that reaches 20 hops has already been
+/// reported.
 const MAX_REDIRECT_HOPS: usize = 20;
 
-/// Cuántas URLs de ejemplo caben en el `detail_json` de un hallazgo.
+/// How many sample URLs fit in a finding's `detail_json`.
 ///
-/// Una página con 400 recursos por HTTP no debe meter 400 cadenas en la base de datos: la
-/// cuenta va aparte y la lista es una muestra.
+/// A page with 400 resources over HTTP must not put 400 strings into the database: the count
+/// travels separately and the list is a sample.
 const MAX_SAMPLES: usize = 10;
 
-// ---------------------------------------------------------------- Metadatos
+// ---------------------------------------------------------------- Metadata
 
 pub static HTTP_404_INTERNAL: RuleMeta = RuleMeta {
     id: "HTTP-404-INTERNAL",
@@ -226,12 +227,12 @@ pub static HTTP_LARGE_PAGE: RuleMeta = RuleMeta {
     references: &[],
 };
 
-// ---------------------------------------------------------------- Reglas de página
+// ---------------------------------------------------------------- Page rules
 
-/// La URL devuelve 5xx.
+/// The URL returns 5xx.
 ///
-/// No se exige que la página sea indexable: un 5xx la hace no indexable por definición, así que
-/// exigirlo silenciaría precisamente el hallazgo.
+/// Indexability is not required: a 5xx makes the page non-indexable by definition, so requiring
+/// it would silence precisely this finding.
 pub struct Http5xx;
 
 impl PageRule for Http5xx {
@@ -247,10 +248,10 @@ impl PageRule for Http5xx {
     }
 }
 
-/// Página HTTPS que carga algún recurso por `http://` explícito.
+/// HTTPS page that loads some resource over an explicit `http://`.
 ///
-/// Un solo hallazgo por página, con la cuenta y una muestra de los recursos: veinte imágenes mal
-/// escritas son un mismo defecto de plantilla, no veinte problemas.
+/// One finding per page, with the count and a sample of the resources: twenty badly written
+/// images are one template defect, not twenty problems.
 pub struct HttpMixedContent;
 
 impl PageRule for HttpMixedContent {
@@ -259,14 +260,15 @@ impl PageRule for HttpMixedContent {
     }
 
     fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
-        // El 2xx corta la plantilla de error: si el tema carga un recurso por `http://`, cada
-        // URL rota del sitio repetiría este hallazgo. La causa es una y vive en la plantilla,
-        // y del 404 ya avisa su regla. Ver `PageContext::is_success`.
+        // The 2xx gate cuts out the error template: if the theme loads a resource over
+        // `http://`, every broken URL on the site would repeat this finding. The cause is one
+        // and lives in the template, and the 404 already has its own rule. See
+        // `PageContext::is_success`.
         if !ctx.is_html || !ctx.is_https || !ctx.is_success() {
             return Vec::new();
         }
-        // Solo los recursos: un `<a href="http://...">` a otro sitio no es contenido mixto, es
-        // un enlace. Lo que rompe el candado del navegador es lo que la página *carga*.
+        // Resources only: an `<a href="http://...">` to another site is not mixed content, it
+        // is a link. What breaks the browser's padlock is what the page *loads*.
         let inseguros: Vec<&str> = ctx
             .links
             .iter()
@@ -286,14 +288,14 @@ impl PageRule for HttpMixedContent {
     }
 }
 
-/// TTFB por encima de [`SLOW_RESPONSE_MS`].
+/// TTFB above [`SLOW_RESPONSE_MS`].
 ///
-/// `ttfb_ms` es `None` en el modo `filesystem`, donde leer un fichero del disco no es un TTFB y
-/// medirlo sería inventarse un hallazgo. Ausencia de dato nunca es un hallazgo.
+/// `ttfb_ms` is `None` in `filesystem` mode, where reading a file from disk is not a TTFB and
+/// measuring it would be making up a finding. Absence of data is never a finding.
 ///
-/// **No exige un 2xx a propósito**, al contrario que las reglas que auditan el HTML servido: el
-/// TTFB mide el servidor, no la página, y un 404 que tarda dos segundos en llegar es el mismo
-/// problema de servidor que un 200 que tarda dos segundos.
+/// **It deliberately does not require a 2xx**, unlike the rules that audit the served HTML: the
+/// TTFB measures the server, not the page, and a 404 that takes two seconds to arrive is the
+/// same server problem as a 200 that takes two seconds.
 pub struct HttpSlowResponse;
 
 impl PageRule for HttpSlowResponse {
@@ -315,7 +317,7 @@ impl PageRule for HttpSlowResponse {
     }
 }
 
-/// HTML por encima de [`LARGE_PAGE_BYTES`].
+/// HTML above [`LARGE_PAGE_BYTES`].
 pub struct HttpLargePage;
 
 impl PageRule for HttpLargePage {
@@ -324,10 +326,10 @@ impl PageRule for HttpLargePage {
     }
 
     fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
-        // El umbral es del documento HTML. Medir el tamaño de un PDF o de una imagen con esta
-        // regla daría un aviso que no se puede accionar. El 2xx corta la plantilla de error:
-        // una plantilla de 404 obesa sería una fila por cada URL rota con una única causa, y
-        // del 404 ya avisa su regla. Ver `PageContext::is_success`.
+        // The threshold is for the HTML document. Measuring the size of a PDF or an image with
+        // this rule would produce a warning nobody can act on. The 2xx gate cuts out the error
+        // template: an obese 404 template would be one row per broken URL with a single cause,
+        // and the 404 already has its own rule. See `PageContext::is_success`.
         if !ctx.is_html || !ctx.is_success() || ctx.html_bytes <= LARGE_PAGE_BYTES {
             return Vec::new();
         }
@@ -338,24 +340,24 @@ impl PageRule for HttpLargePage {
     }
 }
 
-/// ¿El `href` pide explícitamente `http://`?
+/// Does the `href` explicitly ask for `http://`?
 ///
-/// Se mira el `href` **tal como venía en el HTML**: un `href` relativo (`/logo.png`) o
-/// protocol-relative (`//cdn.ejemplo.com/logo.png`) hereda el esquema de la página, así que
-/// nunca es contenido mixto. Solo lo es el que escribe `http://` a mano. La comprobación sigue
-/// siendo correcta si el motor pasara el `href` ya resuelto a absoluto, porque en una página
-/// HTTPS un relativo resuelto empieza por `https://`.
+/// The `href` is inspected **as it came in the HTML**: a relative `href` (`/logo.png`) or a
+/// protocol-relative one (`//cdn.example.com/logo.png`) inherits the page's scheme, so it is
+/// never mixed content. Only one that spells out `http://` is. The check would still be correct
+/// if the engine passed the `href` already resolved to absolute, because on an HTTPS page a
+/// resolved relative starts with `https://`.
 fn is_plain_http(href: &str) -> bool {
     let recortado = href.trim_start();
     recortado.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("http://"))
 }
 
-// ---------------------------------------------------------------- Reglas de conjunto
+// ---------------------------------------------------------------- Site rules
 
-/// Una página interna del sitio devuelve 4xx y hay enlaces internos apuntándole.
+/// An internal page of the site returns 4xx and internal links point at it.
 ///
-/// El hallazgo se registra **en la página de destino**, con la cuenta de páginas que la
-/// enlazan: es lo que hay que arreglar, y el detalle dice cuánto daño hace.
+/// The finding is recorded **on the destination page**, with the count of pages linking to it:
+/// that is what needs fixing, and the detail says how much damage it does.
 pub struct Http404Internal;
 
 impl SiteRule for Http404Internal {
@@ -397,15 +399,18 @@ impl SiteRule for Http404Internal {
     }
 }
 
-/// Una URL de otro dominio a la que el sitio enlaza devuelve 4xx.
+/// A URL on another domain that the site links to returns 4xx.
 ///
-/// Mismo criterio que [`Http404Internal`] —solo 4xx, no 5xx— y por el mismo motivo: un 5xx
-/// ajeno es casi siempre un problema temporal del servidor del otro, y avisar de él haría que
-/// el informe cambiara de un rastreo a otro sin que nadie hubiera tocado nada.
+/// Same criterion as [`Http404Internal`] —4xx only, not 5xx— and for the same reason: someone
+/// else's 5xx is almost always a temporary problem on their server, and reporting it would make
+/// the report change from one crawl to the next without anyone having touched anything.
 ///
-/// Requiere que el motor compruebe el estado de las URLs externas. Mientras no lo haga, sus
-/// filas quedan con `status_code` nulo y la regla no encuentra nada, que es el comportamiento
-/// correcto: no inventa hallazgos con datos que no tiene.
+/// It needs the engine to have checked the status of the external URL, which it does by default
+/// since 2026-08-04 (`check_external`: a `HEAD` probe, once per distinct URL). When that check is
+/// off, or when the probe never completed, the row keeps a null `status_code` and the rule finds
+/// nothing — the correct behaviour, and the reason the query filters on the status rather than
+/// assuming it: no data is not the same as a healthy link, and saying otherwise would be lying
+/// by omission.
 pub struct Http404External;
 
 impl SiteRule for Http404External {
@@ -447,13 +452,15 @@ impl SiteRule for Http404External {
     }
 }
 
-/// Dos o más saltos seguidos hasta el destino final.
+/// Two or more consecutive hops until the final destination.
 ///
-/// El hallazgo se registra en la **cabeza** de la cadena: la URL que nadie redirige hacia ella y
-/// que por tanto es la que aparece en los enlaces del sitio. Reportar también los eslabones
-/// intermedios repetiría la misma cadena tres veces sin añadir nada que accionar.
+/// The finding is recorded on the **head** of the chain: the URL that nobody redirects to and
+/// which is therefore the one that shows up in the site's links. Also reporting the
+/// intermediate links would repeat the same chain three times without adding anything to act
+/// on.
 ///
-/// Los bucles se saltan: los cuenta [`HttpRedirectLoop`], que es más grave y más concreto.
+/// Loops are skipped: [`HttpRedirectLoop`] counts those, and it is more severe and more
+/// specific.
 pub struct HttpRedirectChain;
 
 impl SiteRule for HttpRedirectChain {
@@ -493,12 +500,12 @@ impl SiteRule for HttpRedirectChain {
     }
 }
 
-/// Las redirecciones vuelven sobre una URL ya visitada.
+/// The redirects come back to a URL already visited.
 ///
-/// Un solo hallazgo por ciclo, en la URL de menor `id` del ciclo, para que un bucle de cuatro
-/// saltos no aparezca cuatro veces. El `group_key` va por el `url_hash` de esa URL —no por su
-/// `id`, que es un detalle de la fila y cambia entre rastreos— para que la comparación entre rastreos
-/// pueda reconocer el mismo bucle de una semana a otra.
+/// One finding per cycle, on the URL with the lowest `id` in the cycle, so a four-hop loop does
+/// not show up four times. The `group_key` uses that URL's `url_hash` —not its `id`, which is a
+/// detail of the row and changes between crawls— so the crawl-to-crawl comparison can recognize
+/// the same loop from one week to the next.
 pub struct HttpRedirectLoop;
 
 impl SiteRule for HttpRedirectLoop {
@@ -512,8 +519,8 @@ impl SiteRule for HttpRedirectLoop {
         let mut reportados: BTreeSet<i64> = BTreeSet::new();
         let mut out = Vec::new();
 
-        // Se parte de cada nodo que redirige, no solo de las cabezas: un ciclo puro (A → B → A)
-        // no tiene cabeza, porque todos sus nodos son destino de otro.
+        // Start from every node that redirects, not just the heads: a pure cycle (A → B → A)
+        // has no head, because every one of its nodes is the target of another.
         for inicio in saltos.keys().copied() {
             let (_, final_de_cadena) = walk(inicio, &saltos);
             let ChainEnd::Loop { cycle } = final_de_cadena else {
@@ -543,11 +550,11 @@ impl SiteRule for HttpRedirectLoop {
     }
 }
 
-/// La cadena de redirecciones acaba en una URL que devuelve 4xx.
+/// The redirect chain ends on a URL that returns 4xx.
 ///
-/// Como en [`HttpRedirectChain`], el hallazgo va en la cabeza de la cadena: es la URL que se
-/// enlaza y la que hay que reapuntar. Un bucle no termina en ningún sitio, así que no cuenta
-/// aquí.
+/// As in [`HttpRedirectChain`], the finding goes on the head of the chain: it is the URL being
+/// linked and the one that must be repointed. A loop does not end anywhere, so it does not
+/// count here.
 pub struct HttpRedirectTo404;
 
 impl SiteRule for HttpRedirectTo404 {
@@ -588,17 +595,17 @@ impl SiteRule for HttpRedirectTo404 {
     }
 }
 
-/// Hay URLs internas que sirven contenido por HTTP sin llevar al visitante a HTTPS.
+/// Some internal URLs serve content over HTTP without taking the visitor to HTTPS.
 ///
-/// Un único hallazgo de sitio (`url_id` nulo), con la cuenta y una muestra: no es un defecto de
-/// cada página, es una configuración del servidor, y listar 40.000 URLs no ayuda a arreglarla.
+/// A single site finding (null `url_id`), with the count and a sample: it is not a defect of
+/// each page, it is a server configuration, and listing 40,000 URLs does not help fix it.
 ///
-/// Qué cuenta como «responder por HTTP sin redirigir»:
+/// What counts as "answering over HTTP without redirecting":
 ///
-/// - Un 2xx por `http://` — sirve el contenido tal cual.
-/// - Un 3xx por `http://` cuyo destino sigue siendo `http://` — redirige, pero no a HTTPS.
+/// - A 2xx over `http://` — serves the content as is.
+/// - A 3xx over `http://` whose target is still `http://` — redirects, but not to HTTPS.
 ///
-/// Un 4xx o un 5xx no cuenta: no dice nada sobre cómo está configurado HTTPS.
+/// A 4xx or a 5xx does not count: it says nothing about how HTTPS is configured.
 pub struct HttpNoHttps;
 
 impl SiteRule for HttpNoHttps {
@@ -639,9 +646,9 @@ impl SiteRule for HttpNoHttps {
     }
 }
 
-// ---------------------------------------------------------------- Grafo de redirecciones
+// ---------------------------------------------------------------- Redirect graph
 
-/// Una fila de `urls` que redirige a otra.
+/// A row of `urls` that redirects to another.
 #[derive(Debug, Clone)]
 struct RedirectHop {
     url_hash: i64,
@@ -649,18 +656,19 @@ struct RedirectHop {
     redirect_to: i64,
 }
 
-/// Dónde acaba un recorrido por el grafo de redirecciones.
+/// Where a walk over the redirect graph ends.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ChainEnd {
-    /// Se llegó a una URL que no redirige. Es el `id` de esa URL.
+    /// A URL that does not redirect was reached. This is that URL's `id`.
     Final(i64),
-    /// Se volvió sobre una URL ya visitada. `cycle` son los nodos del ciclo, en orden.
+    /// The walk came back to a URL already visited. `cycle` holds the nodes of the cycle, in
+    /// order.
     Loop { cycle: Vec<i64> },
-    /// Se agotó [`MAX_REDIRECT_HOPS`] sin cerrar ni terminar.
+    /// [`MAX_REDIRECT_HOPS`] ran out without closing a cycle or finishing.
     TooLong,
 }
 
-/// Carga solo las filas que redirigen. En un rastreo de 100.000 URLs son unas pocas docenas.
+/// Loads only the rows that redirect. In a crawl of 100,000 URLs that is a few dozen.
 fn load_redirects(conn: &Connection) -> rusqlite::Result<BTreeMap<i64, RedirectHop>> {
     let mut stmt = conn.prepare(
         "SELECT id, url_hash, url, redirect_to FROM urls
@@ -675,13 +683,13 @@ fn load_redirects(conn: &Connection) -> rusqlite::Result<BTreeMap<i64, RedirectH
     rows.collect()
 }
 
-/// Las cabezas de cadena: nodos que redirigen y a los que no redirige nadie.
+/// The chain heads: nodes that redirect and that nobody redirects to.
 fn chain_heads(saltos: &BTreeMap<i64, RedirectHop>) -> Vec<i64> {
     let destinos: BTreeSet<i64> = saltos.values().map(|h| h.redirect_to).collect();
     saltos.keys().copied().filter(|id| !destinos.contains(id)).collect()
 }
 
-/// Recorre la cadena desde `inicio`. Devuelve el camino (con `inicio` incluido) y su final.
+/// Walks the chain from `inicio`. Returns the path (with `inicio` included) and its ending.
 fn walk(inicio: i64, saltos: &BTreeMap<i64, RedirectHop>) -> (Vec<i64>, ChainEnd) {
     let mut camino = vec![inicio];
     let mut actual = inicio;
@@ -701,10 +709,10 @@ fn walk(inicio: i64, saltos: &BTreeMap<i64, RedirectHop>) -> (Vec<i64>, ChainEnd
     (camino, ChainEnd::TooLong)
 }
 
-/// Resuelve `id` → `(url, status_code)` por clave primaria, con caché.
+/// Resolves `id` → `(url, status_code)` by primary key, with a cache.
 ///
-/// Se consulta una vez por cadena, no una vez por fila del rastreo: cargar la tabla `urls`
-/// entera para adornar veinte hallazgos sería justo el antipatrón §9.2.
+/// It is queried once per chain, not once per crawl row: loading the entire `urls` table to
+/// decorate twenty findings would be exactly antipattern §9.2.
 struct UrlLookup<'c> {
     stmt: rusqlite::Statement<'c>,
     cache: BTreeMap<i64, Option<(String, Option<i64>)>>,
@@ -749,7 +757,7 @@ impl<'c> UrlLookup<'c> {
     }
 }
 
-// ---------------------------------------------------------------- Registro
+// ---------------------------------------------------------------- Registry
 
 pub(crate) fn page_rules() -> Vec<Box<dyn PageRule>> {
     vec![
@@ -777,19 +785,19 @@ mod tests {
     use crate::LinkView;
     use rusqlite::params;
 
-    // ------------------------------------------------------------ Reglas de página
+    // ------------------------------------------------------------ Page rules
 
     fn ctx<'a>() -> PageContext<'a> {
         PageContext::indexable_html("https://ejemplo.es/a")
     }
 
     #[test]
-    fn no_avisa_de_5xx_en_una_respuesta_correcta() {
+    fn a_successful_response_is_not_flagged_as_5xx() {
         assert!(Http5xx.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn avisa_de_un_error_de_servidor() {
+    fn a_server_error_produces_a_finding() {
         let mut c = ctx();
         c.status = 503;
         let issues = Http5xx.evaluate(&c);
@@ -799,25 +807,25 @@ mod tests {
     }
 
     #[test]
-    fn un_4xx_no_es_un_error_de_servidor() {
+    fn a_4xx_is_not_a_server_error() {
         let mut c = ctx();
         c.status = 404;
         assert!(Http5xx.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn los_limites_del_rango_5xx() {
+    fn the_5xx_range_boundaries_are_exact() {
         for (estado, espera) in [(499u16, 0), (500, 1), (599, 1), (600, 0)] {
             let mut c = ctx();
             c.status = estado;
-            assert_eq!(Http5xx.evaluate(&c).len(), espera, "estado {estado}");
+            assert_eq!(Http5xx.evaluate(&c).len(), espera, "status {estado}");
         }
     }
 
     #[test]
-    fn una_pagina_no_indexable_sigue_avisando_de_5xx() {
-        // Un 5xx hace la página no indexable por definición: exigir indexabilidad silenciaría
-        // el único hallazgo que importa.
+    fn a_non_indexable_page_still_reports_5xx() {
+        // A 5xx makes the page non-indexable by definition: requiring indexability would
+        // silence the only finding that matters.
         let mut c = ctx();
         c.status = 500;
         c.is_indexable = false;
@@ -829,7 +837,7 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_de_contenido_mixto_sin_recursos_inseguros() {
+    fn no_mixed_content_finding_without_insecure_resources() {
         let enlaces = [recurso("https://cdn.ejemplo.es/x.js"), recurso("/estilo.css")];
         let mut c = ctx();
         c.links = &enlaces;
@@ -837,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn avisa_de_un_recurso_por_http_en_una_pagina_https() {
+    fn an_http_resource_on_an_https_page_produces_a_finding() {
         let enlaces = [recurso("http://cdn.ejemplo.com/analitica.js")];
         let mut c = ctx();
         c.links = &enlaces;
@@ -847,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn varios_recursos_inseguros_son_un_solo_hallazgo() {
+    fn several_insecure_resources_are_a_single_finding() {
         let enlaces = [
             recurso("http://cdn.ejemplo.com/a.js"),
             recurso("http://cdn.ejemplo.com/b.css"),
@@ -856,15 +864,15 @@ mod tests {
         let mut c = ctx();
         c.links = &enlaces;
         let issues = HttpMixedContent.evaluate(&c);
-        assert_eq!(issues.len(), 1, "es un defecto de plantilla, no tres problemas");
+        assert_eq!(issues.len(), 1, "it is a template defect, not three problems");
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"resources\":3"), "detalle inesperado: {detalle}");
+        assert!(detalle.contains("\"resources\":3"), "unexpected detail: {detalle}");
     }
 
     #[test]
-    fn un_enlace_por_http_no_es_contenido_mixto() {
-        // Enlazar a un sitio ajeno que va por HTTP no rompe el candado del navegador: solo lo
-        // rompe lo que la página *carga*.
+    fn an_http_link_is_not_mixed_content() {
+        // Linking to a third-party site served over HTTP does not break the browser's padlock:
+        // only what the page *loads* does.
         let enlaces = [LinkView { href: "http://otro.example/", ..Default::default() }];
         let mut c = ctx();
         c.links = &enlaces;
@@ -872,8 +880,8 @@ mod tests {
     }
 
     #[test]
-    fn un_recurso_protocol_relative_no_es_contenido_mixto() {
-        // `//host/x.js` hereda el esquema de la página, así que en HTTPS va por HTTPS.
+    fn a_protocol_relative_resource_is_not_mixed_content() {
+        // `//host/x.js` inherits the page's scheme, so on HTTPS it goes over HTTPS.
         let enlaces = [recurso("//cdn.ejemplo.com/x.js")];
         let mut c = ctx();
         c.links = &enlaces;
@@ -881,8 +889,9 @@ mod tests {
     }
 
     #[test]
-    fn una_pagina_http_no_tiene_contenido_mixto() {
-        // Sin HTTPS no hay mezcla: el problema de esa página es otro, y lo cuenta HTTP-NO-HTTPS.
+    fn an_http_page_cannot_have_mixed_content() {
+        // Without HTTPS there is no mixing: that page's problem is a different one, and
+        // HTTP-NO-HTTPS reports it.
         let enlaces = [recurso("http://cdn.ejemplo.com/x.js")];
         let mut c = PageContext::indexable_html("http://ejemplo.es/a");
         c.links = &enlaces;
@@ -891,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn no_se_busca_contenido_mixto_en_algo_que_no_es_html() {
+    fn mixed_content_is_not_checked_outside_html() {
         let enlaces = [recurso("http://cdn.ejemplo.com/x.js")];
         let mut c = ctx();
         c.is_html = false;
@@ -900,10 +909,10 @@ mod tests {
     }
 
     #[test]
-    fn el_html_de_una_pagina_de_error_no_se_audita() {
-        // La plantilla de error del tema se sirve una vez por cada URL rota: sin la puerta del
-        // 2xx, un recurso `http://` o un HTML obeso en esa plantilla serían un hallazgo por
-        // cada 404 del sitio, con una única causa. Ver `PageContext::is_success`.
+    fn the_html_of_an_error_page_is_not_audited() {
+        // The theme's error template is served once per broken URL: without the 2xx gate, an
+        // `http://` resource or an obese HTML in that template would be one finding per 404 on
+        // the site, with a single cause. See `PageContext::is_success`.
         let enlaces = [recurso("http://cdn.ejemplo.com/x.js")];
         for status in [301, 404, 410, 500] {
             let mut c = ctx();
@@ -911,7 +920,7 @@ mod tests {
             c.links = &enlaces;
             assert!(
                 HttpMixedContent.evaluate(&c).is_empty(),
-                "HTTP-MIXED-CONTENT no debería auditar el HTML de un {status}"
+                "HTTP-MIXED-CONTENT should not audit the HTML of a {status}"
             );
 
             let mut c = ctx();
@@ -919,15 +928,15 @@ mod tests {
             c.html_bytes = LARGE_PAGE_BYTES + 1;
             assert!(
                 HttpLargePage.evaluate(&c).is_empty(),
-                "HTTP-LARGE-PAGE no debería auditar el HTML de un {status}"
+                "HTTP-LARGE-PAGE should not audit the HTML of a {status}"
             );
         }
     }
 
     #[test]
-    fn una_respuesta_lenta_avisa_con_cualquier_estado() {
-        // El TTFB mide el servidor, no el HTML: un 404 lento es el mismo problema de servidor
-        // que un 200 lento, y por eso esta regla no lleva la puerta del 2xx.
+    fn a_slow_response_is_reported_whatever_the_status() {
+        // The TTFB measures the server, not the HTML: a slow 404 is the same server problem as
+        // a slow 200, which is why this rule does not carry the 2xx gate.
         let mut c = ctx();
         c.status = 404;
         c.ttfb_ms = Some(SLOW_RESPONSE_MS + 500);
@@ -935,15 +944,15 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_de_lentitud_sin_medida_de_ttfb() {
-        // Modo `filesystem`: no hay red, así que no hay TTFB y no hay hallazgo posible.
+    fn no_slowness_finding_without_a_ttfb_measurement() {
+        // `filesystem` mode: no network, so no TTFB and no possible finding.
         let mut c = ctx();
         c.ttfb_ms = None;
         assert!(HttpSlowResponse.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn avisa_de_una_respuesta_lenta() {
+    fn a_slow_response_produces_a_finding() {
         let mut c = ctx();
         c.ttfb_ms = Some(1_500);
         let issues = HttpSlowResponse.evaluate(&c);
@@ -952,7 +961,7 @@ mod tests {
     }
 
     #[test]
-    fn el_umbral_de_lentitud_no_es_inclusivo() {
+    fn the_slowness_threshold_is_exclusive() {
         let mut c = ctx();
         c.ttfb_ms = Some(SLOW_RESPONSE_MS);
         assert!(HttpSlowResponse.evaluate(&c).is_empty());
@@ -961,12 +970,12 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_del_tamano_de_una_pagina_normal() {
+    fn a_normal_sized_page_is_not_flagged() {
         assert!(HttpLargePage.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn avisa_de_un_html_demasiado_grande() {
+    fn an_oversized_html_produces_a_finding() {
         let mut c = ctx();
         c.html_bytes = 700_000;
         let issues = HttpLargePage.evaluate(&c);
@@ -975,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    fn el_umbral_de_tamano_no_es_inclusivo() {
+    fn the_size_threshold_is_exclusive() {
         let mut c = ctx();
         c.html_bytes = LARGE_PAGE_BYTES;
         assert!(HttpLargePage.evaluate(&c).is_empty());
@@ -984,28 +993,27 @@ mod tests {
     }
 
     #[test]
-    fn el_umbral_de_tamano_solo_aplica_al_html() {
+    fn the_size_threshold_only_applies_to_html() {
         let mut c = ctx();
         c.is_html = false;
         c.html_bytes = 5_000_000;
         assert!(HttpLargePage.evaluate(&c).is_empty());
     }
 
-    // ------------------------------------------------------------ Reglas de conjunto
+    // ------------------------------------------------------------ Site rules
     //
-    // Ninguna de estas se puede provocar con un fixture de sistema de ficheros: sin servidor no
-    // hay 3xx, ni 5xx, ni comprobación de URLs ajenas. La base en memoria es la única forma de
-    // demostrar el SQL, así que aquí se monta el esquema real y se insertan las filas mínimas.
+    // None of these can be triggered with a filesystem fixture: without a server there are no
+    // 3xx, no 5xx, and no checking of third-party URLs. The in-memory database is the only way
+    // to exercise the SQL, so the real schema is set up here and the minimal rows inserted.
 
     fn db() -> Connection {
-        let conn = Connection::open_in_memory().expect("abrir en memoria");
-        conn.execute_batch(include_str!("../../crawlforge-core/migrations/001_initial.sql"))
-            .expect("cargar el esquema 001");
-        // Las filas se insertan con `redirect_to` apuntando a `id` que aún no existen, y un
-        // bucle de redirección es circular por definición: no hay ningún orden de inserción que
-        // satisfaga la clave ajena. El motor real escribe por lotes en una transacción; aquí
-        // basta con no exigirla.
-        conn.pragma_update(None, "foreign_keys", false).expect("desactivar claves ajenas");
+        // The full published schema, from the shared helper guarded against `migrations/`.
+        let conn = crate::test_schema::full_schema();
+        // Rows are inserted with `redirect_to` pointing at `id`s that do not exist yet, and a
+        // redirect loop is circular by definition: no insertion order satisfies the foreign
+        // key. The real engine writes in batches inside a transaction; here it is enough not to
+        // enforce it.
+        conn.pragma_update(None, "foreign_keys", false).expect("disable foreign keys");
         conn
     }
 
@@ -1013,7 +1021,7 @@ mod tests {
         xxhash_rust::xxh3::xxh3_64(url.as_bytes()) as i64
     }
 
-    /// Fila mínima de `urls`. `id` explícito para poder encadenar `redirect_to` a mano.
+    /// Minimal `urls` row. Explicit `id` so `redirect_to` chains can be wired by hand.
     struct Fila<'a> {
         id: i64,
         url: &'a str,
@@ -1060,7 +1068,7 @@ mod tests {
                 f.redirect_to
             ],
         )
-        .expect("insertar url");
+        .expect("insert url");
     }
 
     fn enlazar(conn: &Connection, desde: i64, hacia: i64) {
@@ -1068,7 +1076,7 @@ mod tests {
             "INSERT INTO links (from_url_id, to_url_id, element) VALUES (?1, ?2, 'a')",
             params![desde, hacia],
         )
-        .expect("insertar enlace");
+        .expect("insert link");
     }
 
     fn ids(hallazgos: &[(Option<i64>, Issue)]) -> Vec<Option<i64>> {
@@ -1078,192 +1086,193 @@ mod tests {
     // --- HTTP-404-EXTERNAL ---
 
     #[test]
-    fn avisa_de_un_enlace_externo_roto() {
+    fn a_broken_external_link_produces_a_finding() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
         insertar(&conn, Fila::externa(2, "https://otro.example/muerta", Some(404)));
         enlazar(&conn, 1, 2);
 
-        let hallazgos = Http404External.evaluate(&conn).expect("evaluar");
+        let hallazgos = Http404External.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
         assert_eq!(hallazgos[0].1.rule_id, "HTTP-404-EXTERNAL");
         assert_eq!(ids(&hallazgos), vec![Some(hash("https://otro.example/muerta"))]);
     }
 
     #[test]
-    fn un_404_interno_no_lo_cuenta_la_regla_de_externos() {
+    fn an_internal_404_is_not_counted_by_the_external_rule() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/no-existe", 404));
         enlazar(&conn, 1, 2);
 
-        assert!(Http404External.evaluate(&conn).expect("evaluar").is_empty());
-        assert_eq!(Http404Internal.evaluate(&conn).expect("evaluar").len(), 1);
+        assert!(Http404External.evaluate(&conn).expect("evaluate").is_empty());
+        assert_eq!(Http404Internal.evaluate(&conn).expect("evaluate").len(), 1);
     }
 
     #[test]
-    fn una_url_externa_sin_estado_comprobado_no_da_hallazgo() {
-        // Con `--no-external-check`, y con cualquier sonda que no llegue a completarse, la
-        // externa queda registrada sin estado. Sin dato no hay hallazgo: la regla calla en vez
-        // de afirmar que el enlace está bien, que sería mentir por omisión.
+    fn an_external_url_with_unchecked_status_produces_no_finding() {
+        // With `--no-external-check`, and with any probe that fails to complete, the external
+        // URL is recorded without a status. No data, no finding: the rule stays silent instead
+        // of claiming the link is fine, which would be lying by omission.
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
         insertar(&conn, Fila::externa(2, "https://otro.example/quizas", None));
         enlazar(&conn, 1, 2);
 
-        assert!(Http404External.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(Http404External.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn un_5xx_externo_no_cuenta_como_enlace_roto() {
-        // Casi siempre es un problema temporal del servidor ajeno: reportarlo haría que el
-        // informe cambiara de un rastreo a otro sin que nadie hubiera tocado nada.
+    fn an_external_5xx_does_not_count_as_a_broken_link() {
+        // Almost always a temporary problem on the other party's server: reporting it would
+        // make the report change from one crawl to the next without anyone having touched
+        // anything.
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
         insertar(&conn, Fila::externa(2, "https://otro.example/caida", Some(503)));
         enlazar(&conn, 1, 2);
 
-        assert!(Http404External.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(Http404External.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn una_externa_rota_a_la_que_nadie_enlaza_no_da_hallazgo() {
+    fn a_broken_external_url_nobody_links_to_produces_no_finding() {
         let conn = db();
         insertar(&conn, Fila::externa(1, "https://otro.example/muerta", Some(410)));
-        assert!(Http404External.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(Http404External.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     // --- HTTP-REDIRECT-CHAIN ---
 
     #[test]
-    fn avisa_de_una_cadena_de_dos_saltos_en_su_cabeza() {
+    fn a_two_hop_chain_is_reported_at_its_head() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/a", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/b", 301).hacia(3));
         insertar(&conn, Fila::interna(3, "https://ejemplo.es/c", 200));
 
-        let hallazgos = HttpRedirectChain.evaluate(&conn).expect("evaluar");
-        assert_eq!(hallazgos.len(), 1, "solo la cabeza de la cadena");
+        let hallazgos = HttpRedirectChain.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1, "only the head of the chain");
         assert_eq!(ids(&hallazgos), vec![Some(hash("https://ejemplo.es/a"))]);
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"hops\":2"), "detalle inesperado: {detalle}");
-        assert!(detalle.contains("https://ejemplo.es/c"), "falta el destino: {detalle}");
+        assert!(detalle.contains("\"hops\":2"), "unexpected detail: {detalle}");
+        assert!(detalle.contains("https://ejemplo.es/c"), "the target is missing: {detalle}");
     }
 
     #[test]
-    fn un_solo_salto_no_es_una_cadena() {
+    fn a_single_hop_is_not_a_chain() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/viejo", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/nuevo", 200));
 
-        assert!(HttpRedirectChain.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HttpRedirectChain.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn un_bucle_no_se_cuenta_como_cadena() {
+    fn a_loop_does_not_count_as_a_chain() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/a", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/b", 301).hacia(1));
 
-        assert!(HttpRedirectChain.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HttpRedirectChain.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn un_rastreo_sin_redirecciones_no_da_hallazgos_de_cadena() {
+    fn a_crawl_without_redirects_produces_no_chain_findings() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
-        assert!(HttpRedirectChain.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HttpRedirectChain.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     // --- HTTP-REDIRECT-LOOP ---
 
     #[test]
-    fn avisa_una_sola_vez_de_un_bucle_de_dos_urls() {
+    fn a_two_url_loop_is_reported_exactly_once() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/a", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/b", 301).hacia(1));
 
-        let hallazgos = HttpRedirectLoop.evaluate(&conn).expect("evaluar");
-        assert_eq!(hallazgos.len(), 1, "un ciclo, un hallazgo");
+        let hallazgos = HttpRedirectLoop.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1, "one cycle, one finding");
         assert_eq!(hallazgos[0].1.rule_id, "HTTP-REDIRECT-LOOP");
         assert_eq!(ids(&hallazgos), vec![Some(hash("https://ejemplo.es/a"))]);
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"length\":2"), "detalle inesperado: {detalle}");
-        assert!(hallazgos[0].1.group_key.is_some(), "el bucle debe agrupar para el diff");
+        assert!(detalle.contains("\"length\":2"), "unexpected detail: {detalle}");
+        assert!(hallazgos[0].1.group_key.is_some(), "the loop must group for the diff");
     }
 
     #[test]
-    fn avisa_de_una_url_que_redirige_a_si_misma() {
+    fn a_url_redirecting_to_itself_produces_a_finding() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/a", 302).hacia(1));
 
-        let hallazgos = HttpRedirectLoop.evaluate(&conn).expect("evaluar");
+        let hallazgos = HttpRedirectLoop.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
     }
 
     #[test]
-    fn una_cadena_que_entra_en_un_bucle_no_lo_duplica() {
-        // X → A → B → A. El ciclo es {A, B}, y desde X se llega al mismo: un solo hallazgo.
+    fn a_chain_entering_a_loop_does_not_duplicate_it() {
+        // X → A → B → A. The cycle is {A, B}, and from X you reach that same one: one finding.
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/x", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/a", 301).hacia(3));
         insertar(&conn, Fila::interna(3, "https://ejemplo.es/b", 301).hacia(2));
 
-        let hallazgos = HttpRedirectLoop.evaluate(&conn).expect("evaluar");
+        let hallazgos = HttpRedirectLoop.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
         assert_eq!(ids(&hallazgos), vec![Some(hash("https://ejemplo.es/a"))]);
     }
 
     #[test]
-    fn una_cadena_que_termina_bien_no_es_un_bucle() {
+    fn a_chain_that_ends_well_is_not_a_loop() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/a", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/b", 301).hacia(3));
         insertar(&conn, Fila::interna(3, "https://ejemplo.es/c", 200));
 
-        assert!(HttpRedirectLoop.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HttpRedirectLoop.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     // --- HTTP-REDIRECT-TO-404 ---
 
     #[test]
-    fn avisa_de_una_redireccion_que_acaba_en_404() {
+    fn a_redirect_ending_in_a_404_produces_a_finding() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/viejo", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/no-existe", 404));
 
-        let hallazgos = HttpRedirectTo404.evaluate(&conn).expect("evaluar");
+        let hallazgos = HttpRedirectTo404.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
         assert_eq!(hallazgos[0].1.rule_id, "HTTP-REDIRECT-TO-404");
         assert_eq!(ids(&hallazgos), vec![Some(hash("https://ejemplo.es/viejo"))]);
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"final_status_code\":404"), "detalle inesperado: {detalle}");
+        assert!(detalle.contains("\"final_status_code\":404"), "unexpected detail: {detalle}");
     }
 
     #[test]
-    fn una_cadena_que_acaba_en_404_se_reporta_en_la_cabeza() {
+    fn a_chain_ending_in_a_404_is_reported_at_the_head() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/a", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/b", 301).hacia(3));
         insertar(&conn, Fila::interna(3, "https://ejemplo.es/c", 410));
 
-        let hallazgos = HttpRedirectTo404.evaluate(&conn).expect("evaluar");
+        let hallazgos = HttpRedirectTo404.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
         assert_eq!(ids(&hallazgos), vec![Some(hash("https://ejemplo.es/a"))]);
     }
 
     #[test]
-    fn una_redireccion_que_acaba_bien_no_da_hallazgo() {
+    fn a_redirect_that_ends_well_produces_no_finding() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/viejo", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/nuevo", 200));
 
-        assert!(HttpRedirectTo404.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HttpRedirectTo404.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn una_redireccion_a_un_destino_sin_rastrear_no_da_hallazgo() {
-        // Sin estado del destino no se puede afirmar que sea un error.
+    fn a_redirect_to_an_uncrawled_destination_produces_no_finding() {
+        // Without the destination's status it cannot be claimed to be an error.
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/viejo", 301).hacia(2));
         conn.execute(
@@ -1273,73 +1282,73 @@ mod tests {
                      1, 0, 'pending')",
             [],
         )
-        .expect("insertar pendiente");
+        .expect("insert pending");
 
-        assert!(HttpRedirectTo404.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HttpRedirectTo404.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     // --- HTTP-NO-HTTPS ---
 
     #[test]
-    fn avisa_una_sola_vez_de_que_el_sitio_responde_por_http() {
+    fn a_site_answering_over_http_is_reported_exactly_once() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "http://ejemplo.es/", 200));
         insertar(&conn, Fila::interna(2, "http://ejemplo.es/otra", 200));
 
-        let hallazgos = HttpNoHttps.evaluate(&conn).expect("evaluar");
-        assert_eq!(hallazgos.len(), 1, "es una configuración del servidor, no un defecto por URL");
-        assert_eq!(hallazgos[0].0, None, "es un hallazgo de sitio");
+        let hallazgos = HttpNoHttps.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1, "it is a server configuration, not a per-URL defect");
+        assert_eq!(hallazgos[0].0, None, "it is a site finding");
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"http_urls\":2"), "detalle inesperado: {detalle}");
+        assert!(detalle.contains("\"http_urls\":2"), "unexpected detail: {detalle}");
     }
 
     #[test]
-    fn un_sitio_entero_por_https_no_da_hallazgo() {
+    fn a_fully_https_site_produces_no_finding() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
-        assert!(HttpNoHttps.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HttpNoHttps.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn una_url_http_que_redirige_a_https_es_lo_correcto() {
+    fn an_http_url_redirecting_to_https_is_the_right_setup() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "http://ejemplo.es/", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "https://ejemplo.es/", 200));
 
-        assert!(HttpNoHttps.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HttpNoHttps.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn una_url_http_que_redirige_a_otra_http_sigue_estando_mal() {
+    fn an_http_url_redirecting_to_another_http_url_is_still_wrong() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "http://ejemplo.es/viejo", 301).hacia(2));
         insertar(&conn, Fila::interna(2, "http://ejemplo.es/nuevo", 200));
 
-        let hallazgos = HttpNoHttps.evaluate(&conn).expect("evaluar");
+        let hallazgos = HttpNoHttps.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"http_urls\":2"), "detalle inesperado: {detalle}");
+        assert!(detalle.contains("\"http_urls\":2"), "unexpected detail: {detalle}");
     }
 
     #[test]
-    fn un_404_por_http_no_dice_nada_de_como_esta_configurado_https() {
+    fn an_http_404_says_nothing_about_how_https_is_configured() {
         let conn = db();
         insertar(&conn, Fila::interna(1, "http://ejemplo.es/no-existe", 404));
-        assert!(HttpNoHttps.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HttpNoHttps.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn una_url_externa_por_http_no_es_asunto_del_sitio() {
+    fn an_external_url_over_http_is_not_this_sites_concern() {
         let conn = db();
         insertar(&conn, Fila::externa(1, "http://otro.example/", Some(200)));
-        assert!(HttpNoHttps.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HttpNoHttps.evaluate(&conn).expect("evaluate").is_empty());
     }
 
-    // --- Recorrido del grafo ---
+    // --- Graph walk ---
 
     #[test]
-    fn el_recorrido_corta_un_grafo_patologico() {
-        // Cadena más larga que el tope: se para y lo dice, en vez de girar para siempre.
+    fn the_walk_cuts_off_a_pathological_graph() {
+        // A chain longer than the cap: it stops and says so, instead of spinning forever.
         let mut saltos = BTreeMap::new();
         for id in 1..=(MAX_REDIRECT_HOPS as i64 + 5) {
             saltos.insert(

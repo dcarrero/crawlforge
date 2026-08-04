@@ -1,33 +1,33 @@
-//! `ASSET` — imágenes y recursos. `docs/04-CATALOGO-REGLAS.md §7`.
+//! `ASSET` — images and resources. `docs/04-CATALOGO-REGLAS.md §7`.
 //!
-//! El módulo se parte en dos por una razón que no es estética:
+//! The module splits in two for a reason that is not cosmetic:
 //!
-//! - Lo que está escrito en el HTML —falta el atributo `alt`, un `alt=""` que deja un enlace sin
-//!   nombre accesible— se decide con la página delante: son [`PageRule`], se evalúan en
-//!   streaming y no cuestan ni una consulta.
-//! - Lo que exige **haber pedido el recurso** —su código de estado y su tamaño real— solo se
-//!   sabe con el rastreo terminado: son [`SiteRule`] con SQL sobre el almacén.
+//! - What is written in the HTML —a missing `alt` attribute, an `alt=""` that leaves a link
+//!   without an accessible name— can be decided with the page in front of you: those are
+//!   [`PageRule`]s, evaluated in streaming, and they cost not a single query.
+//! - What requires **having requested the resource** —its status code and its actual size— is
+//!   only known once the crawl is done: those are [`SiteRule`]s with SQL over the store.
 //!
-//! El catálogo clasifica `ASSET-IMG-HEAVY` como regla de página, y no puede serlo: el peso de una
-//! imagen no aparece en ningún atributo del HTML, hay que descargarla y contar los bytes que
-//! llegaron. El motor ya lo hace —cada `<img src>` es una URL del rastreo, con su
-//! `urls.content_length`— así que el dato existe, pero en el almacén y no en el `PageContext`.
-//! Ver [`AssetImgHeavy`].
+//! The catalog classifies `ASSET-IMG-HEAVY` as a page rule, and it cannot be one: the weight of
+//! an image does not appear in any HTML attribute; you have to download it and count the bytes
+//! that arrived. The engine already does —every `<img src>` is a crawl URL, with its
+//! `urls.content_length`— so the number exists, but in the store, not in the `PageContext`.
+//! See [`AssetImgHeavy`].
 
 use crate::{Category, Issue, PageContext, PageRule, RuleMeta, Scope, Severity, SiteRule, Tier};
 use rusqlite::Connection;
 
-/// A partir de aquí una imagen es «pesada»: 200 KiB.
+/// From here on an image is "heavy": 200 KiB.
 ///
-/// Es el umbral del catálogo (§7). Se mide sobre los bytes que devolvió el servidor, que es lo
-/// que paga el visitante, y no sobre las dimensiones declaradas en el HTML.
+/// It is the catalog threshold (§7). Measured over the bytes the server returned, which is what
+/// the visitor pays for, not over the dimensions declared in the HTML.
 pub const HEAVY_IMAGE_MAX_BYTES: i64 = 200 * 1024;
 
-/// Cuántas URLs se guardan en el `detail_json` de un hallazgo de página.
+/// How many URLs are kept in the `detail_json` of a page finding.
 ///
-/// Una galería puede traer doscientas imágenes sin `alt`. El recuento va completo; la lista se
-/// corta, porque el almacén no es el sitio donde guardar doscientas cadenas por página y con diez
-/// ejemplos el usuario ya sabe qué plantilla arreglar.
+/// A gallery can bring two hundred images without `alt`. The count stays complete; the list is
+/// cut, because the store is not the place to keep two hundred strings per page, and with ten
+/// examples the user already knows which template to fix.
 const SAMPLE_LIMIT: usize = 10;
 
 pub static ASSET_IMG_NO_ALT: RuleMeta = RuleMeta {
@@ -129,16 +129,16 @@ pub static ASSET_BROKEN: RuleMeta = RuleMeta {
     references: &[],
 };
 
-// ---------------------------------------------------------------- Reglas de página
+// ---------------------------------------------------------------- Page rules
 
-/// Imágenes sin atributo `alt`.
+/// Images without an `alt` attribute.
 ///
-/// **`None` y `Some("")` no son lo mismo.** Un `alt` ausente es un descuido; un `alt=""` es una
-/// decisión deliberada de imagen decorativa y es HTML válido, así que aquí no cuenta. El único
-/// caso en que un `alt=""` sí es un defecto lo cubre [`AssetImgEmptyAltLink`].
+/// **`None` and `Some("")` are not the same thing.** A missing `alt` is an oversight; an
+/// `alt=""` is a deliberate decorative-image decision and valid HTML, so it does not count
+/// here. The one case where an `alt=""` is a defect is covered by [`AssetImgEmptyAltLink`].
 ///
-/// Un hallazgo por página y no por imagen: la causa está casi siempre en la plantilla o en el
-/// editor de contenidos, y treinta filas de la misma galería no dicen más que una con el recuento.
+/// One finding per page, not per image: the cause is almost always the template or the content
+/// editor, and thirty rows from the same gallery say no more than one row with the count.
 pub struct AssetImgNoAlt;
 
 impl PageRule for AssetImgNoAlt {
@@ -147,13 +147,13 @@ impl PageRule for AssetImgNoAlt {
     }
 
     fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
-        // Sí se exige un 2xx: sin él, la plantilla de error del tema se auditaba una vez por
-        // cada URL rota del sitio. Ver `PageContext::is_success`.
+        // A 2xx is required: without it, the theme's error template got audited once per
+        // broken URL on the site. See `PageContext::is_success`.
         if !ctx.is_html || !ctx.is_success() {
             return Vec::new();
         }
-        // No se exige que la página sea indexable: el `alt` es el texto alternativo de la imagen
-        // para quien la visita, y a una página con `noindex` se llega igual.
+        // The page is not required to be indexable: the `alt` is the image's alternative text
+        // for whoever visits, and a `noindex` page is reached all the same.
         let sin_alt: Vec<&str> =
             ctx.images.iter().filter(|img| img.alt.is_none()).map(|img| img.src).collect();
         if sin_alt.is_empty() {
@@ -166,23 +166,22 @@ impl PageRule for AssetImgNoAlt {
     }
 }
 
-/// Imagen con `alt=""` dentro de un enlace que no tiene ningún otro texto.
+/// Image with `alt=""` inside a link that has no other text.
 ///
-/// El enlace se queda sin nombre accesible: el `alt` vacío declara «esta imagen no aporta
-/// información», y si es lo único que hay dentro del `<a>`, tampoco la aporta el enlace.
+/// The link is left without an accessible name: the empty `alt` declares "this image adds no
+/// information", and if it is the only thing inside the `<a>`, neither does the link.
 ///
-/// Es la otra mitad de [`AssetImgNoAlt`], y la razón por la que [`crate::ImageView::alt`]
-/// distingue `None` de `Some("")`: la misma marca es correcta fuera de un enlace e incorrecta
-/// dentro.
+/// It is the other half of [`AssetImgNoAlt`], and the reason [`crate::ImageView::alt`]
+/// distinguishes `None` from `Some("")`: the same markup is correct outside a link and wrong
+/// inside one.
 ///
-/// Emite **un hallazgo por imagen distinta, no por página ni por enlace**, con la URL de la
-/// imagen como `group_key`. Es la granularidad de la causa: el mismo logo repetido veinte veces
-/// en la página es un defecto (una fila, con `occurrences`), y el logo en 18.089 páginas es un
-/// grupo que el informe colapsa a un solo problema de plantilla. La alternativa de una fila por
-/// página con el **conjunto** de imágenes como clave se probó contra un rastreo real y agrupaba
-/// mal: el logo de la plantilla está en todas las páginas, pero la mitad de ellas añade su
-/// imagen destacada propia, el conjunto cambia, y la misma causa se repartía en 171 grupos de
-/// una página.
+/// Emits **one finding per distinct image, not per page or per link**, with the image URL as
+/// `group_key`. That is the granularity of the cause: the same logo repeated twenty times on
+/// the page is one defect (one row, with `occurrences`), and the logo on 18,089 pages is a
+/// group the report collapses into a single template problem. The alternative —one row per
+/// page with the **set** of images as the key— was tried against a real crawl and grouped
+/// badly: the template's logo is on every page, but half of them add their own featured
+/// image, the set changes, and the same cause was scattered across 171 single-page groups.
 pub struct AssetImgEmptyAltLink;
 
 impl PageRule for AssetImgEmptyAltLink {
@@ -191,20 +190,21 @@ impl PageRule for AssetImgEmptyAltLink {
     }
 
     fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
-        // El 2xx corta la plantilla de error, donde esta regla era la más ruidosa del catálogo:
-        // el logo de la cabecera del tema aparecía como hallazgo `high` en cada 404 del sitio.
+        // The 2xx cuts out the error template, where this rule was the noisiest in the catalog:
+        // the theme's header logo showed up as a `high` finding on every 404 of the site.
         if !ctx.is_html || !ctx.is_success() {
             return Vec::new();
         }
         let sin_nombre: Vec<&str> = ctx
             .images
             .iter()
-            // `alt` presente y vacío. Un `alt` ausente dentro de un enlace también lo deja sin
-            // nombre, pero de eso ya avisa `ASSET-IMG-NO-ALT`: dos hallazgos sobre el mismo
-            // `<img>` serían ruido.
+            // `alt` present and empty. A missing `alt` inside a link also leaves it unnamed,
+            // but `ASSET-IMG-NO-ALT` already reports that: two findings on the same `<img>`
+            // would be noise.
             .filter(|img| img.alt.is_some_and(|alt| alt.trim().is_empty()))
-            // `anchor_text` es `None` cuando la imagen no cuelga de ningún enlace, y `Some("")`
-            // cuando el enlace no tiene más texto que la imagen. Solo el segundo es un defecto.
+            // `anchor_text` is `None` when the image does not hang from any link, and
+            // `Some("")` when the link has no text beyond the image. Only the second is a
+            // defect.
             .filter(|img| img.anchor_text.is_some_and(|texto| texto.trim().is_empty()))
             .map(|img| img.src)
             .collect();
@@ -212,12 +212,12 @@ impl PageRule for AssetImgEmptyAltLink {
             return Vec::new();
         }
 
-        // Una fila por imagen **distinta**. El `group_key` identifica la causa —la URL de la
-        // imagen— y no la página: el logo de la cabecera es la misma imagen en las 18.089
-        // páginas de un rastreo real, así que todas comparten clave y el informe puede decir
-        // «un defecto de plantilla» en vez de contar 18.089 filas. Se hashea porque un `src`
-        // inline `data:` puede medir kilobytes; la URL legible va en el detalle, recortada si
-        // es `data:` (el base64 no localiza nada y pesaba 45 MB en un rastreo real).
+        // One row per **distinct** image. The `group_key` identifies the cause —the image
+        // URL— not the page: the header logo is the same image on the 18,089 pages of a real
+        // crawl, so they all share the key and the report can say "one template defect"
+        // instead of counting 18,089 rows. It is hashed because an inline `data:` src can
+        // measure kilobytes; the readable URL goes in the detail, trimmed when it is `data:`
+        // (the base64 locates nothing and weighed 45 MB in a real crawl).
         let mut distintas: Vec<(&str, u32)> = Vec::new();
         for src in sin_nombre {
             match distintas.iter_mut().find(|(s, _)| *s == src) {
@@ -244,10 +244,10 @@ impl PageRule for AssetImgEmptyAltLink {
     }
 }
 
-/// La forma en que un `src` se guarda en un `detail_json`: tal cual, salvo las URIs `data:`,
-/// que se cortan en su coma. El tipo (`data:image/svg+xml;base64,…`) basta para saber qué es;
-/// el contenido no localiza nada porque no es una URL que se pueda abrir, y en un rastreo real
-/// eran 45 MB de base64 repetido.
+/// How a `src` is stored in a `detail_json`: as is, except `data:` URIs, which are cut at
+/// their comma. The type (`data:image/svg+xml;base64,…`) is enough to know what it is; the
+/// content locates nothing because it is not a URL you can open, and in a real crawl it was
+/// 45 MB of repeated base64.
 fn display_src(src: &str) -> String {
     match src.split_once(',') {
         Some((cabecera, _)) if src.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("data:")) => {
@@ -257,13 +257,13 @@ fn display_src(src: &str) -> String {
     }
 }
 
-/// Hasta [`SAMPLE_LIMIT`] URLs **distintas** de una lista, para el `detail_json`.
+/// Up to [`SAMPLE_LIMIT`] **distinct** URLs from a list, for the `detail_json`.
 ///
-/// Deduplicada: el logo repetido veinte veces en la misma página llenaba la muestra con veinte
-/// copias de la misma cadena. Y una URI `data:` se corta en su coma: en un rastreo real la
-/// muestra guardaba diez copias del mismo SVG en base64 —peso muerto en 18.089 filas que no
-/// ayudaba a localizar nada—. El tipo (`data:image/svg+xml;base64,…`) basta para saber qué es;
-/// el contenido no localiza nada porque no es una URL que se pueda abrir.
+/// Deduplicated: the logo repeated twenty times on the same page filled the sample with twenty
+/// copies of the same string. And a `data:` URI is cut at its comma: in a real crawl the
+/// sample stored ten copies of the same base64 SVG —dead weight in 18,089 rows that helped
+/// locate nothing—. The type (`data:image/svg+xml;base64,…`) is enough to know what it is; the
+/// content locates nothing because it is not a URL you can open.
 fn sample(srcs: &[&str]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for src in srcs {
@@ -278,13 +278,13 @@ fn sample(srcs: &[&str]) -> Vec<String> {
     out
 }
 
-// ---------------------------------------------------------------- Reglas de conjunto
+// ---------------------------------------------------------------- Site rules
 
-/// Imagen que devuelve 4xx o 5xx.
+/// Image returning 4xx or 5xx.
 ///
-/// El hallazgo se registra **en la URL de la imagen**, no en cada página que la carga, con el
-/// recuento de páginas afectadas: el fichero que falta es uno y se arregla una vez. Es el mismo
-/// criterio que `HTTP-404-INTERNAL`, con el que forma familia.
+/// The finding is recorded **on the image's URL**, not on every page that loads it, with the
+/// count of affected pages: the missing file is one and gets fixed once. Same criterion as
+/// `HTTP-404-INTERNAL`, whose family it belongs to.
 pub struct AssetImgBroken;
 
 impl SiteRule for AssetImgBroken {
@@ -293,9 +293,9 @@ impl SiteRule for AssetImgBroken {
     }
 
     fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
-        // `images.src_url_id` apunta a la fila de `urls` de la imagen, que el motor pide como
-        // cualquier otra URL: de ahí sale su `status_code`. El `COUNT(DISTINCT ...)` es lo que
-        // convierte «falta un fichero» en «falta un fichero y lo cargan 40 páginas».
+        // `images.src_url_id` points at the image's `urls` row, which the engine requests like
+        // any other URL: that is where its `status_code` comes from. The `COUNT(DISTINCT ...)`
+        // is what turns "a file is missing" into "a file is missing and 40 pages load it".
         let mut stmt = conn.prepare(
             "SELECT u.url_hash, u.url, u.status_code, COUNT(DISTINCT i.page_url_id) AS pages
              FROM urls u
@@ -329,17 +329,18 @@ impl SiteRule for AssetImgBroken {
     }
 }
 
-/// Imagen de más de [`HEAVY_IMAGE_MAX_BYTES`].
+/// Image over [`HEAVY_IMAGE_MAX_BYTES`].
 ///
-/// **Es de alcance `site` aunque el catálogo la liste como de página**, y no por comodidad: el
-/// peso de una imagen no está en el HTML. `width` y `height` declaran cómo se maqueta, no cuántos
-/// bytes pesa el fichero; eso solo se sabe tras pedirlo, y el número acaba en
-/// `urls.content_length`. Hacerla de página exigiría que el `PageContext` trajera el tamaño de
-/// cada imagen, que en el momento de evaluar la página todavía no se ha descargado.
+/// **It is `site`-scoped even though the catalog lists it as a page rule**, and not out of
+/// convenience: the weight of an image is not in the HTML. `width` and `height` declare how it
+/// is laid out, not how many bytes the file weighs; that is only known after requesting it,
+/// and the number ends up in `urls.content_length`. Making it a page rule would require the
+/// `PageContext` to carry the size of every image, which has not been downloaded yet at the
+/// moment the page is evaluated.
 ///
-/// Se exige `status_code = 200`: el cuerpo de una página de error también tiene tamaño, y decir
-/// «esta imagen pesa 60 KB» cuando lo que llegó es un 404 con un HTML bonito sería un hallazgo
-/// inventado. De la imagen que no carga ya avisa [`AssetImgBroken`].
+/// `status_code = 200` is required: the body of an error page has a size too, and saying "this
+/// image weighs 60 KB" when what arrived is a 404 with pretty HTML would be a made-up finding.
+/// The image that fails to load is already reported by [`AssetImgBroken`].
 pub struct AssetImgHeavy;
 
 impl SiteRule for AssetImgHeavy {
@@ -382,11 +383,11 @@ impl SiteRule for AssetImgHeavy {
     }
 }
 
-/// Hoja de estilo o script que devuelve 4xx o 5xx.
+/// Stylesheet or script returning 4xx or 5xx.
 ///
-/// El parser solo registra como `element = 'link'` los `<link rel="stylesheet">` —el canonical,
-/// el `amphtml` y los `hreflang` no son recursos y van a sus propias columnas—, así que la
-/// distinción entre CSS y JS se lee del propio elemento sin mirar la extensión del fichero.
+/// The parser only records `<link rel="stylesheet">` as `element = 'link'` —the canonical, the
+/// `amphtml` and the `hreflang` are not resources and go to their own columns— so the CSS/JS
+/// distinction is read off the element itself, without looking at the file extension.
 pub struct AssetBroken;
 
 impl SiteRule for AssetBroken {
@@ -395,9 +396,9 @@ impl SiteRule for AssetBroken {
     }
 
     fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
-        // Se agrupa también por `element` para no mezclar dos usos distintos de la misma URL: un
-        // fichero servido a la vez como hoja de estilo y como script es raro, pero si pasa son
-        // dos hallazgos con dos causas.
+        // Also grouped by `element` so two different uses of the same URL do not mix: a file
+        // served both as a stylesheet and as a script is rare, but if it happens those are two
+        // findings with two causes.
         let mut stmt = conn.prepare(
             "SELECT u.url_hash, u.url, u.status_code,
                     CASE l.element WHEN 'script' THEN 'js' ELSE 'css' END AS kind,
@@ -445,25 +446,19 @@ pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
 
 #[cfg(test)]
 mod tests {
-    /// El `JOIN` de las reglas de imagen tiene que tener índice por donde entrar.
+    /// The image rules' `JOIN` needs an index to enter through.
     ///
-    /// `ASSET-IMG-HEAVY` y `ASSET-IMG-BROKEN` entran por `images.src_url_id` («¿qué páginas usan
-    /// esta imagen?»), y hasta la migración 007 solo existía el índice de la dirección contraria.
-    /// El plan era `SCAN i`: un recorrido completo de `images` **por cada URL candidata**.
+    /// `ASSET-IMG-HEAVY` and `ASSET-IMG-BROKEN` enter through `images.src_url_id` ("which pages
+    /// use this image?"), and until migration 007 only the index for the opposite direction
+    /// existed. The plan was `SCAN i`: a full scan of `images` **for every candidate URL**.
     ///
-    /// No dolía porque la tabla estaba casi vacía en los sitios grandes —los plugins de
-    /// *lazy-load* escondían el `src` real en `data-src` y el parser no lo leía—. Al arreglar eso
-    /// el 2026-08-02, la tabla de un medio pasó de 0 a 4.409.298 filas en el mismo rastreo y la
-    /// pasada final se fue a horas.
+    /// It did not hurt because the table was nearly empty on large sites —lazy-load plugins
+    /// hid the real `src` in `data-src` and the parser did not read it—. When that was fixed
+    /// on 2026-08-02, a news site's table went from 0 to 4,409,298 rows in the same crawl and
+    /// the final pass stretched to hours.
     #[test]
-    fn las_reglas_de_imagen_tienen_indice_por_donde_hacer_join() {
-        let conn = rusqlite::Connection::open_in_memory().expect("abrir en memoria");
-        for sql in [
-            include_str!("../../crawlforge-core/migrations/001_initial.sql"),
-            include_str!("../../crawlforge-core/migrations/007_indice_images_src.sql"),
-        ] {
-            conn.execute_batch(sql).expect("cargar el esquema");
-        }
+    fn the_image_rules_join_has_an_index_to_enter_through() {
+        let conn = crate::test_schema::full_schema();
 
         let mut stmt = conn
             .prepare(
@@ -473,28 +468,28 @@ mod tests {
                  WHERE u.status_code = 200 AND u.content_length > 204800
                  GROUP BY u.id",
             )
-            .expect("preparar el plan");
+            .expect("prepare the plan");
         let plan: String = stmt
             .query_map([], |r| r.get::<_, String>(3))
-            .expect("leer el plan")
+            .expect("read the plan")
             .filter_map(Result::ok)
             .collect::<Vec<_>>()
             .join(" | ");
 
         assert!(
             !plan.contains("SCAN i"),
-            "las imágenes no se pueden recorrer enteras por cada URL, y el plan dice: {plan}"
+            "the images cannot be scanned in full for every URL, and the plan says: {plan}"
         );
         assert!(
             plan.contains("idx_images_src"),
-            "el JOIN debe entrar por su índice, y el plan dice: {plan}"
+            "the JOIN must enter through its index, and the plan says: {plan}"
         );
     }
 
     use super::*;
     use crate::ImageView;
 
-    /// Una imagen con `alt` correcto y fuera de todo enlace: el caso sano.
+    /// An image with a correct `alt` and outside any link: the healthy case.
     fn imagen_sana() -> ImageView<'static> {
         ImageView {
             src: "/img/foto.webp",
@@ -514,18 +509,18 @@ mod tests {
     // --- ASSET-IMG-NO-ALT ---
 
     #[test]
-    fn no_avisa_cuando_todas_las_imagenes_tienen_alt() {
+    fn does_not_warn_when_every_image_has_alt() {
         let imgs = [imagen_sana()];
         assert!(AssetImgNoAlt.evaluate(&ctx(&imgs)).is_empty());
     }
 
     #[test]
-    fn no_avisa_en_una_pagina_sin_imagenes() {
+    fn does_not_warn_on_a_page_with_no_images() {
         assert!(AssetImgNoAlt.evaluate(&ctx(&[])).is_empty());
     }
 
     #[test]
-    fn avisa_cuando_falta_el_atributo_alt() {
+    fn warns_when_the_alt_attribute_is_missing() {
         let imgs = [ImageView { src: "/img/sin-alt.png", ..Default::default() }];
         let issues = AssetImgNoAlt.evaluate(&ctx(&imgs));
         assert_eq!(issues.len(), 1);
@@ -534,80 +529,81 @@ mod tests {
     }
 
     #[test]
-    fn un_alt_vacio_no_es_un_alt_ausente() {
-        // La distinción es el motivo de que `ImageView::alt` sea un `Option`: `alt=""` es HTML
-        // válido y declara una imagen decorativa. Confundirlos convertiría cada icono
-        // decorativo del sitio en un hallazgo falso.
+    fn an_empty_alt_is_not_a_missing_alt() {
+        // The distinction is why `ImageView::alt` is an `Option`: `alt=""` is valid HTML and
+        // declares a decorative image. Conflating them would turn every decorative icon on the
+        // site into a false finding.
         let imgs = [ImageView { src: "/img/decorativa.svg", alt: Some(""), ..Default::default() }];
         assert!(
             AssetImgNoAlt.evaluate(&ctx(&imgs)).is_empty(),
-            "un alt=\"\" deliberado no es una imagen sin alt"
+            "a deliberate alt=\"\" is not an image without alt"
         );
     }
 
     #[test]
-    fn un_alt_de_solo_espacios_tampoco_cuenta_como_ausente() {
-        // Es un `alt=" "`, que el HTML admite. Discutible como práctica, pero el atributo está:
-        // avisar aquí sería avisar de otra cosa con el ID de esta regla.
+    fn a_whitespace_only_alt_does_not_count_as_missing_either() {
+        // It is an `alt=" "`, which HTML admits. Debatable as a practice, but the attribute is
+        // there: warning here would be warning about something else under this rule's ID.
         let imgs = [ImageView { src: "/img/x.png", alt: Some("   "), ..Default::default() }];
         assert!(AssetImgNoAlt.evaluate(&ctx(&imgs)).is_empty());
     }
 
     #[test]
-    fn un_solo_hallazgo_por_pagina_con_el_recuento_completo() {
+    fn a_single_finding_per_page_with_the_full_count() {
         let imgs = [
             ImageView { src: "/1.png", ..Default::default() },
             ImageView { src: "/2.png", ..Default::default() },
             imagen_sana(),
         ];
         let issues = AssetImgNoAlt.evaluate(&ctx(&imgs));
-        assert_eq!(issues.len(), 1, "una galería entera no debe dar una fila por imagen");
+        assert_eq!(issues.len(), 1, "a whole gallery must not yield one row per image");
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"images\":2"), "detalle: {detalle}");
-        assert!(detalle.contains("/1.png") && detalle.contains("/2.png"), "detalle: {detalle}");
+        assert!(detalle.contains("\"images\":2"), "detail: {detalle}");
+        assert!(detalle.contains("/1.png") && detalle.contains("/2.png"), "detail: {detalle}");
     }
 
     #[test]
-    fn la_muestra_del_detalle_esta_acotada() {
-        // Sin el corte, una galería de 200 imágenes escribiría 200 cadenas en el almacén.
+    fn the_detail_sample_is_bounded() {
+        // Without the cut, a 200-image gallery would write 200 strings into the store.
         let srcs: Vec<String> = (0..SAMPLE_LIMIT + 5).map(|i| format!("/img-{i:02}.png")).collect();
         let imgs: Vec<ImageView<'_>> =
             srcs.iter().map(|s| ImageView { src: s.as_str(), ..Default::default() }).collect();
         let issues = AssetImgNoAlt.evaluate(&ctx(&imgs));
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
         assert!(detalle.contains(&format!("\"images\":{}", SAMPLE_LIMIT + 5)));
-        assert_eq!(detalle.matches("/img-").count(), SAMPLE_LIMIT, "detalle: {detalle}");
+        assert_eq!(detalle.matches("/img-").count(), SAMPLE_LIMIT, "detail: {detalle}");
     }
 
     #[test]
-    fn la_muestra_no_repite_la_misma_url() {
-        // Regresión de un rastreo real: el placeholder del lazy-load repetido en veinte `<img>`
-        // llenaba la muestra con diez copias de la misma cadena, que no localizan más que una.
+    fn the_sample_does_not_repeat_the_same_url() {
+        // Regression from a real crawl: the lazy-load placeholder repeated across twenty
+        // `<img>` filled the sample with ten copies of the same string, which locate no more
+        // than one does.
         let imgs: Vec<ImageView<'_>> =
             (0..20).map(|_| ImageView { src: "/logo.png", ..Default::default() }).collect();
         let issues = AssetImgNoAlt.evaluate(&ctx(&imgs));
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"images\":20"), "el recuento sigue completo: {detalle}");
-        assert_eq!(detalle.matches("/logo.png").count(), 1, "detalle: {detalle}");
+        assert!(detalle.contains("\"images\":20"), "the count is still complete: {detalle}");
+        assert_eq!(detalle.matches("/logo.png").count(), 1, "detail: {detalle}");
     }
 
     #[test]
-    fn una_uri_data_no_se_guarda_entera_en_la_muestra() {
-        // 18.089 filas guardaban el mismo SVG en base64 como «muestra»: peso muerto que no
-        // localiza nada, porque un `data:` no es una URL que se pueda abrir. El tipo basta.
+    fn a_data_uri_is_not_stored_whole_in_the_sample() {
+        // 18,089 rows stored the same base64 SVG as a "sample": dead weight that locates
+        // nothing, because a `data:` is not a URL you can open. The type is enough.
         let data = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
         let imgs = [ImageView { src: data, ..Default::default() }];
         let issues = AssetImgNoAlt.evaluate(&ctx(&imgs));
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(!detalle.contains("PHN2Zy"), "el base64 no se almacena: {detalle}");
+        assert!(!detalle.contains("PHN2Zy"), "the base64 is not stored: {detalle}");
         assert!(
             detalle.contains("data:image/svg+xml;base64,…"),
-            "el tipo sí, para saber qué es: {detalle}"
+            "the type is, so we know what it is: {detalle}"
         );
     }
 
     #[test]
-    fn no_avisa_sobre_algo_que_no_es_html() {
+    fn does_not_warn_on_something_that_is_not_html() {
         let imgs = [ImageView { src: "/x.png", ..Default::default() }];
         let mut c = ctx(&imgs);
         c.is_html = false;
@@ -615,9 +611,9 @@ mod tests {
     }
 
     #[test]
-    fn avisa_tambien_en_una_pagina_no_indexable() {
-        // El texto alternativo lo necesita quien visita la página, y a esa página se llega
-        // aunque lleve `noindex`.
+    fn warns_on_a_non_indexable_page_too() {
+        // The alternative text is needed by whoever visits the page, and that page is reached
+        // even if it carries `noindex`.
         let imgs = [ImageView { src: "/x.png", ..Default::default() }];
         let mut c = ctx(&imgs);
         c.is_indexable = false;
@@ -625,10 +621,10 @@ mod tests {
     }
 
     #[test]
-    fn la_plantilla_de_error_no_se_audita() {
-        // Regresión de un rastreo real: la plantilla del 404 del tema, con su logo de `alt`
-        // vacío, producía un hallazgo por cada URL rota del sitio —26 en un rastreo, 12 en
-        // otro—. El hallazgo accionable de un 404 es el 404, que ya tiene su regla HTTP.
+    fn the_error_template_is_not_audited() {
+        // Regression from a real crawl: the theme's 404 template, with its empty-alt logo,
+        // produced one finding per broken URL on the site —26 in one crawl, 12 in another—.
+        // The actionable finding of a 404 is the 404, which already has its HTTP rule.
         let imgs = [
             ImageView { src: "/sin-alt.png", ..Default::default() },
             ImageView { src: "/logo.svg", alt: Some(""), anchor_text: Some(""), ..Default::default() },
@@ -638,11 +634,11 @@ mod tests {
             c.status = status;
             assert!(
                 AssetImgNoAlt.evaluate(&c).is_empty(),
-                "ASSET-IMG-NO-ALT no debería auditar el HTML de un {status}"
+                "ASSET-IMG-NO-ALT should not audit the HTML of a {status}"
             );
             assert!(
                 AssetImgEmptyAltLink.evaluate(&c).is_empty(),
-                "ASSET-IMG-EMPTY-ALT-LINK no debería auditar el HTML de un {status}"
+                "ASSET-IMG-EMPTY-ALT-LINK should not audit the HTML of a {status}"
             );
         }
     }
@@ -650,7 +646,7 @@ mod tests {
     // --- ASSET-IMG-EMPTY-ALT-LINK ---
 
     #[test]
-    fn avisa_cuando_el_enlace_solo_lleva_una_imagen_con_alt_vacio() {
+    fn warns_when_the_link_carries_only_an_empty_alt_image() {
         let imgs = [ImageView {
             src: "/logo.svg",
             alt: Some(""),
@@ -664,9 +660,9 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_si_el_enlace_tiene_texto_propio() {
-        // El nombre accesible lo pone el texto del enlace, así que el `alt=""` es correcto: la
-        // imagen es decorativa y repetir el texto en el `alt` sería redundante.
+    fn does_not_warn_when_the_link_has_its_own_text() {
+        // The link's text provides the accessible name, so the `alt=""` is correct: the image
+        // is decorative and repeating the text in the `alt` would be redundant.
         let imgs = [ImageView {
             src: "/icono.svg",
             alt: Some(""),
@@ -677,15 +673,15 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_si_la_imagen_decorativa_no_esta_en_un_enlace() {
-        // `anchor_text: None` es «esta imagen no cuelga de ningún <a>». Fuera de un enlace, un
-        // `alt=""` es exactamente lo que hay que escribir.
+    fn does_not_warn_when_the_decorative_image_is_not_inside_a_link() {
+        // `anchor_text: None` means "this image hangs from no <a>". Outside a link, an
+        // `alt=""` is exactly what should be written.
         let imgs = [ImageView { src: "/adorno.svg", alt: Some(""), ..Default::default() }];
         assert!(AssetImgEmptyAltLink.evaluate(&ctx(&imgs)).is_empty());
     }
 
     #[test]
-    fn no_avisa_si_la_imagen_del_enlace_describe_el_destino() {
+    fn does_not_warn_when_the_link_image_describes_the_destination() {
         let imgs = [ImageView {
             src: "/logo.svg",
             alt: Some("Portada de CrawlForge"),
@@ -696,17 +692,17 @@ mod tests {
     }
 
     #[test]
-    fn un_alt_ausente_dentro_de_un_enlace_lo_cuenta_la_otra_regla() {
-        // El enlace también se queda sin nombre, pero el defecto que hay que arreglar es el
-        // `alt` que falta. Dos hallazgos sobre el mismo `<img>` serían ruido.
+    fn a_missing_alt_inside_a_link_is_counted_by_the_other_rule() {
+        // The link is left unnamed too, but the defect to fix is the missing `alt`. Two
+        // findings on the same `<img>` would be noise.
         let imgs = [ImageView { src: "/logo.svg", anchor_text: Some(""), ..Default::default() }];
         assert!(AssetImgEmptyAltLink.evaluate(&ctx(&imgs)).is_empty());
         assert_eq!(AssetImgNoAlt.evaluate(&ctx(&imgs)).len(), 1);
     }
 
     #[test]
-    fn un_enlace_con_solo_espacios_de_texto_sigue_sin_tener_nombre() {
-        // `<a href="/"> <img alt=""> </a>`: el texto del enlace es un espacio, que no nombra nada.
+    fn a_link_with_whitespace_only_text_still_has_no_name() {
+        // `<a href="/"> <img alt=""> </a>`: the link's text is a space, which names nothing.
         let imgs = [ImageView {
             src: "/logo.svg",
             alt: Some(""),
@@ -717,41 +713,41 @@ mod tests {
     }
 
     #[test]
-    fn un_hallazgo_por_imagen_distinta_y_no_por_enlace() {
-        // Dos imágenes distintas son dos causas: cada una con su fila y su clave. La misma
-        // imagen repetida es una causa con recuento: el logo veinte veces no son veinte filas.
+    fn one_finding_per_distinct_image_not_per_link() {
+        // Two distinct images are two causes: each with its row and its key. The same image
+        // repeated is one cause with a count: the logo twenty times is not twenty rows.
         let dos = [
             ImageView { src: "/a.svg", alt: Some(""), anchor_text: Some(""), ..Default::default() },
             ImageView { src: "/b.svg", alt: Some(""), anchor_text: Some(""), ..Default::default() },
         ];
         let issues = AssetImgEmptyAltLink.evaluate(&ctx(&dos));
-        assert_eq!(issues.len(), 2, "dos imágenes distintas, dos hallazgos");
+        assert_eq!(issues.len(), 2, "two distinct images, two findings");
         assert_ne!(issues[0].group_key, issues[1].group_key);
 
         let logo =
             ImageView { src: "/logo.svg", alt: Some(""), anchor_text: Some(""), ..Default::default() };
         let repetida = [logo, logo, logo];
         let issues = AssetImgEmptyAltLink.evaluate(&ctx(&repetida));
-        assert_eq!(issues.len(), 1, "la misma imagen tres veces es una causa");
+        assert_eq!(issues.len(), 1, "the same image three times is one cause");
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"occurrences\":3"), "detalle: {detalle}");
-        assert!(detalle.contains("/logo.svg"), "detalle: {detalle}");
+        assert!(detalle.contains("\"occurrences\":3"), "detail: {detalle}");
+        assert!(detalle.contains("/logo.svg"), "detail: {detalle}");
     }
 
     #[test]
-    fn el_detalle_del_enlace_sin_nombre_no_guarda_el_base64() {
+    fn the_unnamed_link_detail_does_not_store_the_base64() {
         let data = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
         let imgs = [ImageView { src: data, alt: Some(""), anchor_text: Some(""), ..Default::default() }];
         let issues = AssetImgEmptyAltLink.evaluate(&ctx(&imgs));
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(!detalle.contains("PHN2Zy"), "el base64 no se almacena: {detalle}");
+        assert!(!detalle.contains("PHN2Zy"), "the base64 is not stored: {detalle}");
         assert!(detalle.contains("data:image/svg+xml;base64,…"), "{detalle}");
     }
 
     #[test]
-    fn el_mismo_logo_en_dos_paginas_comparte_grupo() {
-        // El logo de la cabecera era el 90% de los `high` de un rastreo real: la clave es la
-        // imagen, no la página, para que el informe lo cuente como un solo defecto de plantilla.
+    fn the_same_logo_on_two_pages_shares_a_group() {
+        // The header logo was 90% of a real crawl's `high` findings: the key is the image, not
+        // the page, so the report counts it as a single template defect.
         let imgs =
             [ImageView { src: "/logo.svg", alt: Some(""), anchor_text: Some(""), ..Default::default() }];
         let a = AssetImgEmptyAltLink.evaluate(&ctx(&imgs));
@@ -767,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn otra_imagen_es_otro_grupo_y_las_repeticiones_no_lo_cambian() {
+    fn another_image_is_another_group_and_repetitions_do_not_change_it() {
         let logo =
             ImageView { src: "/logo.svg", alt: Some(""), anchor_text: Some(""), ..Default::default() };
         let banner =
@@ -781,12 +777,12 @@ mod tests {
         let k_repetido = AssetImgEmptyAltLink.evaluate(&ctx(&logo_repetido))[0].group_key.clone();
         let k_banner = AssetImgEmptyAltLink.evaluate(&ctx(&solo_banner))[0].group_key.clone();
 
-        assert_eq!(k_logo, k_repetido, "el logo dos veces sigue siendo la misma causa");
-        assert_ne!(k_logo, k_banner, "otra imagen es otra causa");
+        assert_eq!(k_logo, k_repetido, "the logo twice is still the same cause");
+        assert_ne!(k_logo, k_banner, "another image is another cause");
     }
 
     #[test]
-    fn el_enlace_sin_nombre_no_se_evalua_fuera_del_html() {
+    fn the_unnamed_link_is_not_evaluated_outside_html() {
         let imgs = [ImageView {
             src: "/logo.svg",
             alt: Some(""),
@@ -798,17 +794,17 @@ mod tests {
         assert!(AssetImgEmptyAltLink.evaluate(&c).is_empty());
     }
 
-    // --- Reglas de conjunto ---
+    // --- Site rules ---
     //
-    // El test de verdad de las tres es su fixture, que se rastrea de extremo a extremo en
-    // `crawlforge-core/tests/fixtures_de_reglas.rs`: es lo único que demuestra que el motor
-    // rellena las columnas que estas consultas leen. Lo que se comprueba aquí es la consulta
-    // contra el mínimo de esquema que usa, que es lo que caza un nombre de columna mal escrito
-    // o un umbral mal comparado sin esperar a un rastreo completo.
+    // The real test of these three is their fixture, crawled end to end in
+    // `crawlforge-core/tests/fixtures_de_reglas.rs`: it is the only thing that proves the
+    // engine fills the columns these queries read. What is checked here is the query against
+    // the minimum schema it uses, which is what catches a misspelled column name or a
+    // threshold compared the wrong way without waiting for a full crawl.
 
-    /// Las columnas de `001_initial.sql` que tocan estas reglas, y solo esas.
+    /// The `001_initial.sql` columns these rules touch, and only those.
     fn conn_minima() -> Connection {
-        let conn = Connection::open_in_memory().expect("sqlite en memoria");
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
         conn.execute_batch(
             "CREATE TABLE urls (
                  id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE, url_hash INTEGER NOT NULL,
@@ -823,23 +819,23 @@ mod tests {
                  element TEXT NOT NULL
              );",
         )
-        .expect("esquema mínimo");
+        .expect("minimal schema");
         conn
     }
 
-    /// Inserta una URL. El `url_hash` se deriva del id para poder comprobar a qué fila se pega
-    /// el hallazgo.
+    /// Inserts a URL. The `url_hash` is derived from the id so the tests can check which row a
+    /// finding attaches to.
     fn url(conn: &Connection, id: i64, url: &str, status: Option<i64>, bytes: Option<i64>) {
         conn.execute(
             "INSERT INTO urls (id, url, url_hash, status_code, content_length)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![id, url, id * 1000, status, bytes],
         )
-        .expect("insertar url");
+        .expect("insert url");
     }
 
     #[test]
-    fn detecta_la_imagen_que_devuelve_un_error_y_cuenta_las_paginas() {
+    fn detects_the_image_returning_an_error_and_counts_the_pages() {
         let conn = conn_minima();
         url(&conn, 1, "https://ejemplo.es/a", Some(200), Some(2_000));
         url(&conn, 2, "https://ejemplo.es/b", Some(200), Some(2_000));
@@ -848,17 +844,17 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO images (page_url_id, src_url_id) VALUES (1, 3), (2, 3), (1, 4);",
         )
-        .expect("insertar imágenes");
+        .expect("insert images");
 
-        let hallazgos = AssetImgBroken.evaluate(&conn).expect("evaluar");
-        assert_eq!(hallazgos.len(), 1, "un hallazgo por fichero que falta, no por página");
-        assert_eq!(hallazgos[0].0, Some(3_000), "se registra en la URL de la imagen");
+        let hallazgos = AssetImgBroken.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1, "one finding per missing file, not per page");
+        assert_eq!(hallazgos[0].0, Some(3_000), "it is recorded on the image URL");
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"used_by_pages\":2"), "detalle: {detalle}");
+        assert!(detalle.contains("\"used_by_pages\":2"), "detail: {detalle}");
     }
 
     #[test]
-    fn detecta_la_imagen_que_pasa_del_umbral_de_peso() {
+    fn detects_the_image_over_the_weight_threshold() {
         let conn = conn_minima();
         url(&conn, 1, "https://ejemplo.es/a", Some(200), Some(2_000));
         url(&conn, 2, "https://ejemplo.es/pesada.jpg", Some(200), Some(HEAVY_IMAGE_MAX_BYTES + 1));
@@ -867,17 +863,17 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO images (page_url_id, src_url_id) VALUES (1, 2), (1, 3), (1, 4);",
         )
-        .expect("insertar imágenes");
+        .expect("insert images");
 
-        let hallazgos = AssetImgHeavy.evaluate(&conn).expect("evaluar");
-        assert_eq!(hallazgos.len(), 1, "el umbral es estricto y el cuerpo de un 404 no se mide");
+        let hallazgos = AssetImgHeavy.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1, "the threshold is strict and the body of a 404 is not measured");
         assert_eq!(hallazgos[0].0, Some(2_000));
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
         assert!(detalle.contains(&format!("\"bytes\":{}", HEAVY_IMAGE_MAX_BYTES + 1)));
     }
 
     #[test]
-    fn detecta_el_css_y_el_js_que_no_cargan_y_los_distingue() {
+    fn detects_broken_css_and_js_and_tells_them_apart() {
         let conn = conn_minima();
         url(&conn, 1, "https://ejemplo.es/a", Some(200), Some(2_000));
         url(&conn, 2, "https://ejemplo.es/e.css", Some(404), Some(0));
@@ -887,22 +883,22 @@ mod tests {
             "INSERT INTO links (from_url_id, to_url_id, element)
              VALUES (1, 2, 'link'), (1, 3, 'script'), (1, 4, 'a'), (1, 2, 'link');",
         )
-        .expect("insertar enlaces");
+        .expect("insert links");
 
-        let hallazgos = AssetBroken.evaluate(&conn).expect("evaluar");
-        assert_eq!(hallazgos.len(), 2, "un <a> roto no es un recurso: eso es HTTP-404-INTERNAL");
+        let hallazgos = AssetBroken.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 2, "a broken <a> is not a resource: that is HTTP-404-INTERNAL");
         let detalles: Vec<String> =
             hallazgos.iter().map(|(_, i)| i.detail_json.clone().unwrap_or_default()).collect();
         assert!(detalles.iter().any(|d| d.contains("\"kind\":\"css\"")), "{detalles:?}");
         assert!(detalles.iter().any(|d| d.contains("\"kind\":\"js\"")), "{detalles:?}");
         assert!(
             detalles.iter().all(|d| d.contains("\"used_by_pages\":1")),
-            "la misma hoja citada dos veces en una página es una página: {detalles:?}"
+            "the same stylesheet cited twice on one page is one page: {detalles:?}"
         );
     }
 
     #[test]
-    fn un_almacen_sin_defectos_no_produce_hallazgos() {
+    fn a_store_with_no_defects_produces_no_findings() {
         let conn = conn_minima();
         url(&conn, 1, "https://ejemplo.es/a", Some(200), Some(2_000));
         url(&conn, 2, "https://ejemplo.es/bien.webp", Some(200), Some(30_000));
@@ -911,10 +907,10 @@ mod tests {
             "INSERT INTO images (page_url_id, src_url_id) VALUES (1, 2);
              INSERT INTO links (from_url_id, to_url_id, element) VALUES (1, 3, 'link');",
         )
-        .expect("poblar");
+        .expect("populate");
 
-        assert!(AssetImgBroken.evaluate(&conn).expect("evaluar").is_empty());
-        assert!(AssetImgHeavy.evaluate(&conn).expect("evaluar").is_empty());
-        assert!(AssetBroken.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(AssetImgBroken.evaluate(&conn).expect("evaluate").is_empty());
+        assert!(AssetImgHeavy.evaluate(&conn).expect("evaluate").is_empty());
+        assert!(AssetBroken.evaluate(&conn).expect("evaluate").is_empty());
     }
 }

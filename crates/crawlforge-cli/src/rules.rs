@@ -179,7 +179,7 @@ mod tests {
         let texto = "La página es indexable y no tiene título, que es el factor con más peso";
         let lineas = envolver(texto, 20);
         assert!(lineas.iter().all(|l| l.chars().count() <= 20), "{lineas:?}");
-        assert_eq!(lineas.join(" "), texto, "no se pierde ni se duplica nada");
+        assert_eq!(lineas.join(" "), texto, "nothing is lost or duplicated");
     }
 
     #[test]
@@ -198,10 +198,10 @@ mod tests {
     fn una_categoria_inexistente_lista_las_que_si_existen() {
         // El caso de la revisión de UX: `--category metas` respondía «ninguna regla» y se
         // callaba; el usuario no tenía forma de saber que era `meta`.
-        let err = print_catalog(Lang::Es, Some("metas"), false).expect_err("metas no existe");
+        let err = print_catalog(Lang::Es, Some("metas"), false).expect_err("metas does not exist");
         let msg = err.to_string();
         for categoria in ["meta", "http", "canonical", "content"] {
-            assert!(msg.contains(categoria), "tiene que listar «{categoria}»: {msg}");
+            assert!(msg.contains(categoria), "it must list «{categoria}»: {msg}");
         }
     }
 
@@ -211,7 +211,7 @@ mod tests {
         assert!(names.contains(&"meta") && names.contains(&"http"), "{names:?}");
         let mut unicas = names.clone();
         unicas.dedup();
-        assert_eq!(names, unicas, "sin duplicados");
+        assert_eq!(names, unicas, "no duplicates");
     }
 
     #[test]
@@ -226,14 +226,14 @@ mod tests {
         // a veces en minúsculas. Ambos deben abrir la ficha.
         assert!(print_rule(Lang::En, "CANON-CHAIN").is_ok());
         assert!(print_rule(Lang::Es, "canon-chain").is_ok());
-        assert!(print_rule(Lang::En, "  CANON-CHAIN  ").is_ok(), "un copia-pega trae espacios");
+        assert!(print_rule(Lang::En, "  CANON-CHAIN  ").is_ok(), "a copy-paste brings spaces");
     }
 
     #[test]
     fn un_id_inexistente_es_un_error_que_dice_como_listar_el_catalogo() {
-        let err = print_rule(Lang::En, "CANON-CADENA").expect_err("no existe");
+        let err = print_rule(Lang::En, "CANON-CADENA").expect_err("does not exist");
         let msg = err.to_string();
-        assert!(msg.contains("CANON-CADENA"), "nombra al culpable: {msg}");
-        assert!(msg.contains("crawlforge rules"), "y dice el paso siguiente: {msg}");
+        assert!(msg.contains("CANON-CADENA"), "it names the culprit: {msg}");
+        assert!(msg.contains("crawlforge rules"), "and states the next step: {msg}");
     }
 }

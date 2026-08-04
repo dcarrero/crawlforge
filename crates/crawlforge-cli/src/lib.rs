@@ -16,3 +16,9 @@ pub mod i18n;
 pub mod inspect;
 pub mod store_check;
 pub mod xlsx;
+
+/// The complete published schema for unit tests. One list, guarded by a test that reads the
+/// `migrations/` directory — never write a per-module migration list again. The binary target
+/// includes the same file from `main.rs` (`report.rs` lives there).
+#[cfg(test)]
+mod test_schema;

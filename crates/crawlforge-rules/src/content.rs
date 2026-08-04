@@ -1,4 +1,4 @@
-//! `CONTENT` — encabezados y contenido. `docs/04-CATALOGO-REGLAS.md §6`.
+//! `CONTENT` — headings and content. `docs/04-CATALOGO-REGLAS.md §6`.
 
 use crate::{Category, Issue, PageContext, PageRule, RuleMeta, Scope, Severity, SiteRule, Tier};
 
@@ -119,13 +119,13 @@ pub static CONTENT_LANG_MISSING: RuleMeta = RuleMeta {
     references: &[],
 };
 
-/// Número de palabras por debajo del cual una página indexable se considera escasa.
+/// Word count below which an indexable page is considered thin.
 ///
-/// 300 es el umbral del catálogo (`§6`) y el que usa el resto de la industria. No se baja para
-/// silenciar los fixtures cortos de las demás reglas: ahí el aviso también es correcto.
+/// 300 is the catalog threshold (`§6`) and the one the rest of the industry uses. It is not
+/// lowered to silence the other rules' short fixtures: the warning is correct there too.
 const THIN_MIN_WORDS: u32 = 300;
 
-/// Página indexable sin `<h1>`.
+/// Indexable page without an `<h1>`.
 pub struct ContentH1Missing;
 
 impl PageRule for ContentH1Missing {
@@ -145,7 +145,7 @@ impl PageRule for ContentH1Missing {
     }
 }
 
-/// Más de un `<h1>` en la misma página.
+/// More than one `<h1>` on the same page.
 pub struct ContentH1Multiple;
 
 impl PageRule for ContentH1Multiple {
@@ -165,19 +165,20 @@ impl PageRule for ContentH1Multiple {
     }
 }
 
-/// `<h1>` presente pero sin texto: vacío, con solo espacios, o con solo una imagen.
+/// `<h1>` present but contributing no text: empty, whitespace-only, or with only an image.
 ///
-/// Nótese la frontera con [`ContentH1Missing`]: esa regla habla de la página que **no tiene**
-/// titular, y también avisa aquí porque el efecto es el mismo. Ésta añade el dato que cambia la
-/// reparación: el H1 ya existe en la plantilla, así que no hay que añadir uno, hay que darle
-/// texto.
+/// Note the boundary with [`ContentH1Missing`]: that rule talks about the page that **has no**
+/// headline, and it also warns here because the effect is the same. This one adds the datum
+/// that changes the fix: the H1 already exists in the template, so there is no heading to add,
+/// only text to give it.
 ///
-/// **Límite conocido.** El catálogo dice «H1 vacío o solo con una imagen sin alt». El
-/// [`PageContext`] no dice qué imágenes están dentro del H1 —`images` es la lista de la página
-/// entera— así que la regla no puede distinguir el H1 cuyo único contenido es una imagen **con**
-/// `alt` (aceptable: el `alt` es el titular) del que la tiene **sin** `alt`. Se avisa en los dos
-/// casos, que es el lado conservador: `ASSET-IMG-NO-ALT` cubre la parte de la imagen. Para
-/// separarlos haría falta un dato nuevo en el contexto, y añadirlo no es trabajo de este módulo.
+/// **Known limit.** The catalog says "H1 empty or with only an alt-less image". The
+/// [`PageContext`] does not say which images sit inside the H1 —`images` is the whole page's
+/// list— so the rule cannot tell the H1 whose only content is an image **with** `alt`
+/// (acceptable: the `alt` is the headline) from the one whose image has **no** `alt`. It warns
+/// in both cases, which is the conservative side: `ASSET-IMG-NO-ALT` covers the image's half.
+/// Separating them would need a new field in the context, and adding it is not this module's
+/// job.
 pub struct ContentH1Empty;
 
 impl PageRule for ContentH1Empty {
@@ -189,7 +190,7 @@ impl PageRule for ContentH1Empty {
         if !ctx.is_html || !ctx.is_indexable {
             return Vec::new();
         }
-        // Sin ningún H1 no hay nada vacío que señalar: eso es `CONTENT-H1-MISSING`.
+        // With no H1 at all there is nothing empty to point at: that is `CONTENT-H1-MISSING`.
         if ctx.h1_count == 0 {
             return Vec::new();
         }
@@ -202,11 +203,11 @@ impl PageRule for ContentH1Empty {
     }
 }
 
-/// Salto de nivel entre dos encabezados consecutivos: H2 seguido de H4.
+/// Level skip between two consecutive headings: an H2 followed by an H4.
 ///
-/// Solo mira pares consecutivos. Que el primer encabezado del documento sea un H3 no se cuenta
-/// como salto desde un nivel uno implícito: de eso ya avisa `CONTENT-H1-MISSING`, y contarlo dos
-/// veces solo añadiría ruido al informe.
+/// It only looks at consecutive pairs. The document's first heading being an H3 is not counted
+/// as a skip from an implicit level one: `CONTENT-H1-MISSING` already warns about that, and
+/// counting it twice would only add noise to the report.
 pub struct ContentHeadingSkip;
 
 impl PageRule for ContentHeadingSkip {
@@ -218,8 +219,8 @@ impl PageRule for ContentHeadingSkip {
         if !ctx.is_html || !ctx.is_indexable {
             return Vec::new();
         }
-        // Bajar de nivel es libre: de un H4 se puede volver a un H2 al abrir otra sección. Lo
-        // que rompe el esquema es subir de profundidad más de un paso de golpe.
+        // Going back up is free: from an H4 you can return to an H2 when opening another
+        // section. What breaks the outline is going deeper by more than one step at once.
         let saltos: Vec<(usize, u8, u8)> = ctx
             .heading_levels
             .windows(2)
@@ -232,10 +233,10 @@ impl PageRule for ContentHeadingSkip {
             return Vec::new();
         };
 
-        // El texto del encabezado que aterriza mal es el diagnóstico entero: en un rastreo real,
-        // 16.764 filas decían `{"from":1,"to":4}` y hubo que abrir el HTML para descubrir que el
-        // culpable era el `<h4>` de la firma del autor. Los tests pueden no traer textos
-        // (`heading_texts` vacío); entonces el campo se omite en vez de inventarse.
+        // The text of the heading that lands wrong is the whole diagnosis: in a real crawl,
+        // 16,764 rows said `{"from":1,"to":4}` and the HTML had to be opened to discover that
+        // the culprit was the `<h4>` of the author's signature. Tests may bring no texts
+        // (`heading_texts` empty); then the field is omitted rather than invented.
         let texto = ctx.heading_texts.get(indice).map(|t| t.trim()).filter(|t| !t.is_empty());
 
         let mut detalle = serde_json::json!({
@@ -248,14 +249,15 @@ impl PageRule for ContentHeadingSkip {
             obj.insert("text".into(), serde_json::json!(truncate_chars(texto, 120)));
         }
 
-        // Un hallazgo por página, con el primer salto como muestra: es el que hay que mirar para
-        // entender el patrón, y el recuento dice si es un descuido o la plantilla entera.
+        // One finding per page, with the first skip as the sample: it is the one to look at to
+        // understand the pattern, and the count says whether it is an oversight or the whole
+        // template.
         //
-        // El `group_key` identifica **la causa y no la página**: la forma del salto más el texto
-        // del encabezado culpable. Todas las firmas de autor `H1→H4` con el mismo texto son un
-        // solo defecto de plantilla; dos `H1→H4` con textos distintos son dos defectos. Sin
-        // texto no se puede afirmar que la causa sea la misma, así que la clave lo deja vacío y
-        // esos hallazgos solo agrupan entre sí.
+        // The `group_key` identifies **the cause, not the page**: the shape of the skip plus
+        // the text of the offending heading. All the `H1→H4` author signatures with the same
+        // text are one template defect; two `H1→H4` with different texts are two defects.
+        // Without text the cause cannot be claimed to be the same, so the key leaves it empty
+        // and those findings only group among themselves.
         vec![Issue::new(&CONTENT_HEADING_SKIP)
             .with_detail(detalle)
             .with_group(format!(
@@ -265,20 +267,20 @@ impl PageRule for ContentHeadingSkip {
     }
 }
 
-/// Los primeros `max` caracteres —no bytes: cortar un byte a mitad de una «ñ» rompería la
-/// cadena— de un texto, para el `detail_json`.
+/// The first `max` characters —not bytes: cutting mid-codepoint in accented text would break
+/// the string— of a text, for the `detail_json`.
 fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
-/// Normaliza el texto de un encabezado para usarlo en un `group_key`: minúsculas, espacios
-/// colapsados y 80 caracteres como mucho. «CONTACTO» y «Contacto » son la misma causa.
+/// Normalizes a heading's text for use in a `group_key`: lowercase, whitespace collapsed and
+/// 80 characters at most. "CONTACTO" and "Contacto " are the same cause.
 fn normalize_group_text(s: &str) -> String {
     let colapsado = s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
     truncate_chars(&colapsado, 80)
 }
 
-/// Página indexable con menos de [`THIN_MIN_WORDS`] palabras de texto visible.
+/// Indexable page with fewer than [`THIN_MIN_WORDS`] words of visible text.
 pub struct ContentThin;
 
 impl PageRule for ContentThin {
@@ -299,7 +301,7 @@ impl PageRule for ContentThin {
     }
 }
 
-/// `<html>` sin atributo `lang`.
+/// `<html>` without a `lang` attribute.
 pub struct ContentLangMissing;
 
 impl PageRule for ContentLangMissing {
@@ -311,8 +313,8 @@ impl PageRule for ContentLangMissing {
         if !ctx.is_html || !ctx.is_indexable {
             return Vec::new();
         }
-        // `lang=""` es tan inútil como no ponerlo, y es lo que deja una plantilla a la que no se
-        // le pasó el idioma.
+        // `lang=""` is as useless as not setting it, and it is what a template that never got
+        // handed the language leaves behind.
         if ctx.lang.map(|l| !l.trim().is_empty()).unwrap_or(false) {
             return Vec::new();
         }
@@ -340,9 +342,9 @@ mod tests {
     use super::*;
     use crate::ImageView;
 
-    /// Una página sana de la que partir: un solo H1 con texto, esquema de encabezados sin
-    /// huecos, idioma declarado y las 500 palabras de `indexable_html`, por encima del umbral de
-    /// `CONTENT-THIN`. Cada test rompe solo lo que le interesa.
+    /// A healthy page to start from: a single H1 with text, a heading outline with no holes, a
+    /// declared language and the 500 words from `indexable_html`, above the `CONTENT-THIN`
+    /// threshold. Each test breaks only what it cares about.
     fn ctx<'a>() -> PageContext<'a> {
         let mut c = PageContext::indexable_html("https://ejemplo.es/a");
         c.h1 = Some("Un encabezado");
@@ -353,12 +355,12 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_cuando_hay_h1() {
+    fn does_not_warn_when_there_is_an_h1() {
         assert!(ContentH1Missing.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn avisa_cuando_no_hay_h1() {
+    fn warns_when_there_is_no_h1() {
         let mut c = ctx();
         c.h1 = None;
         c.h1_count = 0;
@@ -368,14 +370,14 @@ mod tests {
     }
 
     #[test]
-    fn un_h1_vacio_cuenta_como_ausente() {
+    fn an_empty_h1_counts_as_missing() {
         let mut c = ctx();
         c.h1 = Some("  ");
         assert_eq!(ContentH1Missing.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn no_avisa_en_una_pagina_no_indexable() {
+    fn does_not_warn_on_a_non_indexable_page() {
         let mut c = ctx();
         c.h1 = None;
         c.h1_count = 0;
@@ -386,12 +388,12 @@ mod tests {
     // --- CONTENT-H1-MULTIPLE ---
 
     #[test]
-    fn un_solo_h1_no_es_multiple() {
+    fn a_single_h1_is_not_multiple() {
         assert!(ContentH1Multiple.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn una_pagina_sin_h1_no_es_multiple() {
+    fn a_page_with_no_h1_is_not_multiple() {
         let mut c = ctx();
         c.h1 = None;
         c.h1_count = 0;
@@ -399,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn avisa_con_dos_h1() {
+    fn warns_with_two_h1s() {
         let mut c = ctx();
         c.h1_count = 2;
         c.heading_levels = &[1, 1, 2];
@@ -412,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn varios_h1_en_una_pagina_no_indexable_no_avisan() {
+    fn multiple_h1s_on_a_non_indexable_page_do_not_warn() {
         let mut c = ctx();
         c.h1_count = 3;
         c.is_indexable = false;
@@ -420,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn varios_h1_en_algo_que_no_es_html_no_avisan() {
+    fn multiple_h1s_on_something_that_is_not_html_do_not_warn() {
         let mut c = ctx();
         c.h1_count = 3;
         c.is_html = false;
@@ -430,12 +432,12 @@ mod tests {
     // --- CONTENT-H1-EMPTY ---
 
     #[test]
-    fn no_avisa_cuando_el_h1_tiene_texto() {
+    fn does_not_warn_when_the_h1_has_text() {
         assert!(ContentH1Empty.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn avisa_cuando_el_h1_esta_vacio() {
+    fn warns_when_the_h1_is_empty() {
         let mut c = ctx();
         c.h1 = Some("");
         let issues = ContentH1Empty.evaluate(&c);
@@ -445,17 +447,17 @@ mod tests {
     }
 
     #[test]
-    fn un_h1_de_solo_espacios_esta_vacio() {
+    fn a_whitespace_only_h1_is_empty() {
         let mut c = ctx();
         c.h1 = Some(" \n\t ");
         assert_eq!(ContentH1Empty.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn un_h1_con_solo_una_imagen_sin_alt_esta_vacio() {
-        // El motor solo mete en `h1` los nodos de texto del encabezado, así que un H1 cuyo único
-        // hijo es un `<img>` llega aquí con la cadena vacía. Es el caso que de verdad importa: la
-        // página parece tener titular y no lo tiene.
+    fn an_h1_with_only_an_image_and_no_alt_is_empty() {
+        // The engine only puts the heading's text nodes into `h1`, so an H1 whose only child
+        // is an `<img>` arrives here as the empty string. It is the case that actually
+        // matters: the page looks like it has a headline and it does not.
         let mut c = ctx();
         c.h1 = Some("");
         let imagenes =
@@ -465,8 +467,8 @@ mod tests {
     }
 
     #[test]
-    fn sin_ningun_h1_no_avisa_de_h1_vacio() {
-        // Es el terreno de `CONTENT-H1-MISSING`. Las dos reglas no dicen lo mismo.
+    fn with_no_h1_at_all_it_does_not_warn_about_an_empty_h1() {
+        // That is `CONTENT-H1-MISSING` territory. The two rules do not say the same thing.
         let mut c = ctx();
         c.h1 = None;
         c.h1_count = 0;
@@ -474,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn un_h1_vacio_en_una_pagina_no_indexable_no_avisa() {
+    fn an_empty_h1_on_a_non_indexable_page_does_not_warn() {
         let mut c = ctx();
         c.h1 = Some("");
         c.is_indexable = false;
@@ -482,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn un_h1_vacio_en_algo_que_no_es_html_no_avisa() {
+    fn an_empty_h1_on_something_that_is_not_html_does_not_warn() {
         let mut c = ctx();
         c.h1 = Some("");
         c.is_html = false;
@@ -492,22 +494,22 @@ mod tests {
     // --- CONTENT-HEADING-SKIP ---
 
     #[test]
-    fn un_esquema_consecutivo_no_tiene_saltos() {
+    fn a_consecutive_outline_has_no_skips() {
         let mut c = ctx();
         c.heading_levels = &[1, 2, 3, 3, 4];
         assert!(ContentHeadingSkip.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn volver_a_un_nivel_superior_no_es_un_salto() {
-        // H1 → H2 → H3 → H2: la última bajada abre otra sección, no rompe nada.
+    fn going_back_up_a_level_is_not_a_skip() {
+        // H1 → H2 → H3 → H2: the last drop opens another section, it breaks nothing.
         let mut c = ctx();
         c.heading_levels = &[1, 2, 3, 2];
         assert!(ContentHeadingSkip.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn avisa_de_h2_a_h4() {
+    fn warns_from_h2_to_h4() {
         let mut c = ctx();
         c.heading_levels = &[1, 2, 4];
         let issues = ContentHeadingSkip.evaluate(&c);
@@ -521,26 +523,26 @@ mod tests {
     }
 
     #[test]
-    fn un_h1_seguido_de_h3_tambien_es_un_salto() {
+    fn an_h1_followed_by_an_h3_is_also_a_skip() {
         let mut c = ctx();
         c.heading_levels = &[1, 3];
         assert_eq!(ContentHeadingSkip.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn varios_saltos_dan_un_solo_hallazgo_y_se_cuentan() {
+    fn several_skips_produce_one_finding_and_are_counted() {
         let mut c = ctx();
         c.heading_levels = &[1, 2, 4, 2, 5];
         let issues = ContentHeadingSkip.evaluate(&c);
-        assert_eq!(issues.len(), 1, "un hallazgo por página, no uno por salto");
+        assert_eq!(issues.len(), 1, "one finding per page, not one per jump");
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
         assert!(detalle.contains("\"skips\":2"), "{detalle}");
     }
 
     #[test]
-    fn el_detalle_incluye_el_texto_del_encabezado_culpable() {
-        // Fue el texto lo que permitió diagnosticar a mano el `<h5>CONTACTO` del pie de una agencia;
-        // sin él hay que ir a mirar el HTML de cada página.
+    fn the_detail_includes_the_text_of_the_offending_heading() {
+        // It was the text that made it possible to diagnose the agency footer's `<h5>CONTACTO`
+        // by hand; without it you have to go look at the HTML of every page.
         let mut c = ctx();
         c.heading_levels = &[1, 4];
         c.heading_texts = &["El título", "Firma del autor"];
@@ -550,28 +552,28 @@ mod tests {
     }
 
     #[test]
-    fn sin_textos_el_detalle_no_inventa_un_campo() {
+    fn without_texts_the_detail_does_not_invent_a_field() {
         let mut c = ctx();
         c.heading_levels = &[1, 4];
         let issues = ContentHeadingSkip.evaluate(&c);
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
         assert!(!detalle.contains("\"text\""), "{detalle}");
-        // La clave existe igualmente, con el texto vacío: agrupa entre sí lo que no se conoce.
+        // The key exists anyway, with an empty text: what is unknown groups only with itself.
         assert_eq!(issues[0].group_key.as_deref(), Some("heading-skip:1>4:"));
     }
 
     #[test]
-    fn la_clave_de_grupo_es_la_forma_del_salto_y_el_texto_culpable() {
+    fn the_group_key_is_the_skip_shape_plus_the_offending_text() {
         let mut c = ctx();
         c.heading_levels = &[1, 2, 5];
         c.heading_texts = &["Título", "Sección", "  CONTACTO "];
         let issues = ContentHeadingSkip.evaluate(&c);
-        // Minúsculas y espacios colapsados: «CONTACTO» y «contacto » son la misma causa.
+        // Lowercase and collapsed whitespace: "CONTACTO" and "contacto " are the same cause.
         assert_eq!(issues[0].group_key.as_deref(), Some("heading-skip:2>5:contacto"));
     }
 
     #[test]
-    fn dos_textos_distintos_son_dos_causas_distintas() {
+    fn two_different_texts_are_two_different_causes() {
         let mut a = ctx();
         a.heading_levels = &[1, 4];
         a.heading_texts = &["Título", "Firma del autor"];
@@ -581,11 +583,11 @@ mod tests {
         let ka = ContentHeadingSkip.evaluate(&a)[0].group_key.clone();
         let kb = ContentHeadingSkip.evaluate(&b)[0].group_key.clone();
         assert!(ka.is_some() && kb.is_some());
-        assert_ne!(ka, kb, "el mismo salto con otro texto no es la misma plantilla");
+        assert_ne!(ka, kb, "the same jump with different text is not the same template");
     }
 
     #[test]
-    fn una_pagina_con_un_solo_encabezado_no_puede_saltar() {
+    fn a_page_with_a_single_heading_cannot_skip() {
         let mut c = ctx();
         c.heading_levels = &[1];
         assert!(ContentHeadingSkip.evaluate(&c).is_empty());
@@ -594,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn un_salto_en_una_pagina_no_indexable_no_avisa() {
+    fn a_skip_on_a_non_indexable_page_does_not_warn() {
         let mut c = ctx();
         c.heading_levels = &[1, 2, 4];
         c.is_indexable = false;
@@ -604,15 +606,15 @@ mod tests {
     // --- CONTENT-THIN ---
 
     #[test]
-    fn no_avisa_con_contenido_suficiente() {
+    fn does_not_warn_with_enough_content() {
         assert!(ContentThin.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn el_umbral_es_de_trescientas_palabras() {
+    fn the_threshold_is_three_hundred_words() {
         let mut c = ctx();
         c.word_count = 300;
-        assert!(ContentThin.evaluate(&c).is_empty(), "300 palabras ya no es contenido escaso");
+        assert!(ContentThin.evaluate(&c).is_empty(), "300 words is no longer thin content");
         c.word_count = 299;
         let issues = ContentThin.evaluate(&c);
         assert_eq!(issues.len(), 1);
@@ -624,15 +626,15 @@ mod tests {
     }
 
     #[test]
-    fn una_pagina_sin_texto_es_contenido_escaso() {
+    fn a_page_with_no_text_is_thin_content() {
         let mut c = ctx();
         c.word_count = 0;
         assert_eq!(ContentThin.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn una_pagina_corta_pero_no_indexable_no_avisa() {
-        // Una ficha con `noindex` no compite en resultados: su longitud no es un problema.
+    fn a_short_but_non_indexable_page_does_not_warn() {
+        // A `noindex` page does not compete in the results: its length is not a problem.
         let mut c = ctx();
         c.word_count = 10;
         c.is_indexable = false;
@@ -640,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn un_pdf_corto_no_es_contenido_escaso() {
+    fn a_short_pdf_is_not_thin_content() {
         let mut c = ctx();
         c.word_count = 10;
         c.is_html = false;
@@ -650,12 +652,12 @@ mod tests {
     // --- CONTENT-LANG-MISSING ---
 
     #[test]
-    fn no_avisa_cuando_el_idioma_esta_declarado() {
+    fn does_not_warn_when_the_language_is_declared() {
         assert!(ContentLangMissing.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn avisa_cuando_falta_el_atributo_lang() {
+    fn warns_when_the_lang_attribute_is_missing() {
         let mut c = ctx();
         c.lang = None;
         let issues = ContentLangMissing.evaluate(&c);
@@ -665,14 +667,14 @@ mod tests {
     }
 
     #[test]
-    fn un_lang_vacio_cuenta_como_ausente() {
+    fn an_empty_lang_counts_as_missing() {
         let mut c = ctx();
         c.lang = Some("  ");
         assert_eq!(ContentLangMissing.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn no_avisa_del_idioma_en_una_pagina_no_indexable() {
+    fn does_not_warn_about_language_on_a_non_indexable_page() {
         let mut c = ctx();
         c.lang = None;
         c.is_indexable = false;
@@ -680,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_del_idioma_de_algo_que_no_es_html() {
+    fn does_not_warn_about_language_on_something_that_is_not_html() {
         let mut c = ctx();
         c.lang = None;
         c.is_html = false;

@@ -19,6 +19,44 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.4.0] — 2026-08-04
+
+### Fixed
+
+- **List mode records the links of the pages it audits.** It was dropping every link whose target
+  was not itself on the list: the row for the target was never created, so the writer silently
+  discarded the edge. A page's outbound links are a property of that page, not an extension of the
+  crawl, and auditing exactly the set you were given includes knowing where it points. Internal
+  targets outside the list are recorded without being requested — fetching them would be crawling
+  past the list, which is the one thing this mode promises not to do. External ones are checked for
+  status like anywhere else.
+- **List mode no longer crawls past its list when sitemaps are enabled.** It was queueing and
+  downloading the URLs a sitemap declared, so a list of three could finish having fetched four. The
+  sitemap is still read and its URLs recorded; they are not fetched.
+- **A list-mode crawl now declares its own link graph incomplete**, with
+  `truncated_reason = 'list_mode'`. By definition it only ever sees the URLs it was given, so no
+  page has its linkers. Without this, the rules that need a complete graph fire on a graph that is
+  all holes: a three-page list with a sitemap reported two thirds of itself as orphaned. The same
+  flag stops `diff` claiming that a URL disappeared when it was simply never in the list. The
+  summary says so in plain words — nothing here was cut short, so it does not use the word
+  "truncated".
+
+### Changed
+
+- **The whole codebase is moving to English** — comments, module and type documentation, test names
+  and `assert!` diagnostics — ahead of the repository opening. `crawlforge-rules` is done; the core
+  and the CLI are in progress. Spanish stays where it is product text: the `name_es`/`desc_es`
+  fields of the rule catalog, the `--lang es` strings, and the data a test compares against.
+- **The documentation is bilingual.** English is the source and lives where it always did; the
+  Spanish translation is under `docs/es/` and says in its header that the English one wins when the
+  two disagree.
+- **Unit tests build their schema from every published migration.** Twelve mount points each kept
+  their own hand-written list, and every one of them was different and behind — the worst stopped at
+  migration 001, which meant testing the orphan-page rule against the `v_orphans` that migrations
+  003 and 005 exist to fix. There is now one list per crate and a test that reads the `migrations/`
+  directory and fails if any file is missing from it, so the next migration cannot be forgotten
+  quietly.
+
 ## [0.3.0] — 2026-08-04
 
 ### Added

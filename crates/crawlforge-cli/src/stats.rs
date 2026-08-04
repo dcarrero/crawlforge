@@ -356,8 +356,8 @@ mod tests {
     #[test]
     fn un_registro_sobrevive_al_viaje_por_json() {
         let r = record("https://ejemplo.es", "crawlforge", 200.0);
-        let json = serde_json::to_string(&r).expect("serializar");
-        let back: BenchRecord = serde_json::from_str(&json).expect("deserializar");
+        let json = serde_json::to_string(&r).expect("serialize");
+        let back: BenchRecord = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.target, r.target);
         assert_eq!(back.urls_per_second, r.urls_per_second);
     }
@@ -368,11 +368,11 @@ mod tests {
         let path = dir.join("resultados.jsonl");
         let _ = std::fs::remove_dir_all(&dir);
 
-        append(&record("https://a.es", "crawlforge", 100.0), &path).expect("escribir");
-        append(&record("https://b.es", "crawlforge", 200.0), &path).expect("añadir");
+        append(&record("https://a.es", "crawlforge", 100.0), &path).expect("write");
+        append(&record("https://b.es", "crawlforge", 200.0), &path).expect("append");
 
-        let loaded = load(&path).expect("leer");
-        assert_eq!(loaded.len(), 2, "el fichero es append-only, no se sobrescribe");
+        let loaded = load(&path).expect("read");
+        assert_eq!(loaded.len(), 2, "the file is append-only, it is not overwritten");
         assert_eq!(loaded[1].target, "https://b.es");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -382,19 +382,19 @@ mod tests {
     fn una_linea_corrupta_no_invalida_el_historico() {
         use std::io::Write;
         let dir = std::env::temp_dir().join(format!("cf-stats-corrupt-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("crear dir");
+        std::fs::create_dir_all(&dir).expect("create dir");
         let path = dir.join("r.jsonl");
 
-        append(&record("https://a.es", "crawlforge", 100.0), &path).expect("escribir");
+        append(&record("https://a.es", "crawlforge", 100.0), &path).expect("write");
         writeln!(
-            std::fs::OpenOptions::new().append(true).open(&path).expect("abrir"),
+            std::fs::OpenOptions::new().append(true).open(&path).expect("open"),
             "{{ esto no es json"
         )
-        .expect("escribir basura");
-        append(&record("https://b.es", "crawlforge", 200.0), &path).expect("añadir");
+        .expect("write garbage");
+        append(&record("https://b.es", "crawlforge", 200.0), &path).expect("append");
 
-        let loaded = load(&path).expect("leer");
-        assert_eq!(loaded.len(), 2, "las líneas válidas se conservan");
+        let loaded = load(&path).expect("read");
+        assert_eq!(loaded.len(), 2, "valid lines are preserved");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn un_historico_inexistente_no_es_un_error() {
         let path = std::env::temp_dir().join("cf-no-existe-jamas.jsonl");
-        assert!(load(&path).expect("leer").is_empty());
+        assert!(load(&path).expect("read").is_empty());
     }
 
     #[test]
@@ -413,17 +413,17 @@ mod tests {
             record("https://a.es", "screamingfrog", 80.0),
         ];
         assert_eq!(
-            best(&records, "https://a.es", "crawlforge", 5).expect("nuestra").urls_per_second,
+            best(&records, "https://a.es", "crawlforge", 5).expect("ours").urls_per_second,
             250.0
         );
         assert_eq!(
-            best(&records, "https://a.es", "screamingfrog", 5).expect("suya").urls_per_second,
+            best(&records, "https://a.es", "screamingfrog", 5).expect("theirs").urls_per_second,
             80.0
         );
         assert!(best(&records, "https://otro.es", "crawlforge", 5).is_none());
         assert!(
             best(&records, "https://a.es", "crawlforge", 15).is_none(),
-            "no debe devolver marcas de otra concurrencia"
+            "must not return records from another concurrency"
         );
     }
 
@@ -438,8 +438,8 @@ mod tests {
             record("https://a.es", "crawlforge", 120.0),
             record("https://a.es", "screamingfrog", 19.0),
         ];
-        let nuestra = best(&records, "https://a.es", "crawlforge", 5).expect("a concurrencia 5");
-        assert_eq!(nuestra.urls_per_second, 120.0, "la de 15 no debe colarse");
+        let nuestra = best(&records, "https://a.es", "crawlforge", 5).expect("at concurrency 5");
+        assert_eq!(nuestra.urls_per_second, 120.0, "the concurrency-15 record must not sneak in");
     }
 
     #[test]

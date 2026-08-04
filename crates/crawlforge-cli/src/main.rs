@@ -18,6 +18,13 @@ mod report;
 mod rules;
 mod stats;
 
+/// The same test-only schema helper the library target has: `report.rs` is a module of the
+/// binary, so it cannot see `#[cfg(test)]` items of the library crate. Compiling the file
+/// into both targets is test-only and harmless; its guard test simply runs once per target.
+#[cfg(test)]
+#[path = "test_schema.rs"]
+mod test_schema;
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use crawlforge_cli::i18n::msg;
@@ -1441,18 +1448,18 @@ mod tests {
         // staging protegido, la función que la limpieza había roto.
         let (url, auth) = split_url_credentials("https://staging:S3cret@pre.cliente.es/");
         assert_eq!(url, "https://pre.cliente.es/");
-        let auth = auth.expect("la credencial se extrae, no se tira");
+        let auth = auth.expect("the credential is extracted, not discarded");
         assert_eq!(auth.username, "staging");
         assert_eq!(auth.password, "S3cret");
 
         // Solo usuario: contraseña vacía, que Basic Auth admite.
         let (url, auth) = split_url_credentials("https://usuario@ejemplo.es/a");
         assert_eq!(url, "https://ejemplo.es/a");
-        assert_eq!(auth.expect("hay credencial").password, "");
+        assert_eq!(auth.expect("there is a credential").password, "");
 
         // El userinfo viaja percent-encodificado; el servidor espera los caracteres reales.
         let (_, auth) = split_url_credentials("https://user:p%40ss%3Aw@ejemplo.es/");
-        assert_eq!(auth.expect("hay credencial").password, "p@ss:w");
+        assert_eq!(auth.expect("there is a credential").password, "p@ss:w");
 
         // Sin credenciales, la URL vuelve intacta, sin renormalizar de más.
         assert_eq!(
@@ -1470,11 +1477,11 @@ mod tests {
         let de_env = HttpBasicAuth::new("de-env", "b");
 
         let (auth, origen) =
-            choose_auth(Some(de_url.clone()), Some(de_env.clone())).expect("hay credencial");
-        assert_eq!(auth, de_url, "lo dicho en el comando gana a lo exportado en la sesión");
+            choose_auth(Some(de_url.clone()), Some(de_env.clone())).expect("there is a credential");
+        assert_eq!(auth, de_url, "what the command says wins over what the session exports");
         assert_eq!(origen, AuthOrigin::Url);
 
-        let (auth, origen) = choose_auth(None, Some(de_env.clone())).expect("hay credencial");
+        let (auth, origen) = choose_auth(None, Some(de_env.clone())).expect("there is a credential");
         assert_eq!((auth, origen), (de_env, AuthOrigin::Env));
 
         assert!(choose_auth(None, None).is_none());
@@ -1484,14 +1491,14 @@ mod tests {
     fn la_variable_de_entorno_de_credenciales_exige_su_forma() {
         // `user:pass` vale; la primera `:` separa, el resto es contraseña (que puede llevar
         // sus propios `:`).
-        let auth = parse_auth_spec("staging:S3cret").expect("forma válida");
+        let auth = parse_auth_spec("staging:S3cret").expect("valid form");
         assert_eq!((auth.username.as_str(), auth.password.as_str()), ("staging", "S3cret"));
-        let auth = parse_auth_spec("user:con:dos:puntos").expect("forma válida");
+        let auth = parse_auth_spec("user:con:dos:puntos").expect("valid form");
         assert_eq!(auth.password, "con:dos:puntos");
 
         // Sin `:` es un error que nombra la variable: rastrear sin autenticar creyendo que
         // se autenticaba daría un informe de 401 que no describe el sitio.
-        let err = parse_auth_spec("sin-separador").expect_err("falta el separador");
+        let err = parse_auth_spec("sin-separador").expect_err("missing separator");
         assert!(err.to_string().contains("CRAWLFORGE_AUTH"), "{err}");
     }
 
@@ -1516,16 +1523,16 @@ mod tests {
         // Revisión 2026-08-01 §5.5: `crawlforge rules CANON-CHAIN` respondía
         // `error: unexpected argument` y obligaba a buscar entre 58 fichas con `--detail`.
         let cli = Cli::try_parse_from(["crawlforge", "rules", "CANON-CHAIN"])
-            .expect("el ID posicional debe aceptarse");
+            .expect("the positional ID must be accepted");
         let Command::Rules { id, .. } = cli.command else {
-            panic!("el subcomando es rules");
+            panic!("the subcommand is rules");
         };
         assert_eq!(id.as_deref(), Some("CANON-CHAIN"));
 
         // Y sin ID, el catálogo de siempre.
-        let cli = Cli::try_parse_from(["crawlforge", "rules"]).expect("sin ID también vale");
+        let cli = Cli::try_parse_from(["crawlforge", "rules"]).expect("no ID is also valid");
         let Command::Rules { id, .. } = cli.command else {
-            panic!("el subcomando es rules");
+            panic!("the subcommand is rules");
         };
         assert!(id.is_none());
     }
@@ -1550,7 +1557,7 @@ mod tests {
             let comando = args[1];
             assert!(
                 Cli::try_parse_from(&args).is_ok(),
-                "`{comando}` traduce su salida y debe aceptar --lang"
+                "`{comando}` translates its output and must accept --lang"
             );
         }
     }
@@ -1559,13 +1566,13 @@ mod tests {
     fn inspect_toma_fichero_y_url_y_valida_su_limite() {
         // El caso normal: fichero y URL, sin más ceremonia.
         let cli = Cli::try_parse_from(["crawlforge", "inspect", "c.sqlite", "https://e.es/blog/"])
-            .expect("inspect con fichero y URL debe aceptarse");
+            .expect("inspect with file and URL must be accepted");
         let Command::Inspect { store, url, limit, format, .. } = cli.command else {
-            panic!("el subcomando es inspect");
+            panic!("the subcommand is inspect");
         };
         assert_eq!(store, PathBuf::from("c.sqlite"));
         assert_eq!(url, "https://e.es/blog/");
-        assert_eq!(limit, crawlforge_cli::inspect::ListLimit::N(20), "el corte por defecto");
+        assert_eq!(limit, crawlforge_cli::inspect::ListLimit::N(20), "the default cutoff");
         assert_eq!(format, "terminal");
 
         // `--limit` acepta un número o `all`, y rechaza lo demás con el contrato.
@@ -1576,17 +1583,17 @@ mod tests {
             let cli = Cli::try_parse_from([
                 "crawlforge", "inspect", "c.sqlite", "https://e.es/", "--limit", valor,
             ])
-            .expect("el límite válido debe aceptarse");
+            .expect("a valid limit must be accepted");
             let Command::Inspect { limit, .. } = cli.command else {
-                panic!("el subcomando es inspect");
+                panic!("the subcommand is inspect");
             };
             assert_eq!(limit, esperado);
         }
         let r = Cli::try_parse_from([
             "crawlforge", "inspect", "c.sqlite", "https://e.es/", "--limit", "0",
         ]);
-        let Err(err) = r else { panic!("0 filas no es inspeccionar nada") };
-        assert!(err.to_string().contains("all"), "el error dice el contrato: {err}");
+        let Err(err) = r else { panic!("0 rows is not inspecting anything") };
+        assert!(err.to_string().contains("all"), "the error states the contract: {err}");
     }
 
     #[test]
@@ -1599,13 +1606,13 @@ mod tests {
     fn store_pausado(nombre: &str, ignore_robots: bool) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("crawlforge-cli-{}-{nombre}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("crear temporal");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
         let path = dir.join("crawl.sqlite");
 
-        let conn = crawlforge_core::store::open_writer(&path).expect("crear el rastreo");
+        let conn = crawlforge_core::store::open_writer(&path).expect("create the crawl");
         let mut job = crawlforge_core::job::CrawlJob::http("https://ejemplo.es/");
         job.limits.ignore_robots = ignore_robots;
-        let config = serde_json::to_string(&job).expect("serializar la configuración");
+        let config = serde_json::to_string(&job).expect("serialize the config");
         conn.execute(
             "INSERT INTO crawl_meta (id, project_id, project_name, base_url, mode, started_at,
                                      status, config_json, core_version, rules_version,
@@ -1614,7 +1621,7 @@ mod tests {
                      '0','0','free')",
             rusqlite::params![config],
         )
-        .expect("insertar crawl_meta");
+        .expect("insert crawl_meta");
         drop(conn);
         path
     }
@@ -1626,16 +1633,16 @@ mod tests {
         // «vuelve a lanzar el rastreo».
         let path = store_pausado("esquema-anterior", false);
         {
-            let conn = rusqlite::Connection::open(&path).expect("abrir para envejecer");
+            let conn = rusqlite::Connection::open(&path).expect("open to age the schema");
             conn.execute("DELETE FROM schema_version WHERE version = ?1",
                          [crawlforge_core::SCHEMA_VERSION])
-                .expect("quitar la última migración de la marca");
+                .expect("remove the latest migration from the version mark");
         }
 
         let info = resume_precheck(&path);
         assert!(
             info.is_ok(),
-            "un rastreo de esquema anterior con migraciones seguras tiene que poder reanudarse: {:?}",
+            "a crawl with an older schema and safe migrations must be resumable: {:?}",
             info.err()
         );
     }
@@ -1646,14 +1653,14 @@ mod tests {
         // escribiría filas que el esquema del fichero ya no admite.
         let path = store_pausado("esquema-futuro", false);
         {
-            let conn = rusqlite::Connection::open(&path).expect("abrir para adelantar");
+            let conn = rusqlite::Connection::open(&path).expect("open to fast-forward");
             conn.execute(
                 "INSERT INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
                 [crawlforge_core::SCHEMA_VERSION + 1],
             )
-            .expect("marcar una versión futura");
+            .expect("mark a future version");
         }
-        assert!(resume_precheck(&path).is_err(), "hacia atrás no se puede migrar");
+        assert!(resume_precheck(&path).is_err(), "there is no migrating backwards");
     }
 
     #[test]
@@ -1663,12 +1670,12 @@ mod tests {
         // exacta hay que decirlo: el usuario rastreó su propio sitio saltándose el robots y al
         // reanudar obtendría menos URLs sin entender por qué.
         let con = store_pausado("robots-si", true);
-        let info = resume_precheck(&con).expect("el precheck debe aceptar un rastreo pausado");
-        assert!(info.ignoraba_robots, "el rastreo original sí ignoraba robots.txt");
+        let info = resume_precheck(&con).expect("the precheck must accept a paused crawl");
+        assert!(info.ignoraba_robots, "the original crawl did ignore robots.txt");
 
         let sin = store_pausado("robots-no", false);
-        let info = resume_precheck(&sin).expect("el precheck debe aceptar un rastreo pausado");
-        assert!(!info.ignoraba_robots, "un rastreo normal no debe disparar el aviso");
+        let info = resume_precheck(&sin).expect("the precheck must accept a paused crawl");
+        assert!(!info.ignoraba_robots, "a normal crawl must not trigger the warning");
 
         // Que el aviso diga además *qué hacer* lo comprueba `i18n`, que es quien ve `Lang`.
     }
@@ -1679,9 +1686,9 @@ mod tests {
         // aquí `--max-urls` o `--include` prometería algo que la reanudación no puede
         // cumplir sin romper «reanudar da lo mismo que no haber parado».
         let cli = Cli::try_parse_from(["crawlforge", "resume", "crawl-miweb-es.sqlite"])
-            .expect("resume con solo el fichero debe aceptarse");
+            .expect("resume with only the file must be accepted");
         let Command::Resume { store, csv } = cli.command else {
-            panic!("el subcomando es resume");
+            panic!("the subcommand is resume");
         };
         assert_eq!(store, PathBuf::from("crawl-miweb-es.sqlite"));
         assert!(csv.is_none());
@@ -1695,7 +1702,7 @@ mod tests {
             args.extend(flag.iter());
             assert!(
                 Cli::try_parse_from(&args).is_err(),
-                "resume no debe aceptar {flag:?}"
+                "resume must not accept {flag:?}"
             );
         }
     }
@@ -1705,7 +1712,7 @@ mod tests {
         // El valor por defecto `https://localhost/` invalidaba la auditoría en silencio:
         // todos los canonicals absolutos salían «cross-domain» y cero páginas indexables.
         let r = Cli::try_parse_from(["crawlforge", "audit", "./dist"]);
-        assert!(r.is_err(), "audit sin --base debe rechazarse");
+        assert!(r.is_err(), "audit without --base must be rejected");
         assert!(Cli::try_parse_from([
             "crawlforge",
             "audit",
@@ -1726,10 +1733,10 @@ mod tests {
                 "crawlforge", "crawl", "https://ejemplo.es", "--concurrency", fuera,
             ])
             .err()
-            .unwrap_or_else(|| panic!("{fuera} está fuera de 1..=20 y debe rechazarse"));
+            .unwrap_or_else(|| panic!("{fuera} is outside 1..=20 and must be rejected"));
             let msg = err.to_string();
-            assert!(msg.contains("1..=20"), "el error dice el contrato, no el tipo: {msg}");
-            assert!(!msg.contains("0..=255"), "sin el rango del tipo: {msg}");
+            assert!(msg.contains("1..=20"), "the error states the contract, not the type: {msg}");
+            assert!(!msg.contains("0..=255"), "without the type's range: {msg}");
         }
         for dentro in ["1", "5", "20"] {
             assert!(Cli::try_parse_from([
@@ -1813,8 +1820,8 @@ mod tests {
             }),
         };
         let linea = progress_message(&p);
-        assert!(linea.contains("7/29"), "tiene que decir por dónde va: {linea}");
-        assert!(linea.contains("DUP-CONTENT-EXACT"), "y cuál está tardando: {linea}");
+        assert!(linea.contains("7/29"), "it must say how far along it is: {linea}");
+        assert!(linea.contains("DUP-CONTENT-EXACT"), "and which rule is taking long: {linea}");
     }
 
     #[test]
@@ -1836,8 +1843,8 @@ mod tests {
             }),
         };
         let linea = progress_message(&p);
-        assert!(linea.contains("internal links in"), "sin subrayados: {linea}");
-        assert!(!linea.contains("0/0"), "un paso sin cuenta no la enseña: {linea}");
+        assert!(linea.contains("internal links in"), "no underscores: {linea}");
+        assert!(!linea.contains("0/0"), "a step without a count does not show one: {linea}");
     }
 
     // ── El rastreo anterior se aparta, no se borra ───────────────────────────
@@ -1846,7 +1853,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("crawlforge-main-{}-{nombre}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("crear el directorio temporal");
+        std::fs::create_dir_all(&dir).expect("create the temp directory");
         dir
     }
 
@@ -1867,18 +1874,18 @@ mod tests {
     fn re_rastrear_aparta_el_fichero_anterior_en_vez_de_borrarlo() {
         let dir = tmpdir("rotate");
         let store = dir.join("crawl-miweb-es.sqlite");
-        std::fs::write(&store, "el rastreo de antes").expect("crear el fichero");
+        std::fs::write(&store, "el rastreo de antes").expect("create the file");
 
         let prev = rotate_previous_store(&store)
-            .expect("rotar")
-            .expect("había un fichero que apartar");
+            .expect("rotate")
+            .expect("there was a file to set aside");
 
         assert_eq!(prev, dir.join("crawl-miweb-es.prev.sqlite"));
-        assert!(!store.exists(), "el nombre original queda libre para el nuevo rastreo");
+        assert!(!store.exists(), "the original name is freed for the new crawl");
         assert_eq!(
-            std::fs::read_to_string(&prev).expect("leer el backup"),
+            std::fs::read_to_string(&prev).expect("read the backup"),
             "el rastreo de antes",
-            "el contenido del «antes» sobrevive intacto"
+            "the previous content survives intact"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1892,19 +1899,19 @@ mod tests {
         // (`tests/perimetro_del_fichero.rs`).
         let dir = tmpdir("rotate-vivo");
         let store = dir.join("crawl.sqlite");
-        std::fs::write(&store, "rastreo vivo").expect("crear el fichero");
+        std::fs::write(&store, "rastreo vivo").expect("create the file");
 
         let exclusiva = crawlforge_core::store::StoreLock::acquire(&store)
-            .expect("simular el rastreo vivo tomando su exclusiva");
-        let err = rotate_unless_live(&store).expect_err("con la exclusiva tomada no se rota");
-        assert!(err.to_string().contains("crawlforge"), "el error nombra al otro proceso: {err}");
-        assert!(store.exists(), "el fichero vivo sigue intacto en su sitio");
+            .expect("simulate the live crawl taking its exclusive lock");
+        let err = rotate_unless_live(&store).expect_err("with the lock held there is no rotation");
+        assert!(err.to_string().contains("crawlforge"), "the error names the other process: {err}");
+        assert!(store.exists(), "the live file stays intact in place");
 
         // Libre la exclusiva —el otro rastreo terminó—, la rotación de siempre.
         drop(exclusiva);
         let prev = rotate_unless_live(&store)
-            .expect("sin otro escritor se rota")
-            .expect("había un fichero que apartar");
+            .expect("with no other writer it rotates")
+            .expect("there was a file to set aside");
         assert!(prev.exists());
         assert!(!store.exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1914,7 +1921,7 @@ mod tests {
     fn sin_fichero_previo_no_hay_nada_que_rotar() {
         let dir = tmpdir("rotate-nada");
         let store = dir.join("crawl-nuevo.sqlite");
-        assert!(rotate_previous_store(&store).expect("rotar").is_none());
+        assert!(rotate_previous_store(&store).expect("rotate").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1923,12 +1930,12 @@ mod tests {
         let dir = tmpdir("rotate-dos-veces");
         let store = dir.join("crawl.sqlite");
 
-        std::fs::write(&store, "primera").expect("crear");
-        rotate_previous_store(&store).expect("rotar la primera");
-        std::fs::write(&store, "segunda").expect("simular el segundo rastreo");
-        let prev = rotate_previous_store(&store).expect("rotar la segunda").expect("hay backup");
+        std::fs::write(&store, "primera").expect("create");
+        rotate_previous_store(&store).expect("rotate the first");
+        std::fs::write(&store, "segunda").expect("simulate the second crawl");
+        let prev = rotate_previous_store(&store).expect("rotate the second").expect("there is a backup");
 
-        assert_eq!(std::fs::read_to_string(&prev).expect("leer"), "segunda");
+        assert_eq!(std::fs::read_to_string(&prev).expect("read"), "segunda");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1936,14 +1943,14 @@ mod tests {
     fn los_ficheros_laterales_de_sqlite_viajan_con_su_base() {
         let dir = tmpdir("rotate-wal");
         let store = dir.join("crawl.sqlite");
-        std::fs::write(&store, "base").expect("crear");
-        std::fs::write(sidecar(&store, "-wal"), "wal").expect("crear wal");
+        std::fs::write(&store, "base").expect("create");
+        std::fs::write(sidecar(&store, "-wal"), "wal").expect("create wal");
 
-        rotate_previous_store(&store).expect("rotar");
+        rotate_previous_store(&store).expect("rotate");
 
         let prev = dir.join("crawl.prev.sqlite");
         assert!(prev.exists());
-        assert!(sidecar(&prev, "-wal").exists(), "el -wal acompaña a su base");
+        assert!(sidecar(&prev, "-wal").exists(), "the -wal travels with its base file");
         assert!(!sidecar(&store, "-wal").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1955,10 +1962,10 @@ mod tests {
         let dir = tmpdir("config");
         let path = dir.join("sitio.yaml");
         std::fs::write(&path, "max_urls: 5000\nconcurrency: 8\nignore_robots: true\n")
-            .expect("escribir el YAML");
+            .expect("write the YAML");
 
         let mut job = CrawlJob::http("https://ejemplo.es");
-        apply_config_file(&mut job, Some(&path)).expect("cargar la configuración");
+        apply_config_file(&mut job, Some(&path)).expect("load the config");
         apply_crawl_flags(
             &mut job,
             &CrawlFlags {
@@ -1972,9 +1979,9 @@ mod tests {
             },
         );
 
-        assert_eq!(job.limits.max_urls, Some(100), "el flag gana");
-        assert_eq!(job.limits.concurrency_per_host, 8, "lo no pisado viene del fichero");
-        assert!(job.limits.ignore_robots, "un bool del fichero no se resetea por omisión");
+        assert_eq!(job.limits.max_urls, Some(100), "the flag wins");
+        assert_eq!(job.limits.concurrency_per_host, 8, "what is not overridden comes from the file");
+        assert!(job.limits.ignore_robots, "a bool from the file is not reset by omission");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1982,10 +1989,10 @@ mod tests {
     fn una_errata_en_el_yaml_es_un_error_con_el_nombre_del_campo() {
         let dir = tmpdir("config-errata");
         let path = dir.join("sitio.yaml");
-        std::fs::write(&path, "max_url: 100\n").expect("escribir el YAML");
+        std::fs::write(&path, "max_url: 100\n").expect("write the YAML");
 
         let err = apply_config_file(&mut CrawlJob::http("https://ejemplo.es"), Some(&path))
-            .expect_err("max_url no existe");
+            .expect_err("max_url does not exist");
         assert!(format!("{err:#}").contains("max_url"), "{err:#}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1994,10 +2001,10 @@ mod tests {
     fn una_concurrencia_imposible_en_el_yaml_se_rechaza_con_el_contrato() {
         let dir = tmpdir("config-concurrencia");
         let path = dir.join("sitio.yaml");
-        std::fs::write(&path, "concurrency: 50\n").expect("escribir el YAML");
+        std::fs::write(&path, "concurrency: 50\n").expect("write the YAML");
 
         let err = apply_config_file(&mut CrawlJob::http("https://ejemplo.es"), Some(&path))
-            .expect_err("50 está fuera de 1..=20");
+            .expect_err("50 is outside 1..=20");
         let msg = format!("{err:#}");
         assert!(msg.contains("between 1 and 20"), "{msg}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -2011,9 +2018,9 @@ mod tests {
             "--exclude", "/wp-admin/", "--exclude", r"\?replytocom=",
             "--include", "/blog/",
         ])
-        .expect("los flags de patrones deben aceptarse");
+        .expect("the pattern flags must be accepted");
         let Command::Crawl { include, exclude, .. } = cli.command else {
-            panic!("el subcomando es crawl");
+            panic!("the subcommand is crawl");
         };
         assert_eq!(exclude, vec!["/wp-admin/", r"\?replytocom="]);
         assert_eq!(include, vec!["/blog/"]);
@@ -2025,13 +2032,13 @@ mod tests {
             &path,
             "exclude_patterns:\n  - \"/del-fichero/\"\ninclude_patterns:\n  - \"/docs/\"\n",
         )
-        .expect("escribir el YAML");
+        .expect("write the YAML");
         let mut job = CrawlJob::http("https://ejemplo.es");
-        apply_config_file(&mut job, Some(&path)).expect("cargar la configuración");
+        apply_config_file(&mut job, Some(&path)).expect("load the config");
         assert_eq!(job.limits.exclude_patterns, vec!["/del-fichero/"]);
         apply_pattern_flags(&mut job, Vec::new(), vec!["/del-flag/".to_string()]);
-        assert_eq!(job.limits.exclude_patterns, vec!["/del-flag/"], "el flag sustituye");
-        assert_eq!(job.limits.include_patterns, vec!["/docs/"], "lo no pisado se conserva");
+        assert_eq!(job.limits.exclude_patterns, vec!["/del-flag/"], "the flag replaces");
+        assert_eq!(job.limits.include_patterns, vec!["/docs/"], "what is not overridden is preserved");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2049,9 +2056,9 @@ mod tests {
         // Si el ejemplo documentado deja de cargar, la documentación miente.
         let ejemplo = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../docs/crawl-config.example.yaml");
-        let config = load_job_config(&ejemplo).expect("el ejemplo tiene que cargar");
+        let config = load_job_config(&ejemplo).expect("the example must load");
         let mut job = CrawlJob::http("https://ejemplo.es");
-        config.apply_to(&mut job).expect("y ser aplicable");
+        config.apply_to(&mut job).expect("and be applicable");
     }
 
     #[test]

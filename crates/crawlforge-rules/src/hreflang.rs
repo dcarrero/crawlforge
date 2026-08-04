@@ -1,27 +1,27 @@
-//! `HREFLANG` — internacionalización. `docs/04-CATALOGO-REGLAS.md §8`.
+//! `HREFLANG` — internationalisation. `docs/04-CATALOGO-REGLAS.md §8`.
 //!
-//! Bloque de alto valor para sitios multiidioma con un dominio por idioma son sitios
-//! multiidioma, y hoy nadie les audita el hreflang sin pagar una licencia.
+//! A high-value block: multilingual sites — including the one-domain-per-language kind — are
+//! plentiful, and today nobody audits their hreflang without paying for a licence.
 //!
-//! # Doctrina de este módulo: cero falsos positivos
+//! # This module's doctrine: zero false positives
 //!
-//! Un aviso equivocado sobre hreflang hace que el usuario desconfíe de toda la herramienta,
-//! porque hreflang es precisamente la parte del SEO técnico en la que menos gente confía en su
-//! propio criterio. Por eso, en cada decisión dudosa, este módulo **calla**:
+//! One wrong hreflang warning makes the user distrust the whole tool, because hreflang is
+//! precisely the corner of technical SEO where the fewest people trust their own judgement.
+//! So on every doubtful call, this module **stays quiet**:
 //!
-//! - Los códigos se validan contra listas explícitas y se aceptan formas legítimas poco
-//!   frecuentes (subetiqueta de escritura, macrorregión M.49, alias históricos de ISO 639-1).
-//! - Las comparaciones de URL toleran `index.html` y la barra final, que son la misma página.
-//! - Si el destino de un hreflang no se rastreó, no se dice nada de él: puede ser un dominio
-//!   distinto del conjunto —el caso de un dominio por idioma— y no tenemos su HTML.
+//! - Codes are validated against explicit lists, and legitimate but uncommon forms are accepted
+//!   (script subtag, M.49 macroregion, historical ISO 639-1 aliases).
+//! - URL comparisons tolerate `index.html` and the trailing slash, which are the same page.
+//! - If an hreflang target was not crawled, nothing is said about it: it may be a domain outside
+//!   the crawled set — the one-domain-per-language case — and we do not have its HTML.
 //!
-//! # Sobre el `href` que llega en el contexto
+//! # About the `href` that arrives in the context
 //!
-//! [`PageContext::hreflang`] entrega el `href` **tal como venía en el HTML**: el motor no
-//! resuelve los `link rel=alternate` a absoluto como hace con el canonical. Google exige URL
-//! completas en hreflang, así que en un sitio bien montado ya son absolutas, pero las reglas de
-//! aquí resuelven lo relativo por su cuenta —`resolve_href`— para no inventarse hallazgos en los
-//! sitios que usan rutas relativas.
+//! [`PageContext::hreflang`] hands over the `href` **as it came in the HTML**: the engine does
+//! not resolve `link rel=alternate` to absolute the way it does the canonical. Google requires
+//! full URLs in hreflang, so on a well-built site they are already absolute, but the rules here
+//! resolve relative ones on their own — `resolve_href` — to avoid inventing findings on sites
+//! that use relative paths.
 
 use crate::{Category, Issue, PageContext, PageRule, RuleMeta, Scope, Severity, SiteRule, Tier};
 use rusqlite::{Connection, OptionalExtension};
@@ -98,15 +98,15 @@ pub static HREFLANG_TO_4XX: RuleMeta = RuleMeta {
 };
 
 // ---------------------------------------------------------------------------------------------
-// Validación de códigos
+// Code validation
 // ---------------------------------------------------------------------------------------------
 
-/// Códigos de idioma ISO 639-1 (alfa-2). Es el conjunto de dos letras completo de la norma,
-/// que es exactamente lo que Google documenta para hreflang.
+/// ISO 639-1 (alpha-2) language codes. This is the standard's complete two-letter set, which is
+/// exactly what Google documents for hreflang.
 ///
-/// **No incluye** ISO 639-2/639-3 de tres letras salvo la lista corta de
-/// [`LANGUAGES_3`]: aceptar cualquier código de tres letras dejaría pasar la mayoría de las
-/// erratas reales, que es justo lo que la regla busca.
+/// **Does not include** three-letter ISO 639-2/639-3 codes beyond the short list in
+/// [`LANGUAGES_3`]: accepting any three-letter code would let most real-world typos through,
+/// which is exactly what this rule is hunting.
 const LANGUAGES: &[&str] = &[
     "aa", "ab", "ae", "af", "ak", "am", "an", "ar", "as", "av", "ay", "az", //
     "ba", "be", "bg", "bh", "bi", "bm", "bn", "bo", "br", "bs", //
@@ -137,24 +137,24 @@ const LANGUAGES: &[&str] = &[
     "za", "zh", "zu",
 ];
 
-/// Alias históricos de ISO 639-1, retirados pero todavía emitidos por CMS antiguos y por
-/// bibliotecas de Java. Se aceptan **a propósito**: Google los interpreta, así que avisar de
-/// ellos sería un falso positivo, aunque la forma moderna sea preferible.
+/// Historical ISO 639-1 aliases, withdrawn from the standard but still emitted by old CMSs and
+/// by Java libraries. Accepted **on purpose**: Google interprets them, so flagging them would be
+/// a false positive, even though the modern form is preferable.
 ///
 /// `in` → `id`, `iw` → `he`, `ji` → `yi`, `jw` → `jv`, `sh` → `sr`/`hr`, `mo` → `ro`.
 const LANGUAGES_DEPRECATED: &[&str] = &["in", "iw", "ji", "jw", "sh", "mo"];
 
-/// Idiomas de tres letras sin código ISO 639-1 que sí aparecen en conjuntos hreflang reales.
-/// Lista deliberadamente corta: solo los que se ven en producción.
+/// Three-letter languages without an ISO 639-1 code that do show up in real hreflang sets.
+/// Deliberately short list: only what is actually seen in production.
 const LANGUAGES_3: &[&str] =
     &["fil", "haw", "ceb", "yue", "nds", "gsw", "ast", "arn", "hmn", "quz", "cnr"];
 
-/// Códigos de región ISO 3166-1 alfa-2 **asignados oficialmente**.
+/// **Officially assigned** ISO 3166-1 alpha-2 region codes.
 ///
-/// Excluye a propósito los «excepcionalmente reservados» y los de uso privado, incluidos los dos
-/// que más se cuelan en hreflang: `UK` (lo correcto es `GB`) y `EU` (no es un país; para «el
-/// resto de Europa» lo que existe es `x-default`). Google solo honra los asignados, así que
-/// avisar de esos dos no es un falso positivo, es el hallazgo.
+/// Deliberately excludes the "exceptionally reserved" and private-use ones, including the two
+/// that sneak into hreflang the most: `UK` (the correct code is `GB`) and `EU` (not a country;
+/// what exists for "the rest of Europe" is `x-default`). Google only honours the assigned codes,
+/// so flagging those two is not a false positive — it is the finding.
 const REGIONS: &[&str] = &[
     "AD", "AE", "AF", "AG", "AI", "AL", "AM", "AO", "AQ", "AR", "AS", "AT", "AU", "AW", "AX",
     "AZ", //
@@ -190,22 +190,22 @@ const REGIONS: &[&str] = &[
     "ZA", "ZM", "ZW",
 ];
 
-/// Macrorregiones UN M.49 admitidas por BCP 47 como subetiqueta de región.
+/// UN M.49 macroregions admitted by BCP 47 as region subtags.
 ///
-/// La que importa de verdad es `419`, Latinoamérica: `es-419` es válido y muy usado, y darlo por
-/// erróneo sería el falso positivo más caro de esta regla. Se incluye el resto del conjunto
-/// geográfico de M.49 por coherencia, no porque se vea a menudo.
+/// The one that truly matters is `419`, Latin America: `es-419` is valid and widely used, and
+/// calling it wrong would be this rule's most expensive false positive. The rest of the M.49
+/// geographic set is included for coherence, not because it comes up often.
 const REGIONS_M49: &[&str] = &[
     "001", "002", "003", "005", "009", "011", "013", "014", "015", "017", "018", "019", "021",
     "029", "030", "034", "035", "039", "053", "054", "057", "061", "142", "143", "145", "150",
     "151", "154", "155", "202", "419",
 ];
 
-/// Subetiquetas de escritura ISO 15924 que se ven en hreflang.
+/// ISO 15924 script subtags that appear in hreflang.
 ///
-/// Se aceptan porque Google interpreta `zh-Hant`, `zh-Hans` y `sr-Latn`, y avisar de ellas sería
-/// un falso positivo. No es la lista completa de la norma: son las escrituras con presencia real
-/// en sitios web.
+/// Accepted because Google interprets `zh-Hant`, `zh-Hans` and `sr-Latn`, and flagging them
+/// would be a false positive. Not the standard's full list: these are the scripts with an actual
+/// presence on real websites.
 const SCRIPTS: &[&str] = &[
     "Latn", "Cyrl", "Hans", "Hant", "Hani", "Arab", "Hebr", "Grek", "Deva", "Jpan", "Kana",
     "Hira", "Kore", "Hang", "Thai", "Armn", "Geor", "Beng", "Guru", "Gujr", "Orya", "Taml",
@@ -213,8 +213,8 @@ const SCRIPTS: &[&str] = &[
     "Mong", "Tfng", "Syrc", "Thaa", "Nkoo", "Adlm", "Vaii", "Bopo", "Brai",
 ];
 
-/// Confusiones habituales de idioma: se toma el código del país cuando lo que toca es el del
-/// idioma. Solo se consulta cuando el código ya se ha declarado inválido.
+/// Common language mix-ups: the country code gets used where the language code belongs. Only
+/// consulted once the code has already been ruled invalid.
 const LANGUAGE_HINTS: &[(&str, &str)] = &[
     ("sp", "es"),
     ("jp", "ja"),
@@ -228,13 +228,13 @@ const LANGUAGE_HINTS: &[(&str, &str)] = &[
     ("il", "he"),
 ];
 
-/// Confusiones habituales de región.
+/// Common region mix-ups.
 const REGION_HINTS: &[(&str, &str)] = &[("UK", "GB"), ("EU", "x-default"), ("EN", "GB")];
 
-/// Por qué un código no vale, y qué se quiso escribir si se puede adivinar.
+/// Why a code is invalid, and what was probably meant if it can be guessed.
 ///
-/// El `reason` es un identificador estable en inglés: la UI lo traduce, y el diff entre rastreos
-/// lo compara. No es texto para el usuario.
+/// `reason` is a stable identifier in English: the UI translates it, and the crawl-to-crawl diff
+/// compares it. It is not user-facing text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeProblem {
     pub reason: &'static str,
@@ -251,19 +251,19 @@ impl CodeProblem {
     }
 }
 
-/// Valida un valor de `hreflang`. `None` es «correcto».
+/// Validates an `hreflang` value. `None` means "correct".
 ///
-/// Acepta `x-default` y `idioma[-Escritura][-REGIÓN]`, sin distinguir mayúsculas —BCP 47 no las
-/// distingue, así que `ES-es` es válido aunque la forma canónica sea `es-ES`.
+/// Accepts `x-default` and `language[-Script][-REGION]`, case-insensitively — BCP 47 is
+/// case-insensitive, so `ES-es` is valid even though the canonical form is `es-ES`.
 pub fn check_code(code: &str) -> Option<CodeProblem> {
     let bruto = code.trim();
     if bruto.is_empty() {
         return Some(CodeProblem::new("empty"));
     }
 
-    // El guion bajo es el error de separador clásico de los CMS que reutilizan el «locale» de
-    // PHP o de Java (`es_ES`). Se detecta antes que nada porque la sugerencia es evidente y
-    // porque, si no, el código parecería una sola subetiqueta rarísima.
+    // The underscore is the classic separator mistake of CMSs that reuse PHP's or Java's
+    // "locale" (`es_ES`). It is detected before anything else because the suggestion is obvious
+    // and because, otherwise, the code would look like one single very odd subtag.
     if bruto.contains('_') {
         let corregido = bruto.replace('_', "-");
         return Some(if check_code(&corregido).is_none() {
@@ -277,7 +277,7 @@ pub fn check_code(code: &str) -> Option<CodeProblem> {
         return None;
     }
 
-    // Cualquier otra etiqueta de uso privado (`x-*`, `i-*`) no la entiende Google en hreflang.
+    // Any other private-use tag (`x-*`, `i-*`) means nothing to Google in hreflang.
     let minuscula = bruto.to_ascii_lowercase();
     if minuscula.starts_with("x-") || minuscula == "x" {
         return Some(CodeProblem::with("private_use", "x-default"));
@@ -288,7 +288,7 @@ pub fn check_code(code: &str) -> Option<CodeProblem> {
         return Some(CodeProblem::new("structure"));
     }
 
-    // --- Idioma ---
+    // --- Language ---
     let idioma = partes[0].to_ascii_lowercase();
     let idioma_valido = LANGUAGES.contains(&idioma.as_str())
         || LANGUAGES_DEPRECATED.contains(&idioma.as_str())
@@ -301,24 +301,24 @@ pub fn check_code(code: &str) -> Option<CodeProblem> {
         });
     }
 
-    // --- Escritura (opcional) y región (opcional) ---
+    // --- Script (optional) and region (optional) ---
     let resto = &partes[1..];
     let region = match resto {
         [] => None,
         [uno] if es_escritura(uno) => None,
         [uno] => Some(*uno),
         [escritura, r] if es_escritura(escritura) => Some(*r),
-        // Dos subetiquetas donde la primera no es una escritura: `es-ES-valencia` sería una
-        // variante legítima de BCP 47, pero Google no la usa en hreflang y confundirla con una
-        // región daría un aviso incomprensible. Se marca como estructura.
+        // Two subtags where the first is not a script: `es-ES-valencia` would be a legitimate
+        // BCP 47 variant, but Google does not use it in hreflang, and mistaking it for a region
+        // would produce an incomprehensible warning. Flagged as structure.
         _ => return Some(CodeProblem::new("structure")),
     };
 
-    // Sin subetiqueta de región el código ya está bien: `es` y `zh-Hant` son válidos.
+    // Without a region subtag the code is already fine: `es` and `zh-Hant` are valid.
     region.and_then(|region| check_region(&idioma, region))
 }
 
-/// Valida la subetiqueta de región de un código cuyo idioma ya se ha aceptado.
+/// Validates the region subtag of a code whose language has already been accepted.
 fn check_region(idioma: &str, region: &str) -> Option<CodeProblem> {
     let mayuscula = region.to_ascii_uppercase();
     if REGIONS.contains(&mayuscula.as_str()) || REGIONS_M49.contains(&region) {
@@ -337,7 +337,7 @@ fn es_escritura(sub: &str) -> bool {
     sub.len() == 4 && SCRIPTS.iter().any(|s| s.eq_ignore_ascii_case(sub))
 }
 
-/// Sustituye la subetiqueta de idioma conservando el resto, para la sugerencia.
+/// Replaces the language subtag while keeping the rest, for the suggestion.
 fn sustituir_idioma(partes: &[&str], idioma: &str) -> String {
     let mut salida = String::from(idioma);
     for parte in &partes[1..] {
@@ -347,8 +347,8 @@ fn sustituir_idioma(partes: &[&str], idioma: &str) -> String {
     canonical_form(&salida)
 }
 
-/// Forma canónica de BCP 47: idioma en minúsculas, escritura en capital, región en mayúsculas.
-/// Solo se usa para las sugerencias — la validación nunca depende de las mayúsculas.
+/// BCP 47 canonical form: language lowercase, script capitalised, region uppercase. Used only
+/// for suggestions — validation never depends on case.
 fn canonical_form(code: &str) -> String {
     let mut salida = String::with_capacity(code.len());
     for (i, parte) in code.split('-').enumerate() {
@@ -371,14 +371,15 @@ fn canonical_form(code: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Comparación de URL
+// URL comparison
 // ---------------------------------------------------------------------------------------------
 
-/// Resuelve un `href` posiblemente relativo contra la URL de la página.
+/// Resolves a possibly relative `href` against the page URL.
 ///
-/// Es un resolutor mínimo y deliberado: este crate no depende de `url` —no conoce al motor— y su
-/// único cometido es que un hreflang relativo no genere hallazgos falsos. Devuelve `None` cuando
-/// no hay nada que comparar (href vacío, o base sin esquema).
+/// A minimal resolver, deliberately so: this crate does not depend on `url` — it does not know
+/// the engine — and its only job is making sure a relative hreflang does not produce false
+/// findings. Returns `None` when there is nothing to compare (empty href, or a base without a
+/// scheme).
 fn resolve_href(base: &str, href: &str) -> Option<String> {
     let href = href.trim();
     if href.is_empty() {
@@ -391,8 +392,8 @@ fn resolve_href(base: &str, href: &str) -> Option<String> {
         None => (resto_base, String::from("/")),
     };
 
-    // Absoluta con esquema propio: se devuelve tal cual. También cubre `mailto:` y compañía,
-    // que simplemente no van a coincidir con ninguna página.
+    // Absolute with its own scheme: returned as is. This also covers `mailto:` and friends,
+    // which will simply never match any page.
     if let Some((posible_esquema, _)) = href.split_once("://") {
         let parece_esquema = !posible_esquema.is_empty()
             && posible_esquema
@@ -417,7 +418,7 @@ fn resolve_href(base: &str, href: &str) -> Option<String> {
         return Some(format!("{esquema_base}://{autoridad}{sin_query}{href}"));
     }
 
-    // Relativa al directorio de la página.
+    // Relative to the page's directory.
     let directorio = {
         let sin_query = ruta_base.split(['?', '#']).next().unwrap_or("/");
         match sin_query.rfind('/') {
@@ -429,7 +430,7 @@ fn resolve_href(base: &str, href: &str) -> Option<String> {
     Some(format!("{esquema_base}://{autoridad}{}", colapsar_puntos(&unida)))
 }
 
-/// Resuelve `.` y `..` en una ruta ya unida.
+/// Resolves `.` and `..` in an already-joined path.
 fn colapsar_puntos(ruta: &str) -> String {
     let (camino, cola) = match ruta.find(['?', '#']) {
         Some(i) => (&ruta[..i], &ruta[i..]),
@@ -455,14 +456,14 @@ fn colapsar_puntos(ruta: &str) -> String {
     salida
 }
 
-/// Clave de comparación de dos URL que designan la misma página.
+/// Comparison key for two URLs that designate the same page.
 ///
-/// Iguala lo que cualquier servidor estático sirve igual: el fragmento no cuenta, `esquema` y
-/// `host` no distinguen mayúsculas, `/a/index.html` es `/a/` y `/a` es `/a/`. Tolerar estas tres
-/// formas evita el falso positivo más tonto de todos —«no se autorreferencia» en una página cuyo
-/// hreflang apunta a sí misma escrita de otra manera—, a cambio de no distinguir dos URL que un
-/// servidor exótico podría servir distintas. Es el intercambio correcto: aquí un falso negativo
-/// cuesta mucho menos que un falso positivo.
+/// Equates what any static server serves identically: the fragment does not count, scheme and
+/// host are case-insensitive, `/a/index.html` is `/a/` and `/a` is `/a/`. Tolerating these three
+/// forms avoids the dumbest false positive of all — "no self-reference" on a page whose hreflang
+/// points at itself spelled another way — at the price of not distinguishing two URLs that some
+/// exotic server might serve differently. That is the right trade: here a false negative costs
+/// far less than a false positive.
 fn url_key(url: &str) -> String {
     let sin_fragmento = url.trim().split('#').next().unwrap_or("").trim();
     let (esquema, resto) = match sin_fragmento.split_once("://") {
@@ -492,11 +493,11 @@ fn url_key(url: &str) -> String {
 // HREFLANG-NO-SELF
 // ---------------------------------------------------------------------------------------------
 
-/// Conjunto hreflang que no se incluye a sí mismo.
+/// Hreflang set that does not include itself.
 ///
-/// Cuenta como autorreferencia cualquier código —incluido `x-default`— cuyo destino sea la propia
-/// URL **o su canonical**: el patrón `/a?utm=x` con canonical `/a` y hreflang a `/a` es correcto,
-/// y avisar de él sería un falso positivo.
+/// Any code — `x-default` included — whose target is the page's own URL **or its canonical**
+/// counts as a self-reference: the pattern `/a?utm=x` with canonical `/a` and hreflang to `/a`
+/// is correct, and flagging it would be a false positive.
 pub struct HreflangNoSelf;
 
 impl PageRule for HreflangNoSelf {
@@ -536,10 +537,10 @@ impl PageRule for HreflangNoSelf {
 // HREFLANG-INVALID-CODE
 // ---------------------------------------------------------------------------------------------
 
-/// Valor de `hreflang` que no es un código válido.
+/// An `hreflang` value that is not a valid code.
 ///
-/// Un hallazgo por código erróneo, agrupado por el código: en un sitio generado por plantilla el
-/// mismo `es_ES` sale en miles de páginas y la UI tiene que poder decirlo en una línea.
+/// One finding per wrong code, grouped by the code: on a template-generated site the same
+/// `es_ES` comes out on thousands of pages and the UI has to be able to say so in one line.
 pub struct HreflangInvalidCode;
 
 impl PageRule for HreflangInvalidCode {
@@ -548,9 +549,9 @@ impl PageRule for HreflangInvalidCode {
     }
 
     fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
-        // El 2xx corta la plantilla de error: los hreflang del HTML de un 404 no los procesa
-        // ningún buscador, y sin la puerta cada URL rota repetiría el defecto de la plantilla.
-        // Ver `PageContext::is_success`.
+        // The 2xx cuts off the error template: no search engine processes the hreflang in a
+        // 404's HTML, and without the gate every broken URL would repeat the template's defect.
+        // See `PageContext::is_success`.
         if !ctx.is_html || !ctx.is_success() || ctx.hreflang.is_empty() {
             return Vec::new();
         }
@@ -580,25 +581,25 @@ impl PageRule for HreflangInvalidCode {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Lectura del conjunto hreflang desde el almacén
+// Reading the hreflang set out of the store
 // ---------------------------------------------------------------------------------------------
 
-/// Una página del rastreo con su conjunto hreflang ya resuelto a absoluto.
+/// A crawled page with its hreflang set already resolved to absolute.
 struct AlternateSet {
     url_hash: i64,
     url: String,
     is_indexable: bool,
-    /// Claves de comparación de la propia página: su URL y su canonical.
+    /// Comparison keys of the page itself: its URL and its canonical.
     propias: HashSet<String>,
-    /// `(código, URL absoluta, clave)` de cada alternativa declarada.
+    /// `(code, absolute URL, key)` for each declared alternate.
     targets: Vec<(String, String, String)>,
 }
 
-/// Lee de `pages` las páginas que declaran hreflang.
+/// Reads from `pages` the pages that declare hreflang.
 ///
-/// `hreflang_json` lo serializa `engine.rs` como `[[código, href], …]` con el `href` **tal como
-/// venía en el HTML**, así que hay que resolverlo aquí. Un SQL puro no puede cruzar eso; se lee
-/// y se cruza en Rust, que además solo carga el subconjunto multiidioma del rastreo.
+/// `hreflang_json` is serialised by `engine.rs` as `[[code, href], …]` with the `href` **as it
+/// came in the HTML**, so it has to be resolved here. Pure SQL cannot cross-reference that; it
+/// is read and crossed in Rust, which moreover only loads the crawl's multilingual subset.
 fn leer_conjuntos(conn: &Connection) -> rusqlite::Result<Vec<AlternateSet>> {
     let mut stmt = conn.prepare(
         "SELECT u.url_hash, u.url, p.canonical, p.is_indexable, p.hreflang_json
@@ -621,8 +622,8 @@ fn leer_conjuntos(conn: &Connection) -> rusqlite::Result<Vec<AlternateSet>> {
     for fila in filas {
         let (url_hash, url, canonical, is_indexable, json) = fila?;
 
-        // Un JSON ilegible es un rastreo de otra versión o un fichero tocado a mano. No es
-        // asunto de una regla de auditoría: se ignora esa página en vez de romper la pasada.
+        // Unreadable JSON means a crawl from another version or a hand-edited file. Not an audit
+        // rule's business: skip that page instead of breaking the whole pass.
         let Ok(pares) = serde_json::from_str::<Vec<(String, String)>>(&json) else {
             continue;
         };
@@ -653,11 +654,11 @@ fn leer_conjuntos(conn: &Connection) -> rusqlite::Result<Vec<AlternateSet>> {
 // HREFLANG-NOT-RECIPROCAL
 // ---------------------------------------------------------------------------------------------
 
-/// A declara a B y B no declara a A.
+/// A declares B and B does not declare A back.
 ///
-/// Solo se juzgan destinos que **se rastrearon y son HTML**: de un dominio del conjunto que no
-/// entró en el rastreo —un dominio declarando a su hermano— no se sabe nada, y suponerlo roto sería
-/// el falso positivo más caro de todo el bloque.
+/// Only targets that **were crawled and are HTML** get judged: about a set member domain that
+/// did not enter the crawl — one domain declaring its sibling — nothing is known, and assuming
+/// it broken would be the most expensive false positive in the whole block.
 pub struct HreflangNotReciprocal;
 
 impl SiteRule for HreflangNotReciprocal {
@@ -668,8 +669,8 @@ impl SiteRule for HreflangNotReciprocal {
     fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
         let conjuntos = leer_conjuntos(conn)?;
 
-        // Índice por clave de URL y de canonical. El primero gana: si dos páginas comparten
-        // clave, la ambigüedad se resuelve en silencio hacia la que se leyó antes.
+        // Index by URL key and canonical key. The first one wins: if two pages share a key, the
+        // ambiguity resolves silently towards the one that was read first.
         let mut por_clave: HashMap<&str, usize> = HashMap::new();
         for (i, conjunto) in conjuntos.iter().enumerate() {
             for clave in &conjunto.propias {
@@ -677,8 +678,8 @@ impl SiteRule for HreflangNotReciprocal {
             }
         }
 
-        // Existe la página pero sin ninguna alternativa declarada: se comprueba con una consulta
-        // exacta para no tener que cargar en memoria todas las páginas del rastreo.
+        // The page exists but declares no alternates at all: checked with an exact query so the
+        // whole crawl's pages never have to be loaded into memory.
         let mut existe = conn.prepare(
             "SELECT 1 FROM pages p JOIN urls u ON u.id = p.url_id WHERE u.url = ?1 LIMIT 1",
         )?;
@@ -726,8 +727,8 @@ impl SiteRule for HreflangNotReciprocal {
     }
 }
 
-/// Clave de agrupación de una pareja de páginas, independiente del sentido: las dos direcciones
-/// del mismo fallo son un solo problema para el usuario.
+/// Grouping key for a pair of pages, independent of direction: both directions of the same
+/// failure are a single problem for the user.
 fn clave_de_par(a: &str, b: &str) -> String {
     let (uno, dos) = if url_key(a) <= url_key(b) { (a, b) } else { (b, a) };
     let mezcla = format!("{}|{}", url_key(uno), url_key(dos));
@@ -738,13 +739,13 @@ fn clave_de_par(a: &str, b: &str) -> String {
 // HREFLANG-TO-4XX
 // ---------------------------------------------------------------------------------------------
 
-/// Una alternativa de idioma apunta a una URL que devolvió 4xx.
+/// A language alternate points at a URL that returned 4xx.
 ///
-/// El destino se busca por coincidencia **exacta** con `urls.url`, no por la clave tolerante:
-/// aquí la afirmación es «esa URL devuelve un error», y solo se puede sostener sobre la URL que
-/// de verdad se pidió. Los 5xx quedan fuera a propósito —suelen ser transitorios y el ID de la
-/// regla nombra 4xx—; el hallazgo se registra en la página que declara el hreflang, que es donde
-/// está la línea a corregir.
+/// The target is looked up by **exact** match on `urls.url`, not by the tolerant key: the claim
+/// here is "that URL returns an error", and it can only be sustained about the URL that was
+/// actually requested. 5xx are left out on purpose — they tend to be transient and the rule's ID
+/// names 4xx — and the finding is recorded on the page declaring the hreflang, which is where
+/// the line to fix lives.
 pub struct HreflangTo4xx;
 
 impl SiteRule for HreflangTo4xx {
@@ -798,85 +799,87 @@ pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
 mod tests {
     use super::*;
 
-    // ----------------------------------------------------------------------------- códigos
+    // ----------------------------------------------------------------------------- codes
 
     #[test]
-    fn acepta_los_codigos_normales() {
+    fn accepts_the_ordinary_codes() {
         for codigo in ["es", "en", "es-ES", "en-GB", "pt-BR", "zh-CN", "x-default"] {
-            assert!(check_code(codigo).is_none(), "{codigo} debería ser válido");
+            assert!(check_code(codigo).is_none(), "{codigo} should be valid");
         }
     }
 
     #[test]
-    fn no_distingue_mayusculas() {
-        // BCP 47 no las distingue: `ES-es` es válido aunque la forma canónica sea `es-ES`.
+    fn is_case_insensitive() {
+        // BCP 47 is case-insensitive: `ES-es` is valid even though the canonical form is
+        // `es-ES`.
         for codigo in ["ES", "ES-es", "es-es", "X-Default"] {
-            assert!(check_code(codigo).is_none(), "{codigo} debería ser válido");
+            assert!(check_code(codigo).is_none(), "{codigo} should be valid");
         }
     }
 
     #[test]
-    fn acepta_la_macrorregion_de_latinoamerica() {
-        // `es-419` es válido y muy usado: darlo por erróneo sería el falso positivo más caro.
+    fn accepts_the_latin_america_macroregion() {
+        // `es-419` is valid and widely used: calling it wrong would be the most expensive false
+        // positive.
         assert!(check_code("es-419").is_none());
         assert!(check_code("es-150").is_none());
     }
 
     #[test]
-    fn acepta_la_subetiqueta_de_escritura() {
+    fn accepts_the_script_subtag() {
         for codigo in ["zh-Hant", "zh-Hans", "zh-Hant-TW", "sr-Latn-RS"] {
-            assert!(check_code(codigo).is_none(), "{codigo} debería ser válido");
+            assert!(check_code(codigo).is_none(), "{codigo} should be valid");
         }
     }
 
     #[test]
-    fn acepta_los_alias_historicos_de_la_norma() {
-        // `iw` por `he` lo siguen emitiendo bibliotecas antiguas y Google lo interpreta.
+    fn accepts_the_historical_aliases_of_the_standard() {
+        // `iw` for `he` is still emitted by old libraries and Google interprets it.
         for codigo in ["iw", "in", "sh"] {
-            assert!(check_code(codigo).is_none(), "{codigo} debería aceptarse");
+            assert!(check_code(codigo).is_none(), "{codigo} should be accepted");
         }
     }
 
     #[test]
-    fn detecta_el_guion_bajo_del_locale() {
-        let problema = check_code("es_ES").expect("es_ES no es un código válido");
+    fn detects_the_locale_underscore() {
+        let problema = check_code("es_ES").expect("es_ES is not a valid code");
         assert_eq!(problema.reason, "separator");
         assert_eq!(problema.suggestion.as_deref(), Some("es-ES"));
     }
 
     #[test]
-    fn detecta_el_codigo_de_pais_usado_como_idioma() {
-        let problema = check_code("sp").expect("sp no es un idioma");
+    fn detects_a_country_code_used_as_a_language() {
+        let problema = check_code("sp").expect("sp is not a language");
         assert_eq!(problema.reason, "language");
         assert_eq!(problema.suggestion.as_deref(), Some("es"));
 
-        let problema = check_code("jp-JP").expect("jp no es un idioma");
+        let problema = check_code("jp-JP").expect("jp is not a language");
         assert_eq!(problema.suggestion.as_deref(), Some("ja-JP"));
     }
 
     #[test]
-    fn detecta_la_region_inexistente() {
-        // `UK` está reservado en la ISO pero no asignado: lo correcto es `GB`.
-        let problema = check_code("en-UK").expect("UK no es una región asignada");
+    fn detects_the_nonexistent_region() {
+        // `UK` is reserved in the ISO standard but not assigned: the correct code is `GB`.
+        let problema = check_code("en-UK").expect("UK is not an assigned region");
         assert_eq!(problema.reason, "region");
         assert_eq!(problema.suggestion.as_deref(), Some("en-GB"));
 
-        // `EU` no es un país; para «el resto» lo que existe es x-default.
-        let problema = check_code("en-EU").expect("EU no es una región asignada");
+        // `EU` is not a country; what exists for "the rest" is x-default.
+        let problema = check_code("en-EU").expect("EU is not an assigned region");
         assert_eq!(problema.suggestion.as_deref(), Some("x-default"));
     }
 
     #[test]
-    fn rechaza_lo_que_no_tiene_forma_de_codigo() {
+    fn rejects_what_is_not_shaped_like_a_code() {
         for codigo in ["", "   ", "español", "es-ES-MX-AR", "x-es"] {
-            assert!(check_code(codigo).is_some(), "{codigo} no debería ser válido");
+            assert!(check_code(codigo).is_some(), "{codigo} should not be valid");
         }
     }
 
     // ----------------------------------------------------------------------------- URL
 
     #[test]
-    fn resuelve_href_relativos() {
+    fn resolves_relative_hrefs() {
         let base = "https://ejemplo.es/es/pagina/";
         assert_eq!(
             resolve_href(base, "https://otro.es/a").as_deref(),
@@ -896,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn la_clave_de_url_iguala_las_formas_de_la_misma_pagina() {
+    fn the_url_key_equates_the_spellings_of_the_same_page() {
         let esperada = url_key("https://ejemplo.es/es/");
         for forma in [
             "https://ejemplo.es/es",
@@ -923,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn no_self_no_avisa_si_el_conjunto_se_incluye() {
+    fn no_self_stays_quiet_when_the_set_includes_itself() {
         let c = ctx(&[
             ("es", "https://ejemplo.es/es/"),
             ("en", "https://ejemplo.es/en/"),
@@ -932,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn no_self_avisa_cuando_falta_la_autorreferencia() {
+    fn no_self_reports_a_missing_self_reference() {
         let c = ctx(&[("en", "https://ejemplo.es/en/"), ("fr", "https://ejemplo.es/fr/")]);
         let issues = HreflangNoSelf.evaluate(&c);
         assert_eq!(issues.len(), 1);
@@ -941,39 +944,39 @@ mod tests {
     }
 
     #[test]
-    fn no_self_acepta_una_autorreferencia_relativa() {
-        // Un href relativo a sí misma es correcto: resolverlo mal daría un aviso falso.
+    fn no_self_accepts_a_relative_self_reference() {
+        // A relative href to itself is correct: resolving it wrong would yield a false warning.
         let c = ctx(&[("es", "/es/"), ("en", "/en/")]);
         assert!(HreflangNoSelf.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn no_self_acepta_la_autorreferencia_escrita_de_otra_forma() {
+    fn no_self_accepts_a_self_reference_spelled_differently() {
         let c = ctx(&[("es", "https://ejemplo.es/es/index.html"), ("en", "/en/")]);
         assert!(HreflangNoSelf.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn no_self_acepta_que_el_conjunto_apunte_al_canonical() {
+    fn no_self_accepts_the_set_pointing_at_the_canonical() {
         let mut c = ctx(&[("es", "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")]);
         c.url = "https://ejemplo.es/es/?utm_source=x";
         assert!(HreflangNoSelf.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn no_self_cuenta_x_default_como_autorreferencia() {
+    fn no_self_counts_x_default_as_a_self_reference() {
         let c = ctx(&[("x-default", "https://ejemplo.es/es/"), ("en", "/en/")]);
         assert!(HreflangNoSelf.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn no_self_calla_en_una_pagina_sin_hreflang() {
-        // La mayoría de las páginas del mundo. No hay conjunto, no hay nada que decir.
+    fn no_self_stays_quiet_on_a_page_without_hreflang() {
+        // Most pages in the world. No set, nothing to say.
         assert!(HreflangNoSelf.evaluate(&ctx(&[])).is_empty());
     }
 
     #[test]
-    fn no_self_calla_si_no_es_html_o_no_es_indexable() {
+    fn no_self_stays_quiet_when_not_html_or_not_indexable() {
         let sin_self: &[(&str, &str)] = &[("en", "https://ejemplo.es/en/")];
         let mut c = ctx(sin_self);
         c.is_indexable = false;
@@ -987,7 +990,7 @@ mod tests {
     // ----------------------------------------------------------------------------- INVALID-CODE
 
     #[test]
-    fn invalid_code_calla_con_codigos_correctos() {
+    fn invalid_code_stays_quiet_on_correct_codes() {
         let c = ctx(&[
             ("es", "https://ejemplo.es/es/"),
             ("en-GB", "https://ejemplo.es/en/"),
@@ -998,7 +1001,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_code_avisa_una_vez_por_codigo_erroneo() {
+    fn invalid_code_reports_once_per_wrong_code() {
         let c = ctx(&[
             ("es", "https://ejemplo.es/es/"),
             ("es_ES", "https://ejemplo.es/es-es/"),
@@ -1011,44 +1014,44 @@ mod tests {
     }
 
     #[test]
-    fn invalid_code_no_repite_el_mismo_codigo_dos_veces() {
+    fn invalid_code_does_not_repeat_the_same_code_twice() {
         let c = ctx(&[("sp", "https://ejemplo.es/a/"), ("SP", "https://ejemplo.es/b/")]);
         assert_eq!(HreflangInvalidCode.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn invalid_code_calla_en_una_pagina_sin_hreflang() {
+    fn invalid_code_stays_quiet_on_a_page_without_hreflang() {
         assert!(HreflangInvalidCode.evaluate(&ctx(&[])).is_empty());
     }
 
     #[test]
-    fn invalid_code_calla_sobre_algo_que_no_es_html() {
+    fn invalid_code_stays_quiet_on_something_that_is_not_html() {
         let mut c = ctx(&[("es_ES", "https://ejemplo.es/es/")]);
         c.is_html = false;
         assert!(HreflangInvalidCode.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn invalid_code_no_audita_la_plantilla_de_error() {
-        // Los hreflang del HTML de un 404 no los procesa ningún buscador: sin la puerta del
-        // 2xx, el código erróneo de la plantilla saldría una vez por cada URL rota del sitio.
+    fn invalid_code_does_not_audit_the_error_template() {
+        // No search engine processes the hreflang in a 404's HTML: without the 2xx gate, the
+        // template's wrong code would come out once per broken URL on the site.
         for status in [301, 404, 410, 500] {
             let mut c = ctx(&[("es_ES", "https://ejemplo.es/es/")]);
             c.status = status;
             assert!(
                 HreflangInvalidCode.evaluate(&c).is_empty(),
-                "no debería auditar el HTML de un {status}"
+                "should not audit the HTML of a {status}"
             );
         }
     }
 
-    // ----------------------------------------------------------------------------- almacén
+    // ----------------------------------------------------------------------------- store
 
-    /// Esquema mínimo con las columnas que consultan las reglas de conjunto de este módulo.
-    /// El esquema de verdad se prueba rastreando los fixtures en
-    /// `crawlforge-core/tests/fixtures_de_reglas.rs`: aquí solo se prueba el cruce.
+    /// Minimal schema with the columns this module's site rules query. The real schema gets
+    /// exercised by crawling the fixtures in `crawlforge-core/tests/fixtures_de_reglas.rs`:
+    /// here only the cross-referencing is under test.
     fn db(paginas: &[(&str, Option<u16>, bool, Option<&str>)]) -> Connection {
-        let conn = Connection::open_in_memory().expect("abrir memoria");
+        let conn = Connection::open_in_memory().expect("open in memory");
         conn.execute_batch(
             "CREATE TABLE urls (
                  id INTEGER PRIMARY KEY,
@@ -1062,7 +1065,7 @@ mod tests {
                  is_indexable INTEGER NOT NULL,
                  hreflang_json TEXT);",
         )
-        .expect("crear esquema");
+        .expect("create schema");
 
         for (i, (url, status, es_pagina, hreflang)) in paginas.iter().enumerate() {
             let id = i as i64 + 1;
@@ -1071,65 +1074,65 @@ mod tests {
                 "INSERT INTO urls (id, url, url_hash, status_code) VALUES (?1,?2,?3,?4)",
                 rusqlite::params![id, url, hash, status],
             )
-            .expect("insertar url");
+            .expect("insert url");
             if *es_pagina {
                 conn.execute(
                     "INSERT INTO pages (url_id, canonical, is_indexable, hreflang_json)
                      VALUES (?1,?2,1,?3)",
                     rusqlite::params![id, url, hreflang],
                 )
-                .expect("insertar página");
+                .expect("insert page");
             }
         }
         conn
     }
 
-    /// `[[código, href], …]`, el formato exacto que escribe `engine.rs`.
+    /// `[[code, href], …]`, the exact format `engine.rs` writes.
     fn json(pares: &[(&str, &str)]) -> String {
         serde_json::to_string(&pares.iter().map(|(c, h)| (*c, *h)).collect::<Vec<_>>())
-            .expect("serializar")
+            .expect("serialise")
     }
 
     // ----------------------------------------------------------------------------- RECIPROCAL
 
     #[test]
-    fn reciprocal_calla_cuando_las_dos_se_declaran() {
+    fn reciprocal_stays_quiet_when_both_declare_each_other() {
         let es = json(&[("es", "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")]);
         let en = json(&[("es", "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")]);
         let conn = db(&[
             ("https://ejemplo.es/es/", Some(200), true, Some(&es)),
             ("https://ejemplo.es/en/", Some(200), true, Some(&en)),
         ]);
-        assert!(HreflangNotReciprocal.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HreflangNotReciprocal.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn reciprocal_avisa_cuando_el_destino_omite_el_origen() {
+    fn reciprocal_reports_a_target_that_omits_the_page() {
         let es = json(&[("es", "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")]);
         let en = json(&[("en", "https://ejemplo.es/en/")]);
         let conn = db(&[
             ("https://ejemplo.es/es/", Some(200), true, Some(&es)),
             ("https://ejemplo.es/en/", Some(200), true, Some(&en)),
         ]);
-        let hallazgos = HreflangNotReciprocal.evaluate(&conn).expect("evaluar");
+        let hallazgos = HreflangNotReciprocal.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
         let (hash, issue) = &hallazgos[0];
         assert_eq!(
             *hash,
             Some(xxhash_rust::xxh3::xxh3_64(b"https://ejemplo.es/es/") as i64),
-            "el hallazgo va en la página que declara de más"
+            "the finding goes on the page that over-declares"
         );
         assert!(issue.detail_json.as_deref().unwrap_or_default().contains("target_omits_page"));
     }
 
     #[test]
-    fn reciprocal_avisa_cuando_el_destino_no_declara_nada() {
+    fn reciprocal_reports_a_target_that_declares_nothing() {
         let es = json(&[("es", "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")]);
         let conn = db(&[
             ("https://ejemplo.es/es/", Some(200), true, Some(&es)),
             ("https://ejemplo.es/en/", Some(200), true, None),
         ]);
-        let hallazgos = HreflangNotReciprocal.evaluate(&conn).expect("evaluar");
+        let hallazgos = HreflangNotReciprocal.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
         assert!(hallazgos[0]
             .1
@@ -1140,58 +1143,58 @@ mod tests {
     }
 
     #[test]
-    fn reciprocal_calla_sobre_un_destino_que_no_se_rastreo() {
-        // El caso de un dominio por idioma: el otro no entró en el rastreo, así que no
-        // sabemos qué declara. Suponerlo roto sería el peor falso positivo del bloque.
+    fn reciprocal_stays_quiet_on_an_uncrawled_target() {
+        // The one-domain-per-language case: the other one did not enter the crawl, so we do not
+        // know what it declares. Assuming it broken would be the block's worst false positive.
         let es = json(&[("es", "https://ejemplo.es/"), ("en", "https://ejemplo.me/")]);
         let conn = db(&[("https://ejemplo.es/", Some(200), true, Some(&es))]);
-        assert!(HreflangNotReciprocal.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HreflangNotReciprocal.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn reciprocal_tolera_que_las_dos_escriban_la_url_de_otra_forma() {
+    fn reciprocal_tolerates_both_sides_spelling_the_url_differently() {
         let es = json(&[("es", "/es/index.html"), ("en", "/en/")]);
         let en = json(&[("es", "https://ejemplo.es/es"), ("en", "/en/index.html")]);
         let conn = db(&[
             ("https://ejemplo.es/es/", Some(200), true, Some(&es)),
             ("https://ejemplo.es/en/", Some(200), true, Some(&en)),
         ]);
-        assert!(HreflangNotReciprocal.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HreflangNotReciprocal.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn reciprocal_calla_en_un_rastreo_sin_hreflang() {
+    fn reciprocal_stays_quiet_on_a_crawl_without_hreflang() {
         let conn = db(&[("https://ejemplo.es/", Some(200), true, None)]);
-        assert!(HreflangNotReciprocal.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HreflangNotReciprocal.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     // ----------------------------------------------------------------------------- TO-4XX
 
     #[test]
-    fn to_4xx_avisa_cuando_el_destino_es_un_404() {
+    fn to_4xx_reports_a_target_that_is_a_404() {
         let es = json(&[("es", "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")]);
         let conn = db(&[
             ("https://ejemplo.es/es/", Some(200), true, Some(&es)),
             ("https://ejemplo.es/en/", Some(404), false, None),
         ]);
-        let hallazgos = HreflangTo4xx.evaluate(&conn).expect("evaluar");
+        let hallazgos = HreflangTo4xx.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
         assert_eq!(hallazgos[0].1.severity, Severity::Critical);
         assert!(hallazgos[0].1.detail_json.as_deref().unwrap_or_default().contains("404"));
     }
 
     #[test]
-    fn to_4xx_calla_cuando_el_destino_responde() {
+    fn to_4xx_stays_quiet_when_the_target_responds() {
         let es = json(&[("es", "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")]);
         let conn = db(&[
             ("https://ejemplo.es/es/", Some(200), true, Some(&es)),
             ("https://ejemplo.es/en/", Some(200), true, None),
         ]);
-        assert!(HreflangTo4xx.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HreflangTo4xx.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn to_4xx_calla_sobre_un_destino_no_rastreado_y_sobre_los_5xx() {
+    fn to_4xx_stays_quiet_on_uncrawled_targets_and_on_5xx() {
         let es = json(&[
             ("es", "https://ejemplo.es/es/"),
             ("en", "https://ejemplo.es/en/"),
@@ -1202,12 +1205,12 @@ mod tests {
             ("https://ejemplo.es/en/", None, false, None),
             ("https://ejemplo.es/fr/", Some(503), false, None),
         ]);
-        assert!(HreflangTo4xx.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HreflangTo4xx.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn to_4xx_calla_en_un_rastreo_sin_hreflang() {
+    fn to_4xx_stays_quiet_on_a_crawl_without_hreflang() {
         let conn = db(&[("https://ejemplo.es/", Some(200), true, None)]);
-        assert!(HreflangTo4xx.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(HreflangTo4xx.evaluate(&conn).expect("evaluate").is_empty());
     }
 }

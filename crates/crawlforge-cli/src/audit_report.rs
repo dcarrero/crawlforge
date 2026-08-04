@@ -421,7 +421,13 @@ fn markdown(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
         // Va arriba y en negrita a propósito: quien lea recuentos sin saber que el rastreo se
         // cortó sacará conclusiones falsas sobre el tamaño del sitio.
         let motivo = head.truncated_reason.as_deref().unwrap_or("?");
-        s.push_str(&format!("{}\n\n", msg::report_truncated_note(lang, motivo)));
+        // `list_mode` no es un corte: el rastreo auditó su lista entera y el informe tiene
+        // que decir eso, no «truncado».
+        if motivo == "list_mode" {
+            s.push_str(&format!("{}\n\n", msg::report_list_mode_note(lang)));
+        } else {
+            s.push_str(&format!("{}\n\n", msg::report_truncated_note(lang, motivo)));
+        }
     }
 
     s.push_str(&format!("| {} | {} |\n|---|---:|\n", msg::th_metric(lang), msg::th_value(lang)));
@@ -596,19 +602,12 @@ fn inline(s: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Fichero de rastreo con el esquema real y hallazgos conocidos.
+    /// A crawl file with the real schema —all the migrations, via `test_schema.rs`— and known
+    /// findings.
     fn store_de_prueba(truncado: bool) -> (tempfile_min::Dir, std::path::PathBuf) {
         let dir = tempfile_min::Dir::new("informe");
         let path = dir.path().join("crawl.sqlite");
-        let conn = Connection::open(&path).expect("crear");
-        for sql in [
-            include_str!("../../crawlforge-core/migrations/001_initial.sql"),
-            include_str!("../../crawlforge-core/migrations/002_truncated.sql"),
-            include_str!("../../crawlforge-core/migrations/003_orphans_exclude_seed.sql"),
-            include_str!("../../crawlforge-core/migrations/004_robots_y_sitemaps.sql"),
-        ] {
-            conn.execute_batch(sql).expect("migrar");
-        }
+        let conn = crate::test_schema::crawl_file(&path);
         conn.execute(
             "INSERT INTO crawl_meta (id, project_id, project_name, base_url, mode, started_at,
                                      status, config_json, core_version, rules_version,
@@ -659,7 +658,7 @@ mod tests {
                 let p = std::env::temp_dir()
                     .join(format!("crawlforge-inf-{}-{nombre}-{n}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&p);
-                std::fs::create_dir_all(&p).expect("crear temporal");
+                std::fs::create_dir_all(&p).expect("create temp dir");
                 Self(p)
             }
             pub fn path(&self) -> &std::path::Path {
@@ -677,15 +676,7 @@ mod tests {
     fn store_con_plantilla() -> (tempfile_min::Dir, std::path::PathBuf) {
         let dir = tempfile_min::Dir::new("plantilla");
         let path = dir.path().join("crawl.sqlite");
-        let conn = Connection::open(&path).expect("crear");
-        for sql in [
-            include_str!("../../crawlforge-core/migrations/001_initial.sql"),
-            include_str!("../../crawlforge-core/migrations/002_truncated.sql"),
-            include_str!("../../crawlforge-core/migrations/003_orphans_exclude_seed.sql"),
-            include_str!("../../crawlforge-core/migrations/004_robots_y_sitemaps.sql"),
-        ] {
-            conn.execute_batch(sql).expect("migrar");
-        }
+        let conn = crate::test_schema::crawl_file(&path);
         conn.execute(
             "INSERT INTO crawl_meta (id, project_id, project_name, base_url, mode, started_at,
                                      status, config_json, core_version, rules_version,
@@ -720,7 +711,7 @@ mod tests {
                  VALUES (?1, 'META-DESC-MISSING', 'high', 'meta')",
                 [i + 1],
             )
-            .expect("issue sin grupo");
+            .expect("issue without group");
         }
         drop(conn);
         (dir, path)
@@ -729,12 +720,12 @@ mod tests {
     #[test]
     fn el_informe_colapsa_el_ruido_de_plantilla_en_un_titular() {
         let (_d, path) = store_con_plantilla();
-        let md = render(&path, "md", Lang::En, None).expect("informe");
+        let md = render(&path, "md", Lang::En, None).expect("report");
         // 35 páginas con la misma causa son **un** problema; las 5 sin agrupar no se ocultan.
         assert!(md.contains("1 template issue (35 pages) + 5 more findings"), "{md}");
         assert!(
             !md.contains("— 40 ·"),
-            "el recuento crudo ya no es el titular: {md}"
+            "the raw count is no longer the headline: {md}"
         );
     }
 
@@ -743,7 +734,7 @@ mod tests {
         // La revisión de UX §5.1: «… 26 more» sin decir dónde están las otras 26. Ahora el
         // corte lleva el comando listo para copiar.
         let (_d, path) = store_con_plantilla();
-        let md = render(&path, "md", Lang::En, None).expect("informe");
+        let md = render(&path, "md", Lang::En, None).expect("report");
         // En la regla sin plantilla, el corte con recuento y el comando.
         assert!(
             md.contains("… 2 more — run: crawlforge report") && md.contains("--rule META-DESC-MISSING"),
@@ -756,7 +747,7 @@ mod tests {
             "{md}"
         );
 
-        let es = render(&path, "md", Lang::Es, None).expect("informe");
+        let es = render(&path, "md", Lang::Es, None).expect("report");
         assert!(es.contains("más — ejecuta: crawlforge report"), "{es}");
         assert!(es.contains("… lista completa: crawlforge report"), "{es}");
         assert!(es.contains("1 problema de plantilla (35 páginas)"), "{es}");
@@ -767,15 +758,7 @@ mod tests {
     fn store_dominante(con_profundidad: bool) -> (tempfile_min::Dir, std::path::PathBuf) {
         let dir = tempfile_min::Dir::new("dominante");
         let path = dir.path().join("crawl.sqlite");
-        let conn = Connection::open(&path).expect("crear");
-        for sql in [
-            include_str!("../../crawlforge-core/migrations/001_initial.sql"),
-            include_str!("../../crawlforge-core/migrations/002_truncated.sql"),
-            include_str!("../../crawlforge-core/migrations/003_orphans_exclude_seed.sql"),
-            include_str!("../../crawlforge-core/migrations/004_robots_y_sitemaps.sql"),
-        ] {
-            conn.execute_batch(sql).expect("migrar");
-        }
+        let conn = crate::test_schema::crawl_file(&path);
         conn.execute(
             "INSERT INTO crawl_meta (id, project_id, project_name, base_url, mode, started_at,
                                      status, config_json, core_version, rules_version,
@@ -802,7 +785,7 @@ mod tests {
                  VALUES (?1, 'META-TITLE-TOO-LONG', 'medium', 'meta')",
                 [i + 1],
             )
-            .expect("issue dominante");
+            .expect("dominant issue");
             if con_profundidad {
                 let depth = if i < 20 { 5 } else { 9 };
                 conn.execute(
@@ -813,7 +796,7 @@ mod tests {
                         format!("{{\"click_depth\":{depth},\"max_click_depth\":4}}")
                     ],
                 )
-                .expect("issue de profundidad");
+                .expect("depth issue");
             }
         }
         drop(conn);
@@ -826,20 +809,20 @@ mod tests {
         // hashable: 30 títulos largos en 40 páginas se leen como propiedad del sitio, no como
         // 30 tareas. El recuento no desaparece.
         let (_d, path) = store_dominante(false);
-        let md = render(&path, "md", Lang::En, None).expect("informe");
+        let md = render(&path, "md", Lang::En, None).expect("report");
         assert!(md.contains("— 30 (75% of the site) ·"), "{md}");
         // El titular ya dio los números: el corte remite a la lista completa, sin un recuento
         // crudo que los contradiga.
         assert!(md.contains("… full list: crawlforge report"), "{md}");
 
-        let es = render(&path, "md", Lang::Es, None).expect("informe");
+        let es = render(&path, "md", Lang::Es, None).expect("report");
         assert!(es.contains("— 30 (75% del sitio) ·"), "{es}");
     }
 
     #[test]
     fn el_informe_dice_la_forma_del_problema_de_profundidad_una_vez() {
         let (_d, path) = store_dominante(true);
-        let md = render(&path, "md", Lang::En, None).expect("informe");
+        let md = render(&path, "md", Lang::En, None).expect("report");
         // 20 páginas a 5 clics y 10 a 9: banda típica 5–9, la más hundida a 9.
         assert!(
             md.contains("30 pages deeper than 4 clicks — 75% of the site \
@@ -848,7 +831,7 @@ mod tests {
         );
         assert!(
             !md.contains("**Too many clicks from home** — 30 ·"),
-            "el recuento crudo ya no es el titular: {md}"
+            "the raw count is no longer the headline: {md}"
         );
     }
 
@@ -856,7 +839,7 @@ mod tests {
     fn pocas_paginas_por_regla_siguen_contandose_una_a_una() {
         // Guarda de no-regresión: el informe de un rastreo sin ruido de plantilla no cambia.
         let (_d, path) = store_de_prueba(false);
-        let md = render(&path, "md", Lang::En, None).expect("informe");
+        let md = render(&path, "md", Lang::En, None).expect("report");
         assert!(!md.contains("template issue"), "{md}");
         assert!(md.contains("**Missing title** — 1 ·"), "{md}");
     }
@@ -864,38 +847,59 @@ mod tests {
     #[test]
     fn el_informe_ordena_por_severidad_y_no_por_frecuencia() {
         let (_d, path) = store_de_prueba(false);
-        let md = render(&path, "md", Lang::Es, None).expect("informe");
+        let md = render(&path, "md", Lang::Es, None).expect("report");
 
-        let critico = md.find("Crítico").expect("sección crítica");
-        let alto = md.find("Alto").expect("sección alta");
-        let medio = md.find("Medio").expect("sección media");
-        assert!(critico < alto && alto < medio, "las severidades van de más grave a menos");
+        let critico = md.find("Crítico").expect("critical section");
+        let alto = md.find("Alto").expect("high section");
+        let medio = md.find("Medio").expect("medium section");
+        assert!(critico < alto && alto < medio, "severities go from most severe to least");
     }
 
     #[test]
     fn cada_regla_se_explica_con_el_texto_del_catalogo() {
         let (_d, path) = store_de_prueba(false);
-        let md = render(&path, "md", Lang::Es, None).expect("informe");
+        let md = render(&path, "md", Lang::Es, None).expect("report");
         // Un ticket que solo dice «META-TITLE-MISSING ×1» obliga a buscar qué significa.
         assert!(md.contains("META-TITLE-MISSING"));
-        assert!(md.contains("Sin título"), "el nombre sale del catálogo");
-        assert!(md.contains("factor on-page"), "y también su explicación");
+        assert!(md.contains("Sin título"), "the name comes from the catalog");
+        assert!(md.contains("factor on-page"), "and its description too");
     }
 
     #[test]
     fn el_informe_avisa_de_un_rastreo_truncado_antes_de_dar_recuentos() {
         let (_d, path) = store_de_prueba(true);
-        let md = render(&path, "md", Lang::Es, None).expect("informe");
-        let aviso = md.find("truncado").expect("tiene que avisar");
-        let metrica = md.find("| URLs |").expect("tabla de métricas");
-        assert!(aviso < metrica, "el aviso va antes que los números que condiciona");
+        let md = render(&path, "md", Lang::Es, None).expect("report");
+        let aviso = md.find("truncado").expect("must warn");
+        let metrica = md.find("| URLs |").expect("metrics table");
+        assert!(aviso < metrica, "the notice comes before the numbers it qualifies");
     }
 
     #[test]
     fn un_rastreo_completo_no_lleva_el_aviso() {
         let (_d, path) = store_de_prueba(false);
-        let md = render(&path, "md", Lang::Es, None).expect("informe");
+        let md = render(&path, "md", Lang::Es, None).expect("report");
         assert!(!md.contains("truncado"));
+    }
+
+    #[test]
+    fn un_rastreo_en_modo_lista_avisa_sin_decir_truncado() {
+        // `list_mode` enciende `truncated` para que las reglas de grafo completo callen,
+        // pero el rastreo no se cortó: auditó su lista entera. El informe dice eso, en el
+        // mismo sitio —antes de los recuentos que condiciona— y sin la palabra «truncado».
+        let (_d, path) = store_de_prueba(true);
+        {
+            let conn = Connection::open(&path).expect("open");
+            conn.execute(
+                "UPDATE crawl_meta SET mode = 'list', truncated_reason = 'list_mode'",
+                [],
+            )
+            .expect("meta");
+        }
+        let md = render(&path, "md", Lang::Es, None).expect("report");
+        assert!(!md.contains("truncado"), "nothing was cut short: {md:.400}");
+        let aviso = md.find("modo lista").expect("must warn about what actually happened");
+        let metrica = md.find("| URLs |").expect("metrics table");
+        assert!(aviso < metrica, "the notice comes before the numbers it qualifies");
     }
 
     #[test]
@@ -903,18 +907,18 @@ mod tests {
         // Las URLs y los títulos de un sitio real llevan lo que les da la gana. Un informe que
         // no escapa produce HTML roto en el mejor caso.
         let (_d, path) = store_de_prueba(false);
-        let out = render(&path, "html", Lang::Es, None).expect("informe");
-        assert!(out.contains("&lt;ñ&gt;"), "los ángulos se escapan: {out:.400}");
-        assert!(out.contains("&amp;"), "los ampersands también");
+        let out = render(&path, "html", Lang::Es, None).expect("report");
+        assert!(out.contains("&lt;ñ&gt;"), "angle brackets are escaped: {out:.400}");
+        assert!(out.contains("&amp;"), "ampersands too");
         assert!(!out.contains("<ñ>"));
     }
 
     #[test]
     fn el_html_es_autocontenido() {
         let (_d, path) = store_de_prueba(false);
-        let out = render(&path, "html", Lang::En, None).expect("informe");
-        assert!(out.contains("<style>"), "el estilo va dentro");
-        assert!(!out.contains("<link"), "sin hojas externas: un correo o un artefacto de CI no las carga");
+        let out = render(&path, "html", Lang::En, None).expect("report");
+        assert!(out.contains("<style>"), "the style is embedded");
+        assert!(!out.contains("<link"), "no external stylesheets: an email or a CI artifact will not load them");
         assert!(out.starts_with("<!DOCTYPE html>"));
     }
 
@@ -922,8 +926,8 @@ mod tests {
     fn se_escribe_al_fichero_que_se_pida() {
         let (d, path) = store_de_prueba(false);
         let salida = d.path().join("informe.md");
-        render(&path, "md", Lang::Es, Some(&salida)).expect("informe");
-        let contenido = std::fs::read_to_string(&salida).expect("leer");
+        render(&path, "md", Lang::Es, Some(&salida)).expect("report");
+        let contenido = std::fs::read_to_string(&salida).expect("read");
         assert!(contenido.contains("# Auditoría de https://ejemplo.es/"));
     }
 
@@ -950,10 +954,10 @@ mod tests {
         // La revisión de UX cazó que «Los disponibles son md y html» omitía `terminal`, que es
         // el valor por defecto y sí es válido.
         let (_d, path) = store_de_prueba(false);
-        let err = render(&path, "pdf", Lang::Es, None).expect_err("pdf no existe");
+        let err = render(&path, "pdf", Lang::Es, None).expect_err("pdf does not exist");
         let msg = err.to_string();
         for formato in ["terminal", "md", "html"] {
-            assert!(msg.contains(formato), "tiene que listar «{formato}»: {msg}");
+            assert!(msg.contains(formato), "must list '{formato}': {msg}");
         }
     }
 
@@ -963,10 +967,10 @@ mod tests {
         // con instrucciones; el test de abajo cubre el caso del pipeline.
         let (_d, path) = store_de_prueba(false);
         let err =
-            render_impl(&path, "html", Lang::Es, None, true).expect_err("no se vuelca a la pantalla");
+            render_impl(&path, "html", Lang::Es, None, true).expect_err("must not dump to the screen");
         let msg = err.to_string();
-        assert!(msg.contains("--out"), "dice cómo guardarlo: {msg}");
-        assert!(msg.contains(">"), "y que redirigirlo sigue funcionando: {msg}");
+        assert!(msg.contains("--out"), "says how to save it: {msg}");
+        assert!(msg.contains(">"), "and that redirecting it still works: {msg}");
     }
 
     #[test]
@@ -974,7 +978,7 @@ mod tests {
         // Quien hace `crawlforge report x.sqlite --format html > informe.html` quiere el HTML
         // por la salida estándar, y lo sigue teniendo.
         let (_d, path) = store_de_prueba(false);
-        let html = render_impl(&path, "html", Lang::Es, None, false).expect("con pipe se imprime");
+        let html = render_impl(&path, "html", Lang::Es, None, false).expect("with a pipe it prints");
         assert!(html.starts_with("<!DOCTYPE html>"));
     }
 
@@ -982,7 +986,7 @@ mod tests {
     fn html_con_out_funciona_aunque_haya_pantalla() {
         let (d, path) = store_de_prueba(false);
         let salida = d.path().join("informe.html");
-        render_impl(&path, "html", Lang::Es, Some(&salida), true).expect("con --out no hay volcado");
+        render_impl(&path, "html", Lang::Es, Some(&salida), true).expect("with --out there is no dump");
         assert!(salida.exists());
     }
 
@@ -994,24 +998,24 @@ mod tests {
         // lo limpia. Nada de eso puede llegar a la pantalla.
         let (_d, path) = store_de_prueba(false);
         {
-            let conn = Connection::open(&path).expect("abrir");
+            let conn = Connection::open(&path).expect("open");
             conn.execute(
                 "UPDATE urls SET url = 'https://ejemplo.es/' || char(27) || ']0;pwned' || char(7)",
                 [],
             )
-            .expect("url con escape");
+            .expect("url with escape");
             conn.execute(
                 "UPDATE crawl_meta SET base_url = 'https://ejemplo.es/' || char(27) || '[2J',
                                        truncated = 1,
                                        truncated_reason = 'x' || char(27) || '[31m'",
                 [],
             )
-            .expect("meta con escape");
+            .expect("meta with escape");
         }
-        let md = render(&path, "md", Lang::En, None).expect("informe");
-        assert!(!md.contains('\u{1b}'), "ningún ESC sobrevive: {md:.300}");
-        assert!(!md.contains('\u{7}'), "ningún BEL sobrevive");
-        assert!(md.contains('\u{FFFD}'), "el hueco queda marcado, no borrado en silencio");
+        let md = render(&path, "md", Lang::En, None).expect("report");
+        assert!(!md.contains('\u{1b}'), "no ESC survives: {md:.300}");
+        assert!(!md.contains('\u{7}'), "no BEL survives");
+        assert!(md.contains('\u{FFFD}'), "the gap is marked, not silently erased");
     }
 
     #[test]
@@ -1019,13 +1023,13 @@ mod tests {
         let d = tempfile_min::Dir::new("ajeno");
         let path = d.path().join("ajeno.sqlite");
         {
-            let conn = Connection::open(&path).expect("crear");
-            conn.execute_batch("CREATE TABLE cosas (id INTEGER);").expect("tabla ajena");
+            let conn = Connection::open(&path).expect("create");
+            conn.execute_batch("CREATE TABLE cosas (id INTEGER);").expect("foreign table");
         }
-        let err = render(&path, "md", Lang::Es, None).expect_err("no es un rastreo");
+        let err = render(&path, "md", Lang::Es, None).expect_err("not a crawl");
         let msg = format!("{err:#}");
         assert!(msg.contains("is not a CrawlForge crawl file"), "{msg}");
-        assert!(!msg.contains("no such table"), "sin jerga de SQLite: {msg}");
+        assert!(!msg.contains("no such table"), "no SQLite jargon: {msg}");
     }
 }
 
@@ -1041,7 +1045,7 @@ mod prueba_manual {
             eprintln!("define CRAWLFORGE_STORE con la ruta de un .sqlite");
             return;
         };
-        let md = super::render(std::path::Path::new(&store), "md", crawlforge_rules::Lang::Es, None).expect("informe");
+        let md = super::render(std::path::Path::new(&store), "md", crawlforge_rules::Lang::Es, None).expect("report");
         println!("{md}");
     }
 }

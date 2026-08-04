@@ -143,7 +143,7 @@ fn el_nivel_gratuito_no_evalua_reglas_de_pago() {
 
 #[test]
 fn los_limites_del_nivel_gratuito_son_los_del_documento() {
-    // `docs/07-MONETIZACION.md §2`: un proyecto, 1.000 URLs, sin panel de cartera.
+    // El nivel gratuito: un proyecto, 1.000 URLs, sin panel de cartera.
     let free = Limits::for_tier(Tier::Free);
     assert_eq!(free.max_urls, Some(1_000));
     assert_eq!(free.max_projects, Some(1));

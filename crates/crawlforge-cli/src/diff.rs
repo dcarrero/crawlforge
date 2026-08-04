@@ -126,6 +126,12 @@ impl Warning {
     /// de configuración son identificadores y viajan tal cual dentro del texto.
     pub fn message(&self, lang: Lang) -> String {
         match self {
+            // `list_mode` no es un corte: un rastreo en modo lista nunca ve más que su
+            // lista. La consecuencia para el diff es idéntica —las ausencias no se pueden
+            // afirmar— pero decirle al usuario que su rastreo «está truncado» sería mentir.
+            Self::Truncated { side, reason } if reason.as_deref() == Some("list_mode") => {
+                msg::warn_list_mode(lang, side.label(lang))
+            }
             Self::Truncated { side, reason } => msg::warn_truncated(
                 lang,
                 side.label(lang),
@@ -1732,33 +1738,11 @@ mod tests {
     use super::*;
     use rusqlite::params;
 
-    /// Un fichero de rastreo con el **esquema real**, aplicando las migraciones del core en
-    /// tiempo de compilación. Copiar a mano un esquema parecido haría pasar los tests y fallar
-    /// el comando; es el mismo patrón que `crawlforge-rules/src/index.rs`.
-    ///
-    /// **Al añadir una migración al core hay que añadirla también aquí.**
+    /// A crawl file with the **real schema**: every published migration, from the shared
+    /// helper in `test_schema.rs`, whose guard test keeps it in sync with `migrations/`.
+    /// Copying a similar-looking schema by hand would pass the tests and fail the command.
     fn crawl_file(path: &Path) -> Connection {
-        let conn = Connection::open(path).expect("crear el fichero de rastreo");
-        // `schema_version` no la crea ninguna migración: la crea el propio `store::open` del core
-        // antes de aplicarlas (`crawlforge-core/src/store.rs`).
-        conn.execute_batch(
-            "CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL);",
-        )
-        .expect("crear schema_version");
-        for sql in [
-            include_str!("../../crawlforge-core/migrations/001_initial.sql"),
-            include_str!("../../crawlforge-core/migrations/002_truncated.sql"),
-            include_str!("../../crawlforge-core/migrations/003_orphans_exclude_seed.sql"),
-            include_str!("../../crawlforge-core/migrations/004_robots_y_sitemaps.sql"),
-        ] {
-            conn.execute_batch(sql).expect("aplicar la migración");
-        }
-        conn.execute(
-            "INSERT INTO schema_version (version, applied_at) VALUES (4, datetime('now'))",
-            [],
-        )
-        .expect("versión de esquema");
-        conn
+        crate::test_schema::crawl_file(path)
     }
 
     struct Meta<'a> {
@@ -1796,7 +1780,7 @@ mod tests {
                 m.truncated,
             ],
         )
-        .expect("insertar crawl_meta");
+        .expect("insert crawl_meta");
     }
 
     fn url(conn: &Connection, id: i64, url: &str, status: Option<i64>) -> i64 {
@@ -1806,7 +1790,7 @@ mod tests {
              VALUES (?1, ?2, ?1, 'https', 'ejemplo.es', '/', 1, 0, 'done', ?3)",
             params![id, url, status],
         )
-        .expect("insertar url");
+        .expect("insert url");
         id
     }
 
@@ -1837,7 +1821,7 @@ mod tests {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
             params![url_id, p.title, p.meta_description, p.canonical, p.indexable as i64, p.reason],
         )
-        .expect("insertar page");
+        .expect("insert page");
     }
 
     fn issue(conn: &Connection, url_id: Option<i64>, rule_id: &str, severity: &str) {
@@ -1846,7 +1830,7 @@ mod tests {
              VALUES (?1, ?2, ?3, 'indexability', NULL)",
             params![url_id, rule_id, severity],
         )
-        .expect("insertar issue");
+        .expect("insert issue");
     }
 
     fn issue_grouped(conn: &Connection, url_id: i64, rule_id: &str, severity: &str, group: &str) {
@@ -1855,7 +1839,7 @@ mod tests {
              VALUES (?1, ?2, ?3, 'social', ?4)",
             params![url_id, rule_id, severity, group],
         )
-        .expect("insertar issue agrupado");
+        .expect("insert grouped issue");
     }
 
     /// Directorio temporal propio. La CLI no tiene `tempfile` entre sus dependencias y el stack
@@ -1864,7 +1848,7 @@ mod tests {
         let dir = std::env::temp_dir()
             .join(format!("crawlforge-diff-{}-{nombre}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("crear el directorio temporal");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }
 
@@ -1929,17 +1913,17 @@ mod tests {
         let dir = tmpdir("hallazgos");
         let (antes, despues) = escenario(&dir, None);
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
 
         let nuevos: Vec<&str> =
             outcome.of(ChangeType::IssueAppeared).filter_map(|c| c.field.as_deref()).collect();
-        assert_eq!(nuevos, ["HTTP-404-INTERNAL"], "el 404 es el único hallazgo nuevo");
+        assert_eq!(nuevos, ["HTTP-404-INTERNAL"], "the 404 is the only new finding");
 
         let resueltos: Vec<&str> =
             outcome.of(ChangeType::IssueResolved).filter_map(|c| c.field.as_deref()).collect();
         assert_eq!(resueltos, ["INDEX-NOINDEX-IN-SITEMAP"]);
 
-        assert_eq!(outcome.issues_persisted, 1, "META-TITLE-TOO-LONG sigue ahí");
+        assert_eq!(outcome.issues_persisted, 1, "META-TITLE-TOO-LONG is still there");
         assert!(outcome.conclusive());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1968,10 +1952,10 @@ mod tests {
             issue_grouped(&conn, a, "INDEX-NOFOLLOW-INTERNAL", "medium", "nofollow:aaaa");
         }
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
         assert!(
             outcome.of(ChangeType::IssueAppeared).next().is_none(),
-            "el hallazgo no es nuevo: solo estrenó clave de grupo"
+            "the finding is not new: it only gained a group key"
         );
         assert!(outcome.of(ChangeType::IssueResolved).next().is_none());
         assert_eq!(outcome.issues_persisted, 1);
@@ -2001,7 +1985,7 @@ mod tests {
             issue_grouped(&conn, a, "META-TITLE-DUPLICATE", "high", "title:bbbb");
         }
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
         assert_eq!(outcome.count(ChangeType::IssueAppeared), 1);
         assert_eq!(outcome.count(ChangeType::IssueResolved), 1);
         let _ = std::fs::remove_dir_all(&dir);
@@ -2012,7 +1996,7 @@ mod tests {
         let dir = tmpdir("estado");
         let (antes, despues) = escenario(&dir, None);
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
 
         let cambios: Vec<&Change> = outcome.of(ChangeType::StatusChanged).collect();
         assert_eq!(cambios.len(), 1);
@@ -2022,7 +2006,7 @@ mod tests {
         assert!(
             status_rank(cambios[0].value_after.as_deref())
                 > status_rank(cambios[0].value_before.as_deref()),
-            "un 404 es peor que un 200"
+            "a 404 is worse than a 200"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2032,11 +2016,11 @@ mod tests {
         let dir = tmpdir("urls");
         let (antes, despues) = escenario(&dir, None);
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
 
         assert_eq!(urls_de(&outcome, ChangeType::UrlAdded), ["https://ejemplo.es/nueva"]);
         assert_eq!(urls_de(&outcome, ChangeType::UrlRemoved), ["https://ejemplo.es/vieja"]);
-        assert_eq!(outcome.urls_common, 2, "la raíz y /a están en los dos");
+        assert_eq!(outcome.urls_common, 2, "the root and /a are in both");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2045,19 +2029,19 @@ mod tests {
         let dir = tmpdir("truncado");
         let (antes, despues) = escenario(&dir, Some("max_urls"));
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
 
         assert!(
             urls_de(&outcome, ChangeType::UrlRemoved).is_empty(),
-            "/vieja falta porque el rastreo se cortó, no porque desapareciera"
+            "/vieja is missing because the crawl was cut short, not because it disappeared"
         );
-        assert_eq!(outcome.suppressed.urls_removed, 1, "pero se cuenta como candidata");
+        assert_eq!(outcome.suppressed.urls_removed, 1, "but it is counted as a candidate");
         assert!(
             outcome.of(ChangeType::IssueResolved).next().is_none(),
-            "un hallazgo no se resuelve por dejar de mirarlo"
+            "a finding is not resolved by no longer looking at it"
         );
         assert_eq!(outcome.suppressed.issues_resolved, 1);
-        assert!(!outcome.conclusive(), "el resultado no se puede afirmar");
+        assert!(!outcome.conclusive(), "the result cannot be asserted");
 
         // Lo que sí sigue siendo cierto: la intersección.
         assert_eq!(outcome.count(ChangeType::StatusChanged), 1);
@@ -2088,12 +2072,12 @@ mod tests {
         }
 
         let fail_on = vec!["HTTP-404-INTERNAL".to_string()];
-        let outcome = compare(&antes, &despues, None, &fail_on).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &fail_on).expect("compare");
 
         assert_eq!(outcome.count(ChangeType::IssueAppeared), 0);
         assert_eq!(outcome.suppressed.issues_appeared, 1);
-        assert!(!outcome.should_fail(), "no se falla una build con datos que no se pueden afirmar");
-        assert!(outcome.fail_on_inconclusive, "pero se dice claramente que no es un aprobado");
+        assert!(!outcome.should_fail(), "a build is not failed on data that cannot be asserted");
+        assert!(outcome.fail_on_inconclusive, "but it clearly says this is not a pass");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2102,7 +2086,7 @@ mod tests {
         let dir = tmpdir("paginas");
         let (antes, despues) = escenario(&dir, None);
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
 
         let titulos: Vec<&Change> = outcome.of(ChangeType::TitleChanged).collect();
         assert_eq!(titulos.len(), 1);
@@ -2127,7 +2111,7 @@ mod tests {
         let dir = tmpdir("identidad");
         let (antes, _) = escenario(&dir, None);
 
-        let outcome = compare(&antes, &antes, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &antes, None, &[]).expect("compare");
 
         assert!(outcome.changes.is_empty(), "{:?}", outcome.changes);
         assert_eq!(outcome.issues_persisted, 2);
@@ -2156,10 +2140,10 @@ mod tests {
             issue_grouped(&conn, raiz, "SOCIAL-OG-MISSING", "low", "og-missing:og:title");
         }
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
 
         let nuevos: Vec<&Change> = outcome.of(ChangeType::IssueAppeared).collect();
-        assert_eq!(nuevos.len(), 1, "solo falta og:title, no toda la regla otra vez");
+        assert_eq!(nuevos.len(), 1, "only og:title is missing, not the whole rule again");
         assert_eq!(nuevos[0].value_after.as_deref(), Some("og-missing:og:title"));
         assert_eq!(outcome.issues_persisted, 1);
         let _ = std::fs::remove_dir_all(&dir);
@@ -2183,17 +2167,17 @@ mod tests {
                  VALUES ('ejemplo.es', 200, ?1, ?2, 0)",
                 params![contenido, bloquea],
             )
-            .expect("insertar robots_txt");
+            .expect("insert robots_txt");
         }
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
 
         let cambios: Vec<&Change> = outcome.of(ChangeType::RobotsTxtChanged).collect();
-        assert_eq!(cambios.len(), 2, "blocks_all y content: {cambios:?}");
+        assert_eq!(cambios.len(), 2, "blocks_all and content: {cambios:?}");
         let bloqueo = cambios
             .iter()
             .find(|c| c.field.as_deref() == Some("blocks_all"))
-            .expect("el cambio de blocks_all");
+            .expect("the blocks_all change");
         assert_eq!(bloqueo.severity.as_deref(), Some("critical"));
         assert_eq!(bloqueo.url.as_deref(), Some("ejemplo.es"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2213,10 +2197,10 @@ mod tests {
                  VALUES ('https://ejemplo.es/sitemap.xml', 200, 0, ?1, ?2, 100, 'robots')",
                 params![valid, url_count],
             )
-            .expect("insertar sitemap");
+            .expect("insert sitemap");
         }
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
 
         let campos: Vec<&str> =
             outcome.of(ChangeType::SitemapChanged).filter_map(|c| c.field.as_deref()).collect();
@@ -2231,29 +2215,29 @@ mod tests {
         let (antes, despues) = escenario(&dir, None);
 
         let por_regla = vec!["HTTP-404-INTERNAL".to_string()];
-        let outcome = compare(&antes, &despues, None, &por_regla).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &por_regla).expect("compare");
         assert!(outcome.should_fail());
         assert_eq!(outcome.fail_on[0].rule_id, "HTTP-404-INTERNAL");
         assert_eq!(outcome.fail_on[0].count, 1);
 
         // «high» significa «high o peor»: un critical nuevo tiene que hacerla saltar.
         let por_severidad = vec!["high".to_string()];
-        let outcome = compare(&antes, &despues, None, &por_severidad).expect("comparar");
-        assert!(outcome.should_fail(), "un critical cumple el umbral high");
+        let outcome = compare(&antes, &despues, None, &por_severidad).expect("compare");
+        assert!(outcome.should_fail(), "a critical meets the high threshold");
 
         // Una regla que no aparece como hallazgo nuevo no falla la build.
         let otra = vec!["INDEX-NOINDEX".to_string()];
-        let outcome = compare(&antes, &despues, None, &otra).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &otra).expect("compare");
         assert!(!outcome.should_fail());
         assert_eq!(
             outcome.fail_on_requested,
             ["INDEX-NOINDEX"],
-            "una puerta que pasa tiene que poder decir que pasó, no callarse"
+            "a gate that passes must be able to say it passed, not stay silent"
         );
 
         // Un hallazgo que ya estaba antes tampoco: la puerta juzga el despliegue, no la deuda.
         let vieja = vec!["META-TITLE-TOO-LONG".to_string()];
-        let outcome = compare(&antes, &despues, None, &vieja).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &vieja).expect("compare");
         assert!(!outcome.should_fail());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2264,12 +2248,12 @@ mod tests {
         let (antes, despues) = escenario(&dir, None);
 
         let err = compare(&antes, &despues, None, &["HTTP-404-INTERNA".to_string()])
-            .expect_err("una errata tiene que doler");
+            .expect_err("a typo must hurt");
         // Las afirmaciones son sobre lo invariante entre idiomas (el token y el comando que
         // ayuda): `compare` responde en el idioma del proceso y este test no debe fijarlo.
         let msg = err.to_string();
-        assert!(msg.contains("HTTP-404-INTERNA"), "nombra el token: {msg}");
-        assert!(msg.contains("crawlforge rules"), "y dónde mirar los IDs: {msg}");
+        assert!(msg.contains("HTTP-404-INTERNA"), "names the token: {msg}");
+        assert!(msg.contains("crawlforge rules"), "and where to look up the IDs: {msg}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2287,7 +2271,7 @@ mod tests {
             meta(&conn, Meta { base_url: "https://otro-sitio.es/", ..Meta::default() });
         }
 
-        let err = compare(&antes, &despues, None, &[]).expect_err("no tiene sentido comparar");
+        let err = compare(&antes, &despues, None, &[]).expect_err("comparing makes no sense");
         // Invariante entre idiomas: los dos orígenes tienen que aparecer en el error.
         let msg = err.to_string();
         assert!(msg.contains("https://ejemplo.es"), "{msg}");
@@ -2316,7 +2300,7 @@ mod tests {
             );
         }
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
 
         assert!(outcome
             .warnings
@@ -2329,7 +2313,7 @@ mod tests {
                 Warning::ConfigChanged { fields } => Some(fields.clone()),
                 _ => None,
             })
-            .expect("el aviso de configuración");
+            .expect("the config warning");
         assert_eq!(config, ["limits.max_urls"]);
         // Ninguno de los dos invalida la conclusión: son avisos, no un diff imposible.
         assert!(outcome.conclusive());
@@ -2342,10 +2326,10 @@ mod tests {
         let (antes, despues) = escenario(&dir, None);
         let salida = dir.join("diff.sqlite");
 
-        let outcome = compare(&antes, &despues, Some(&salida), &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, Some(&salida), &[]).expect("compare");
         assert_eq!(outcome.out_path.as_deref(), Some(salida.as_path()));
 
-        let conn = Connection::open(&salida).expect("abrir el diff");
+        let conn = Connection::open(&salida).expect("open the diff");
         let version: i64 =
             conn.query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0)).expect("v");
         assert_eq!(version, DIFF_SCHEMA_VERSION);
@@ -2385,9 +2369,9 @@ mod tests {
         let (antes, despues) = escenario(&dir, Some("max_urls"));
         let salida = dir.join("diff.sqlite");
 
-        compare(&antes, &despues, Some(&salida), &[]).expect("comparar");
+        compare(&antes, &despues, Some(&salida), &[]).expect("compare");
 
-        let conn = Connection::open(&salida).expect("abrir el diff");
+        let conn = Connection::open(&salida).expect("open the diff");
         let (conclusive, avisos, ocultas): (i64, String, i64) = conn
             .query_row(
                 "SELECT conclusive, warnings_json, suppressed_urls_removed FROM diff_meta",
@@ -2395,9 +2379,41 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .expect("diff_meta");
-        assert_eq!(conclusive, 0, "el fichero tiene que llevar el aviso, no solo la terminal");
+        assert_eq!(conclusive, 0, "the file must carry the warning, not only the terminal");
         assert!(avisos.contains("truncated"), "{avisos}");
         assert_eq!(ocultas, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn un_rastreo_en_modo_lista_avisa_sin_decir_truncado() {
+        // `truncated_reason = 'list_mode'` arrastra el comportamiento del truncado —las
+        // ausencias no se pueden afirmar: el otro rastreo pudo simplemente no llevar esa URL
+        // en su lista— pero el mensaje no puede decir «se cortó», porque no se cortó: auditó
+        // su lista entera.
+        let dir = tmpdir("modo-lista");
+        let (antes, despues) = escenario(&dir, Some("list_mode"));
+
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
+
+        assert!(
+            urls_de(&outcome, ChangeType::UrlRemoved).is_empty(),
+            "on a list crawl you cannot assert that a URL disappeared"
+        );
+        assert!(!outcome.conclusive());
+
+        let aviso = outcome
+            .warnings
+            .iter()
+            .find(|w| matches!(w, Warning::Truncated { .. }))
+            .expect("the warning must exist");
+        assert!(aviso.breaks_conclusion());
+        let en = aviso.message(Lang::En);
+        assert!(en.contains("list crawl"), "says what actually happens: {en}");
+        assert!(!en.contains("truncated"), "nothing was cut short: {en}");
+        let es = aviso.message(Lang::Es);
+        assert!(es.contains("modo lista"), "and in Spanish: {es}");
+        assert!(!es.contains("truncado"), "{es}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2407,12 +2423,12 @@ mod tests {
         let (antes, despues) = escenario(&dir, None);
         let antes_mtime = std::fs::metadata(&antes).and_then(|m| m.modified()).expect("mtime");
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
         assert!(!outcome.changes.is_empty());
 
         let despues_mtime = std::fs::metadata(&antes).and_then(|m| m.modified()).expect("mtime");
         assert_eq!(antes_mtime, despues_mtime);
-        assert!(!dir.join("antes.sqlite-wal").exists(), "un diff no deja WAL detrás");
+        assert!(!dir.join("antes.sqlite-wal").exists(), "a diff leaves no WAL behind");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2421,15 +2437,15 @@ mod tests {
         let dir = tmpdir("no-rastreo");
         let falso = dir.join("falso.sqlite");
         {
-            let conn = Connection::open(&falso).expect("crear");
-            conn.execute_batch("CREATE TABLE cosas (id INTEGER);").expect("tabla");
+            let conn = Connection::open(&falso).expect("create");
+            conn.execute_batch("CREATE TABLE cosas (id INTEGER);").expect("table");
         }
         let (antes, _) = escenario(&dir, None);
 
-        let err = compare(&antes, &falso, None, &[]).expect_err("no es un rastreo");
+        let err = compare(&antes, &falso, None, &[]).expect_err("not a crawl");
         let msg = format!("{err:#}");
         assert!(msg.contains("is not a CrawlForge crawl file"), "{msg}");
-        assert!(!msg.contains("no such table"), "sin jerga de SQLite: {msg}");
+        assert!(!msg.contains("no such table"), "no SQLite jargon: {msg}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2440,12 +2456,12 @@ mod tests {
         let dir = tmpdir("diff-de-diff");
         let (antes, despues) = escenario(&dir, None);
         let salida = dir.join("miweb-diff.sqlite");
-        compare(&antes, &despues, Some(&salida), &[]).expect("primer diff");
+        compare(&antes, &despues, Some(&salida), &[]).expect("first diff");
 
-        let err = compare(&antes, &salida, None, &[]).expect_err("un diff no es un rastreo");
+        let err = compare(&antes, &salida, None, &[]).expect_err("a diff is not a crawl");
         let msg = format!("{err:#}");
-        assert!(msg.contains("is a diff file"), "dice qué es: {msg}");
-        assert!(msg.contains("crawl") && msg.contains("audit"), "y qué hacía falta: {msg}");
+        assert!(msg.contains("is a diff file"), "says what it is: {msg}");
+        assert!(msg.contains("crawl") && msg.contains("audit"), "and what was needed: {msg}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2455,22 +2471,22 @@ mod tests {
         let (antes, despues) = escenario(&dir, None);
 
         // Los mismos ficheros, pasados del revés: el «después» empezó una semana antes.
-        let outcome = compare(&despues, &antes, None, &[]).expect("comparar");
+        let outcome = compare(&despues, &antes, None, &[]).expect("compare");
 
         let aviso = outcome
             .warnings
             .iter()
             .find(|w| matches!(w, Warning::OrderInverted { .. }))
-            .expect("tiene que avisar del orden");
+            .expect("must warn about the order");
         let msg = aviso.message(Lang::En);
-        assert!(msg.contains("swap the two arguments"), "dice qué hacer: {msg}");
+        assert!(msg.contains("swap the two arguments"), "says what to do: {msg}");
         let es = aviso.message(Lang::Es);
-        assert!(es.contains("intercambia los dos argumentos"), "y en español: {es}");
+        assert!(es.contains("intercambia los dos argumentos"), "and in Spanish: {es}");
         assert!(
             !aviso.breaks_conclusion(),
-            "es un aviso, no un error: comparar hacia atrás puede ser deliberado"
+            "it is a warning, not an error: comparing backwards can be deliberate"
         );
-        assert!(outcome.conclusive(), "el diff sigue siendo válido, solo que del revés");
+        assert!(outcome.conclusive(), "the diff is still valid, just reversed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2479,7 +2495,7 @@ mod tests {
         let dir = tmpdir("orden-bien");
         let (antes, despues) = escenario(&dir, None);
 
-        let outcome = compare(&antes, &despues, None, &[]).expect("comparar");
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
         assert!(
             !outcome.warnings.iter().any(|w| matches!(w, Warning::OrderInverted { .. })),
             "{:?}",
@@ -2494,7 +2510,7 @@ mod tests {
         let (antes, despues) = escenario(&dir, Some("max_urls"));
 
         let outcome =
-            compare(&antes, &despues, None, &["critical".to_string()]).expect("comparar");
+            compare(&antes, &despues, None, &["critical".to_string()]).expect("compare");
         print_report(&outcome);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2515,13 +2531,13 @@ mod tests {
         let (Ok(antes), Ok(despues)) =
             (std::env::var("CRAWLFORGE_DIFF_A"), std::env::var("CRAWLFORGE_DIFF_B"))
         else {
-            panic!("define CRAWLFORGE_DIFF_A y CRAWLFORGE_DIFF_B con las rutas de los rastreos");
+            panic!("set CRAWLFORGE_DIFF_A and CRAWLFORGE_DIFF_B to the crawl file paths");
         };
 
         let salida = std::env::var("CRAWLFORGE_DIFF_OUT").ok().map(PathBuf::from);
         let reloj = std::time::Instant::now();
         let outcome = compare(Path::new(&antes), Path::new(&despues), salida.as_deref(), &[])
-            .expect("comparar");
+            .expect("compare");
         let segundos = reloj.elapsed().as_secs_f64();
 
         print_report(&outcome);
@@ -2549,12 +2565,12 @@ mod tests {
         assert!(status_rank(Some("200")) < status_rank(Some("301")));
         assert!(status_rank(Some("301")) < status_rank(Some("404")));
         assert!(status_rank(Some("404")) < status_rank(Some("500")));
-        assert!(status_rank(Some("500")) < status_rank(None), "sin respuesta es lo peor");
+        assert!(status_rank(Some("500")) < status_rank(None), "no response is the worst");
     }
 
     #[test]
     fn una_severidad_de_fail_on_incluye_las_peores() {
-        let tokens = parse_fail_on(Lang::En, &["medium".to_string()]).expect("parsear");
+        let tokens = parse_fail_on(Lang::En, &["medium".to_string()]).expect("parse");
         let changes = vec![
             Change::new(ChangeType::IssueAppeared)
                 .field("HTTP-404-INTERNAL")

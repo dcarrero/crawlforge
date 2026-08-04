@@ -213,7 +213,7 @@ mod tests {
             let valor = format!("{prefijo}SUM(1+1)");
             assert!(
                 neutralize_formula(&valor).starts_with('\''),
-                "{prefijo} tiene que neutralizarse"
+                "{prefijo} must be neutralized"
             );
         }
     }
@@ -245,7 +245,7 @@ mod tests {
     fn hay_una_exportacion_por_cada_tabla_que_usa_un_seo() {
         let names: Vec<_> = EXPORTS.iter().map(|(n, _)| *n).collect();
         for expected in ["urls", "pages", "issues", "links", "images", "broken_links"] {
-            assert!(names.contains(&expected), "falta el export {expected}");
+            assert!(names.contains(&expected), "the {expected} export is missing");
         }
     }
 
@@ -254,7 +254,7 @@ mod tests {
         let dir = std::env::temp_dir()
             .join(format!("crawlforge-export-{}-{nombre}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("crear el directorio temporal");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }
 
@@ -264,14 +264,14 @@ mod tests {
         // «File exists (os error 17)» porque se intentaba crear un directorio con ese nombre.
         let dir = tmpdir("out-fichero");
         let fichero = dir.join("miweb.xlsx");
-        std::fs::write(&fichero, "ya existo").expect("crear el fichero");
+        std::fs::write(&fichero, "ya existo").expect("create the file");
 
-        let err = ensure_csv_out_dir(&fichero).expect_err("un fichero no es un directorio");
+        let err = ensure_csv_out_dir(&fichero).expect_err("a file is not a directory");
         let msg = format!("{err:#}");
-        assert!(msg.contains("--out is a directory"), "dice qué se espera: {msg}");
-        assert!(msg.contains("already exists and is a file"), "y qué pasa: {msg}");
-        assert!(msg.contains("--format xlsx"), "y la salida probable: {msg}");
-        assert!(!msg.contains("os error"), "sin errno: {msg}");
+        assert!(msg.contains("--out is a directory"), "says what is expected: {msg}");
+        assert!(msg.contains("already exists and is a file"), "and what is wrong: {msg}");
+        assert!(msg.contains("--format xlsx"), "and the likely fix: {msg}");
+        assert!(!msg.contains("os error"), "no errno: {msg}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -280,14 +280,14 @@ mod tests {
         let dir = tmpdir("out-nombre");
         let futuro = dir.join("informe.xlsx"); // no existe todavía
 
-        let err = ensure_csv_out_dir(&futuro).expect_err("parece un fichero");
+        let err = ensure_csv_out_dir(&futuro).expect_err("looks like a file");
         assert!(format!("{err:#}").contains("looks like a file name"), "{err:#}");
-        assert!(!futuro.exists(), "la comprobación no crea nada");
+        assert!(!futuro.exists(), "the check creates nothing");
 
         // Un directorio normal, exista o no, pasa sin ruido.
-        ensure_csv_out_dir(&dir).expect("un directorio existente vale");
-        ensure_csv_out_dir(&dir.join("sub")).expect("y uno por crear también");
-        assert!(!dir.join("sub").exists(), "comprobar no es crear");
+        ensure_csv_out_dir(&dir).expect("an existing directory is fine");
+        ensure_csv_out_dir(&dir.join("sub")).expect("and one yet to be created too");
+        assert!(!dir.join("sub").exists(), "checking is not creating");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -296,7 +296,7 @@ mod tests {
         // `v1.2` es un nombre de directorio legítimo: solo se frenan las extensiones de datos.
         assert!(!looks_like_file_name(Path::new("./v1.2")));
         assert!(looks_like_file_name(Path::new("miweb.xlsx")));
-        assert!(looks_like_file_name(Path::new("datos.CSV")), "sin distinguir mayúsculas");
+        assert!(looks_like_file_name(Path::new("datos.CSV")), "case-insensitive");
     }
 
     #[test]
@@ -304,16 +304,16 @@ mod tests {
         let dir = tmpdir("no-rastreo");
         let ajeno = dir.join("ajeno.sqlite");
         {
-            let conn = Connection::open(&ajeno).expect("crear");
-            conn.execute_batch("CREATE TABLE cosas (id INTEGER);").expect("tabla ajena");
+            let conn = Connection::open(&ajeno).expect("create");
+            conn.execute_batch("CREATE TABLE cosas (id INTEGER);").expect("foreign table");
         }
         let salida = dir.join("csv");
 
-        let err = to_csv(&ajeno, &salida).expect_err("no es un rastreo");
+        let err = to_csv(&ajeno, &salida).expect_err("not a crawl");
         let msg = format!("{err:#}");
         assert!(msg.contains("is not a CrawlForge crawl file"), "{msg}");
-        assert!(!msg.contains("no such table"), "sin jerga de SQLite: {msg}");
-        assert!(!salida.exists(), "se comprueba antes de crear el directorio de salida");
+        assert!(!msg.contains("no such table"), "no SQLite jargon: {msg}");
+        assert!(!salida.exists(), "the check runs before creating the output directory");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

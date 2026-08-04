@@ -1,267 +1,273 @@
-# 04 — Catálogo de reglas
+# 04 — Rule catalog
 
-Las reglas **son** el producto. El motor es infraestructura; esto es lo que el usuario compra.
+> Versión en español: [`es/04-CATALOGO-REGLAS.md`](es/04-CATALOGO-REGLAS.md)
 
-## 1. Convenciones
+The rules **are** the product. The engine is infrastructure; this is what the user pays for.
 
-**ID:** `CATEGORIA-SUJETO-CONDICION`, en inglés, mayúsculas, estable para siempre.
-Un ID publicado nunca cambia de significado: si la lógica cambia sustancialmente, se crea un ID
-nuevo y el viejo se deprecia. Los diffs históricos dependen de esa estabilidad.
+## 1. Conventions
 
-**Severidades:**
+**ID:** `CATEGORY-SUBJECT-CONDITION`, in English, uppercase, stable forever.
+A published ID never changes meaning: if the logic changes substantially, a new ID is created and
+the old one is deprecated. Historical diffs depend on that stability.
 
-| Nivel | Significado |
+**Severities:**
+
+| Level | Meaning |
 |---|---|
-| `critical` | Impide la indexación o rompe el sitio |
-| `high` | Daño claro y medible al posicionamiento |
-| `medium` | Buena práctica incumplida, impacto moderado |
-| `low` | Mejora menor |
-| `info` | Dato informativo, no es un problema |
+| `critical` | Blocks indexing or breaks the site |
+| `high` | Clear, measurable damage to rankings |
+| `medium` | Good practice not followed, moderate impact |
+| `low` | Minor improvement |
+| `info` | Informational, not a problem |
 
-**Alcance:** `page` (evaluada en streaming durante el rastreo) o `site` (requiere el rastreo
-completo, se evalúa en la pasada final con SQL).
+**Scope:** `page` (evaluated in streaming during the crawl) or `site` (needs the complete crawl,
+evaluated in the final SQL pass).
 
-**Nivel:** regla disponible en `free`, `pro` o `agency`.
+**Tier:** rule available in `free`, `pro` or `agency`.
 
-**Cada regla requiere:** un fixture HTML en `crates/crawlforge-rules/fixtures/` y un test. Sin
-excepción.
+**Every rule requires:** an HTML fixture in `crates/crawlforge-rules/fixtures/` and a test. No
+exceptions.
 
 ---
 
-## 2. Indexabilidad y rastreo (`INDEX`)
+## 2. Indexability and crawling (`INDEX`)
 
-| ID | Sev. | Alcance | Nivel | Condición |
+| ID | Sev. | Scope | Tier | Condition |
 |---|---|---|---|---|
-| `INDEX-NOINDEX` | medium | page | free | `meta robots` o `X-Robots-Tag` contiene `noindex`. **`critical` solo en la portada** |
-| `INDEX-ROBOTS-BLOCKED` | critical | site | free | URL bloqueada por robots.txt pero enlazada internamente |
-| `INDEX-BLOCKED-IN-SITEMAP` | critical | site | free | URL en sitemap pero bloqueada por robots.txt |
-| `INDEX-NOINDEX-IN-SITEMAP` | critical | site | free | URL en sitemap con `noindex` |
-| `INDEX-ROBOTS-TXT-MISSING` | medium | site | free | No existe `/robots.txt` (404) |
-| `INDEX-ROBOTS-TXT-BLOCKS-ALL` | critical | site | free | `Disallow: /` para `*` |
-| `INDEX-NOFOLLOW-INTERNAL` | medium | page | free | Enlace interno con `rel=nofollow` |
-| `INDEX-SITEMAP-MISSING` | high | site | free | No se encuentra ningún sitemap. **Solo en modo `http`**: en una auditoría de un `dist/` el sitio aún no se ha publicado, y avisarlo en cada compilación sería ruido en el pipeline de CI |
-| `INDEX-SITEMAP-ERROR` | high | site | free | Sitemap con XML inválido o >50.000 URLs / >50 MB |
-| `INDEX-ORPHAN-PAGE` | high | site | free | En sitemap o en adaptador, pero sin ningún enlace interno entrante |
-| `INDEX-DEEP-PAGE` | medium | site | free | Profundidad de clic > 4, **contando solo lo alcanzable** |
-| `INDEX-SECTION-DISCONNECTED` | high | site | free | Conjunto de páginas con enlaces entrantes al que no se llega desde la portada ni desde una raíz de idioma. **Un hallazgo por sección, no por página** |
-| `INDEX-NO-INTERNAL-LINKS-IN` | high | site | free | Página indexable con 0 enlaces internos entrantes |
+| `INDEX-NOINDEX` | medium | page | free | `meta robots` or `X-Robots-Tag` contains `noindex`. **`critical` on the home page only** |
+| `INDEX-ROBOTS-BLOCKED` | critical | site | free | URL blocked by robots.txt but linked internally |
+| `INDEX-BLOCKED-IN-SITEMAP` | critical | site | free | URL in the sitemap but blocked by robots.txt |
+| `INDEX-NOINDEX-IN-SITEMAP` | critical | site | free | URL in the sitemap with `noindex` |
+| `INDEX-ROBOTS-TXT-MISSING` | medium | site | free | `/robots.txt` does not exist (404) |
+| `INDEX-ROBOTS-TXT-BLOCKS-ALL` | critical | site | free | `Disallow: /` for `*` |
+| `INDEX-NOFOLLOW-INTERNAL` | medium | page | free | Internal link with `rel=nofollow` |
+| `INDEX-SITEMAP-MISSING` | high | site | free | No sitemap found. **`http` mode only**: in a `dist/` audit the site has not been published yet, and flagging it on every build would be noise in the CI pipeline |
+| `INDEX-SITEMAP-ERROR` | high | site | free | Sitemap with invalid XML or >50,000 URLs / >50 MB |
+| `INDEX-ORPHAN-PAGE` | high | site | free | In the sitemap or in the adapter, but with no incoming internal link at all |
+| `INDEX-DEEP-PAGE` | medium | site | free | Click depth > 4, **counting only what is reachable** |
+| `INDEX-SECTION-DISCONNECTED` | high | site | free | Set of pages with incoming links that cannot be reached from the home page or from a language root. **One finding per section, not per page** |
+| `INDEX-NO-INTERNAL-LINKS-IN` | high | site | free | Indexable page with 0 incoming internal links |
 
-**`INDEX-NOINDEX` bajó de `critical` a `medium` el 2026-08-01.** «Esta página lleva noindex» es una
-directiva, no un defecto: en un WordPress real eran 848 páginas —el 55% del sitio— y todas eran
-`/tag/`, paginaciones y `/author/` que el plugin SEO excluye a propósito. Un `critical` que acierta
-el 100% de las veces y aporta cero es peor que no estar: enseña a saltarse la columna de severidad.
-Los casos donde sí es una emergencia se detectan **por señales estructurales, no por listas de
-patrones**: la contradicción con el sitemap ya es `INDEX-NOINDEX-IN-SITEMAP` (`critical`), y el
-`noindex` en la portada —el accidente clásico de un despliegue desde *staging*— se escala aquí.
+**`INDEX-NOINDEX` dropped from `critical` to `medium` on 2026-08-01.** "This page carries noindex"
+is a directive, not a defect: on a real WordPress site that was 848 pages —55% of the site— and
+every one was a `/tag/`, a pagination page or an `/author/` archive the SEO plugin excludes on
+purpose. A `critical` that is right 100% of the time and contributes nothing is worse than not
+existing: it teaches the user to skip the severity column. The cases where it *is* an emergency are
+detected **through structural signals, not pattern lists**: the contradiction with the sitemap is
+already `INDEX-NOINDEX-IN-SITEMAP` (`critical`), and `noindex` on the home page —the classic
+accident of a deploy from staging— is escalated here.
 
-**`INDEX-SECTION-DISCONNECTED` se separó de `INDEX-DEEP-PAGE` el 2026-08-01.** Inalcanzable no es
-profundo. En un sitio Astro bilingüe, las 1.987 páginas `/en/*` salían como «demasiados clics
-desde la portada» cuando el problema real era otro: no hay ni un `<a>` de `/es` a `/en` —el único
-puente es `<link rel="alternate" hreflang>` y el selector de idioma es JavaScript—, así que el
-recorrido nunca llegaba. Ahora el BFS se siembra también con los destinos `hreflang` de la portada,
-`DEEP-PAGE` solo mide lo que alcanza, y lo inalcanzable con enlaces entrantes se colapsa en **un**
-hallazgo de sitio con su recuento y sus ejemplos. Medido: 2.138 → 236 hallazgos ciertos, más un
-hallazgo nuevo y real (66 fichas de jugador genuinamente desconectadas).
+**`INDEX-SECTION-DISCONNECTED` was split out of `INDEX-DEEP-PAGE` on 2026-08-01.** Unreachable is
+not deep. On a bilingual Astro site, the 1,987 `/en/*` pages came out as "too many clicks from the
+home page" when the real problem was something else: there is not a single `<a>` from `/es` to
+`/en` —the only bridge is `<link rel="alternate" hreflang>` and the language switcher is
+JavaScript— so the traversal never got there. The BFS is now also seeded with the home page's
+`hreflang` targets, `DEEP-PAGE` only measures what it reaches, and anything unreachable that has
+incoming links collapses into **one** site-level finding with its count and its examples.
+Measured: 2,138 → 236 true findings, plus one new and real finding (66 player pages genuinely
+disconnected).
 
-**`INDEX-DEEP-PAGE` guarda la profundidad real y el informe la dice una vez (2026-08-03).** En el
-rastreo completo de un medio con quince años de archivo (216.349 páginas), la regla dio 202.392
-hallazgos **todos ciertos** —el archivo no tiene atajos de paginación— y un informe que abre con
-esa cifra no se lee, igual que cuando eran falsos positivos. No hay `group_key` que valga: cada
-página es genuinamente distinta. El arreglo tiene dos partes. La regla calcula ahora la
-profundidad con un BFS iterativo (mismo coste medido que los dos CTE anteriores, mismo resultado)
-y escribe `{"click_depth":N,"max_click_depth":4}` por página; y el informe, cuando una regla
-afecta al 40% o más de las páginas (`crawlforge_rules::is_pervasive`, umbral medido sobre seis
-rastreos), conserva el recuento y le añade la cuota del sitio — para esta regla, además, la forma:
-`202,392 pages deeper than 4 clicks — 94% of the site (typical depth 6–9, deepest 48)`. Nada se
-pierde: cada fila sigue en `issues`, el export las lleva todas y `report --rule INDEX-DEEP-PAGE`
-las lista ordenadas por profundidad, la más hundida primero.
+**`INDEX-DEEP-PAGE` stores the real depth and the report says it once (2026-08-03).** On the full
+crawl of a news site with fifteen years of archive (216,349 pages), the rule produced 202,392
+findings — **all of them true** (the archive has no pagination shortcuts) — and a report that opens
+with that number does not get read, exactly as when they were false positives. No `group_key` can
+help here: every page is genuinely distinct. The fix has two parts. The rule now computes depth
+with an iterative BFS (same measured cost as the previous two CTEs, same result)
+and writes `{"click_depth":N,"max_click_depth":4}` per page; and the report, when a rule
+affects 40% or more of the pages (`crawlforge_rules::is_pervasive`, threshold measured over six
+crawls), keeps the count and adds the site share — and for this rule, the shape too:
+`202,392 pages deeper than 4 clicks — 94% of the site (typical depth 6–9, deepest 48)`. Nothing is
+lost: every row is still in `issues`, the export carries them all, and `report --rule
+INDEX-DEEP-PAGE` lists them sorted by depth, deepest first.
 
-**Estas tres no se evalúan sobre un rastreo truncado (2026-07-30, ampliado el 2026-08-01).** Su respuesta depende de que el
-grafo de enlaces esté completo, y un rastreo cortado —por el tope del nivel gratuito, por
-`--max-urls` o por tiempo— deja sin enlaces salientes a todo lo que quedó pendiente. Medido: en un
-rastreo de 40 URLs de un blog real, `INDEX-DEEP-PAGE` avisaba en 39 de 40 páginas porque el
-recorrido no podía alcanzar ninguna. Están en `crawlforge_rules::REQUIERE_GRAFO_COMPLETO` y el
-motor las omite; es preferible no decir nada a decir algo falso.
+**These three are not evaluated on a truncated crawl (2026-07-30, extended 2026-08-01).** Their
+answer depends on the link graph being complete, and a cut-off crawl —by the free-tier cap, by
+`--max-urls` or by time— leaves everything still pending with no outgoing links. Measured: on a
+40-URL crawl of a real blog, `INDEX-DEEP-PAGE` flagged 39 of 40 pages because the traversal could
+not reach any of them. They live in `crawlforge_rules::REQUIERE_GRAFO_COMPLETO` and the engine
+skips them; saying nothing beats saying something false.
 
-`INDEX-ORPHAN-PAGE` se sumó a esa lista el 2026-08-01, y también `INDEX-SECTION-DISCONNECTED`:
-sobre el grafo truncado de un medio de 176.000 URLs habría dado 202 secciones «desconectadas» que
-solo estaban sin visitar.
+`INDEX-ORPHAN-PAGE` joined that list on 2026-08-01, and so did `INDEX-SECTION-DISCONNECTED`: on
+the truncated graph of a 176,000-URL news site it would have reported 202 "disconnected" sections
+that were merely unvisited.
 
-**`INDEX-ROBOTS-BLOCKED` pasó de `page` a `site` el 2026-07-30.** El motor excluye la URL bloqueada
-*antes* de descargarla —que es lo correcto: respetar `robots.txt` significa no pedirla— así que
-nunca existe un `PageContext` sobre el que evaluarla. El dato sí está en el almacén
-(`crawl_state='excluded'` con `exclusion_reason='robots'`, más su fila en `links`), y ahí es donde
-se lee. La alternativa, que es lo que hace Screaming Frog, sería descargar las bloqueadas que estén
-enlazadas internamente; eso cambia el comportamiento del rastreador y se descartó: no se toca cómo
-rastrea el motor para que encaje el alcance de una regla.
+**`INDEX-ROBOTS-BLOCKED` moved from `page` to `site` on 2026-07-30.** The engine excludes a blocked
+URL *before* downloading it —which is the correct behavior: honoring `robots.txt` means not
+requesting it— so a `PageContext` to evaluate it on never exists. The data is in the store
+(`crawl_state='excluded'` with `exclusion_reason='robots'`, plus its row in `links`), and that is
+where it is read. The alternative, which is what Screaming Frog does, would be to download the
+blocked URLs that are linked internally; that changes the crawler's behavior and was rejected: how
+the engine crawls is not touched to make a rule's scope fit.
 
-## 3. Códigos de estado y redirecciones (`HTTP`)
+## 3. Status codes and redirects (`HTTP`)
 
-| ID | Sev. | Alcance | Nivel | Condición |
+| ID | Sev. | Scope | Tier | Condition |
 |---|---|---|---|---|
-| `HTTP-404-INTERNAL` | critical | site | free | Enlace interno a URL que devuelve 404 |
-| `HTTP-404-EXTERNAL` | medium | site | free | Enlace externo roto |
-| `HTTP-5XX` | critical | page | free | Respuesta 5xx |
-| `HTTP-REDIRECT-CHAIN` | high | site | free | Cadena de redirección de 2 o más saltos |
-| `HTTP-REDIRECT-LOOP` | critical | site | free | Bucle de redirección |
-| `HTTP-TEMP-REDIRECT` | medium | page | free | 302/307 permanente en el tiempo (aparece en 2+ rastreos) |
-| `HTTP-REDIRECT-TO-404` | critical | site | free | Redirección que termina en 404 |
-| `HTTP-MIXED-CONTENT` | high | page | free | Página HTTPS que carga recursos por HTTP |
-| `HTTP-NO-HTTPS` | critical | site | free | El sitio responde por HTTP sin redirigir a HTTPS |
-| `HTTP-SLOW-RESPONSE` | medium | page | free | TTFB > 1.000 ms |
+| `HTTP-404-INTERNAL` | critical | site | free | Internal link to a URL that returns 404 |
+| `HTTP-404-EXTERNAL` | medium | site | free | Broken external link |
+| `HTTP-5XX` | critical | page | free | 5xx response |
+| `HTTP-REDIRECT-CHAIN` | high | site | free | Redirect chain of 2 or more hops |
+| `HTTP-REDIRECT-LOOP` | critical | site | free | Redirect loop |
+| `HTTP-TEMP-REDIRECT` | medium | page | free | 302/307 that is permanent in practice (appears in 2+ crawls) |
+| `HTTP-REDIRECT-TO-404` | critical | site | free | Redirect that ends in a 404 |
+| `HTTP-MIXED-CONTENT` | high | page | free | HTTPS page loading resources over HTTP |
+| `HTTP-NO-HTTPS` | critical | site | free | Site responds over HTTP without redirecting to HTTPS |
+| `HTTP-SLOW-RESPONSE` | medium | page | free | TTFB > 1,000 ms |
 | `HTTP-LARGE-PAGE` | medium | page | free | HTML > 500 KB |
-| `HTTP-NO-COMPRESSION` | medium | page | pro | Sin `Content-Encoding: gzip/br` en HTML |
-| `HTTP-NO-CACHE-HEADERS` | low | page | pro | Recursos estáticos sin `Cache-Control` |
-| `HTTP-SOFT-404` | high | site | pro | Devuelve 200 pero el contenido indica error (heurística: pocas palabras + patrón de texto) |
+| `HTTP-NO-COMPRESSION` | medium | page | pro | No `Content-Encoding: gzip/br` on HTML |
+| `HTTP-NO-CACHE-HEADERS` | low | page | pro | Static resources without `Cache-Control` |
+| `HTTP-SOFT-404` | high | site | pro | Returns 200 but the content indicates an error (heuristic: few words + text pattern) |
 
-## 4. Títulos y meta descripciones (`META`)
+## 4. Titles and meta descriptions (`META`)
 
-| ID | Sev. | Alcance | Nivel | Condición |
+| ID | Sev. | Scope | Tier | Condition |
 |---|---|---|---|---|
-| `META-TITLE-MISSING` | critical | page | free | Sin `<title>` o vacío |
-| `META-TITLE-DUPLICATE` | high | site | free | Mismo título en 2+ páginas indexables |
-| `META-TITLE-TOO-LONG` | medium | page | free | Ancho estimado > 580 px |
-| `META-TITLE-TOO-SHORT` | low | page | free | < 30 caracteres |
-| `META-TITLE-MULTIPLE` | medium | page | free | Más de una etiqueta `<title>` |
-| `META-DESC-MISSING` | high | page | free | Sin meta description |
-| `META-DESC-DUPLICATE` | medium | site | free | Repetida en 2+ páginas indexables |
-| `META-DESC-TOO-LONG` | low | page | free | Ancho estimado > 990 px |
-| `META-DESC-TOO-SHORT` | low | page | free | < 70 caracteres |
-| `META-VIEWPORT-MISSING` | high | page | free | Sin `meta viewport` |
-| `META-REFRESH` | high | page | free | Uso de `meta http-equiv=refresh` |
+| `META-TITLE-MISSING` | critical | page | free | No `<title>`, or empty |
+| `META-TITLE-DUPLICATE` | high | site | free | Same title on 2+ indexable pages |
+| `META-TITLE-TOO-LONG` | medium | page | free | Estimated width > 580 px |
+| `META-TITLE-TOO-SHORT` | low | page | free | < 30 characters |
+| `META-TITLE-MULTIPLE` | medium | page | free | More than one `<title>` tag |
+| `META-DESC-MISSING` | high | page | free | No meta description |
+| `META-DESC-DUPLICATE` | medium | site | free | Repeated on 2+ indexable pages |
+| `META-DESC-TOO-LONG` | low | page | free | Estimated width > 990 px |
+| `META-DESC-TOO-SHORT` | low | page | free | < 70 characters |
+| `META-VIEWPORT-MISSING` | high | page | free | No `meta viewport` |
+| `META-REFRESH` | high | page | free | Uses `meta http-equiv=refresh` |
 
-**Nota de implementación:** el ancho en píxeles se calcula con las métricas de Arial 20px (títulos)
-y 14px (descripciones), que es como Google trunca. Es un aviso mucho más útil que contar caracteres,
-y en español importa más aún porque las palabras son más largas.
+**Implementation note:** the pixel width is computed with Arial metrics at 20px (titles) and 14px
+(descriptions), which is how Google truncates. It is a far more useful warning than counting
+characters, and it matters even more in Spanish because the words are longer.
 
-## 5. Canonical y contenido duplicado (`CANON`)
+## 5. Canonical and duplicate content (`CANON`)
 
-| ID | Sev. | Alcance | Nivel | Condición |
+| ID | Sev. | Scope | Tier | Condition |
 |---|---|---|---|---|
-| `CANON-MISSING` | medium | page | free | Página indexable sin canonical |
-| `CANON-MULTIPLE` | high | page | free | Más de un `link rel=canonical` |
-| `CANON-RELATIVE` | medium | page | free | Canonical en URL relativa |
-| `CANON-TO-4XX` | critical | site | free | Canonical apunta a URL con error |
-| `CANON-TO-REDIRECT` | high | site | free | Canonical apunta a una redirección |
-| `CANON-TO-NOINDEX` | critical | site | free | Canonical apunta a página con `noindex` |
-| `CANON-CHAIN` | high | site | free | A canoniza a B, y B canoniza a C |
-| `CANON-CROSS-DOMAIN` | medium | page | free | Canonical a otro dominio |
-| `DUP-CONTENT-EXACT` | high | site | free | Hash de HTML idéntico entre 2+ URLs |
-| `DUP-CONTENT-NEAR` | medium | site | pro | Simhash con similitud > 90% |
-| `DUP-H1` | low | site | pro | Mismo H1 en 2+ páginas |
+| `CANON-MISSING` | medium | page | free | Indexable page without a canonical |
+| `CANON-MULTIPLE` | high | page | free | More than one `link rel=canonical` |
+| `CANON-RELATIVE` | medium | page | free | Canonical is a relative URL |
+| `CANON-TO-4XX` | critical | site | free | Canonical points to a URL with an error |
+| `CANON-TO-REDIRECT` | high | site | free | Canonical points to a redirect |
+| `CANON-TO-NOINDEX` | critical | site | free | Canonical points to a page with `noindex` |
+| `CANON-CHAIN` | high | site | free | A canonicalizes to B, and B canonicalizes to C |
+| `CANON-CROSS-DOMAIN` | medium | page | free | Canonical to another domain |
+| `DUP-CONTENT-EXACT` | high | site | free | Identical HTML hash across 2+ URLs |
+| `DUP-CONTENT-NEAR` | medium | site | pro | Simhash with similarity > 90% |
+| `DUP-H1` | low | site | pro | Same H1 on 2+ pages |
 
-## 6. Encabezados y contenido (`CONTENT`)
+## 6. Headings and content (`CONTENT`)
 
-| ID | Sev. | Alcance | Nivel | Condición |
+| ID | Sev. | Scope | Tier | Condition |
 |---|---|---|---|---|
-| `CONTENT-H1-MISSING` | high | page | free | Sin H1 |
-| `CONTENT-H1-MULTIPLE` | low | page | free | Más de un H1 |
-| `CONTENT-H1-EMPTY` | medium | page | free | H1 vacío o solo con una imagen sin alt |
-| `CONTENT-HEADING-SKIP` | low | page | free | Salto de nivel (H2 → H4) |
-| `CONTENT-THIN` | high | page | free | Página indexable con < 300 palabras |
-| `CONTENT-LOW-RATIO` | medium | page | pro | Ratio texto/HTML < 10% |
-| `CONTENT-LANG-MISSING` | medium | page | free | Sin atributo `lang` en `<html>` |
-| `CONTENT-LANG-MISMATCH` | medium | page | pro | `lang` declarado no coincide con el idioma detectado |
+| `CONTENT-H1-MISSING` | high | page | free | No H1 |
+| `CONTENT-H1-MULTIPLE` | low | page | free | More than one H1 |
+| `CONTENT-H1-EMPTY` | medium | page | free | H1 empty, or containing only an image without alt |
+| `CONTENT-HEADING-SKIP` | low | page | free | Level skip (H2 → H4) |
+| `CONTENT-THIN` | high | page | free | Indexable page with < 300 words |
+| `CONTENT-LOW-RATIO` | medium | page | pro | Text-to-HTML ratio < 10% |
+| `CONTENT-LANG-MISSING` | medium | page | free | No `lang` attribute on `<html>` |
+| `CONTENT-LANG-MISMATCH` | medium | page | pro | Declared `lang` does not match the detected language |
 
-## 7. Imágenes y recursos (`ASSET`)
+## 7. Images and assets (`ASSET`)
 
-| ID | Sev. | Alcance | Nivel | Condición |
+| ID | Sev. | Scope | Tier | Condition |
 |---|---|---|---|---|
-| `ASSET-IMG-NO-ALT` | high | page | free | `<img>` sin atributo `alt` |
-| `ASSET-IMG-EMPTY-ALT-LINK` | high | page | free | Imagen con `alt=""` dentro de un enlace sin otro texto |
-| `ASSET-IMG-BROKEN` | high | site | free | Imagen que devuelve 4xx/5xx |
-| `ASSET-IMG-HEAVY` | medium | site | free | Imagen > 200 KB |
-| `ASSET-IMG-LEGACY-FORMAT` | low | page | pro | JPEG/PNG sin alternativa WebP/AVIF |
-| `ASSET-IMG-NO-DIMENSIONS` | medium | page | pro | Sin `width`/`height` (provoca CLS) |
-| `ASSET-BROKEN` | high | site | free | CSS o JS que devuelve 4xx/5xx |
+| `ASSET-IMG-NO-ALT` | high | page | free | `<img>` without an `alt` attribute |
+| `ASSET-IMG-EMPTY-ALT-LINK` | high | page | free | Image with `alt=""` inside a link with no other text |
+| `ASSET-IMG-BROKEN` | high | site | free | Image that returns 4xx/5xx |
+| `ASSET-IMG-HEAVY` | medium | site | free | Image > 200 KB |
+| `ASSET-IMG-LEGACY-FORMAT` | low | page | pro | JPEG/PNG without a WebP/AVIF alternative |
+| `ASSET-IMG-NO-DIMENSIONS` | medium | page | pro | No `width`/`height` (causes CLS) |
+| `ASSET-BROKEN` | high | site | free | CSS or JS that returns 4xx/5xx |
 
-**Corrección de alcance (2026-07-30):** `ASSET-IMG-HEAVY` figuraba como `page` y es `site`. El peso
-de una imagen no está en el HTML —`width` y `height` declaran maquetación, no bytes— así que no se
-puede decidir con la página delante: hace falta la fila de `urls` del recurso ya descargado. El dato
-es `urls.content_length`. Nota aparte: `resources.size_bytes` existe en el esquema pero el escritor
-no puebla la tabla `resources`, así que hoy no sirve para esto.
+**Scope correction (2026-07-30):** `ASSET-IMG-HEAVY` was listed as `page` and it is `site`. An
+image's weight is not in the HTML —`width` and `height` declare layout, not bytes— so it cannot be
+decided with only the page at hand: it needs the `urls` row of the already-downloaded resource. The
+data is `urls.content_length`, and it stays there: since 2026-08-04 the writer does populate
+`resources`, but with one row per resource URL rather than per (page, resource) pair, so the
+«which pages use this image» half of the question is still answered by `images`, not by it.
 
-## 8. Internacionalización (`HREFLANG`)
+## 8. Internationalization (`HREFLANG`)
 
-Bloque de alto valor para el cliente (ejemplo.es/ejemplo.me, otro proyecto, otro proyecto multiidioma).
+High-value block for the client (ejemplo.es/ejemplo.me, another project, another multilingual
+project).
 
-| ID | Sev. | Alcance | Nivel | Condición |
+| ID | Sev. | Scope | Tier | Condition |
 |---|---|---|---|---|
-| `HREFLANG-NO-SELF` | high | page | free | Conjunto hreflang sin referencia a sí misma |
-| `HREFLANG-NOT-RECIPROCAL` | high | site | free | A apunta a B, B no apunta a A |
-| `HREFLANG-INVALID-CODE` | high | page | free | Código de idioma o región no válido según ISO 639-1 / 3166-1 |
-| `HREFLANG-TO-4XX` | critical | site | free | hreflang apunta a URL con error |
-| `HREFLANG-TO-NOINDEX` | critical | site | pro | hreflang apunta a página no indexable |
-| `HREFLANG-CONFLICT-CANONICAL` | high | site | pro | hreflang y canonical se contradicen |
-| `HREFLANG-NO-XDEFAULT` | low | site | pro | Conjunto multiidioma sin `x-default` |
+| `HREFLANG-NO-SELF` | high | page | free | hreflang set without a reference to itself |
+| `HREFLANG-NOT-RECIPROCAL` | high | site | free | A points to B, B does not point to A |
+| `HREFLANG-INVALID-CODE` | high | page | free | Language or region code invalid per ISO 639-1 / 3166-1 |
+| `HREFLANG-TO-4XX` | critical | site | free | hreflang points to a URL with an error |
+| `HREFLANG-TO-NOINDEX` | critical | site | pro | hreflang points to a non-indexable page |
+| `HREFLANG-CONFLICT-CANONICAL` | high | site | pro | hreflang and canonical contradict each other |
+| `HREFLANG-NO-XDEFAULT` | low | site | pro | Multilingual set without `x-default` |
 
-## 9. Datos estructurados y social (`SCHEMA`)
+## 9. Structured data and social (`SCHEMA`)
 
-| ID | Sev. | Alcance | Nivel | Condición |
+| ID | Sev. | Scope | Tier | Condition |
 |---|---|---|---|---|
-| `SCHEMA-INVALID-JSON` | high | page | pro | JSON-LD malformado |
-| `SCHEMA-MISSING-REQUIRED` | medium | page | pro | Falta una propiedad obligatoria del tipo declarado |
-| `SCHEMA-MISSING-ARTICLE` | low | page | pro | Página tipo artículo sin schema `Article`/`BlogPosting` |
-| `SOCIAL-OG-MISSING` | low | page | free | Sin `og:title` / `og:description` / `og:image` |
-| `SOCIAL-OG-IMAGE-BROKEN` | medium | site | pro | `og:image` devuelve error |
+| `SCHEMA-INVALID-JSON` | high | page | pro | Malformed JSON-LD |
+| `SCHEMA-MISSING-REQUIRED` | medium | page | pro | A required property of the declared type is missing |
+| `SCHEMA-MISSING-ARTICLE` | low | page | pro | Article-like page without an `Article`/`BlogPosting` schema |
+| `SOCIAL-OG-MISSING` | low | page | free | No `og:title` / `og:description` / `og:image` |
+| `SOCIAL-OG-IMAGE-BROKEN` | medium | site | pro | `og:image` returns an error |
 
-## 10. WordPress (`WP`) — requiere adaptador, nivel Pro
+## 10. WordPress (`WP`) — requires the adapter, Pro tier
 
-Ver `05-ADAPTADORES.md`.
+See `05-ADAPTADORES.md`.
 
-| ID | Sev. | Condición |
+| ID | Sev. | Condition |
 |---|---|---|
-| `WP-ORPHAN-POST` | high | Post publicado en la REST API que no se alcanzó rastreando |
-| `WP-ATTACHMENT-INDEXABLE` | high | Páginas de adjunto indexables (clásico generador de contenido basura) |
-| `WP-THIN-ARCHIVE` | medium | Archivo de etiqueta o categoría con un solo post |
-| `WP-REPLYTOCOM` | medium | URLs con `?replytocom` rastreables |
-| `WP-PAGINATION-TRAP` | high | Paginación `/page/N/` que continúa más allá del total real |
-| `WP-SITEMAP-MISMATCH` | high | El sitemap de Yoast/RankMath no coincide con el contenido publicado |
-| `WP-MISSING-SEO-META` | medium | Post sin meta description en Yoast/RankMath |
-| `WP-OUTDATED-PLUGIN` | info | Versión de plugin detectada por `?ver=` que está desactualizada |
-| `WP-XMLRPC-OPEN` | low | `/xmlrpc.php` accesible |
-| `WP-FEED-DUPLICATE` | low | Feeds indexables duplicando contenido |
+| `WP-ORPHAN-POST` | high | Post published in the REST API that the crawl never reached |
+| `WP-ATTACHMENT-INDEXABLE` | high | Indexable attachment pages (the classic junk-content generator) |
+| `WP-THIN-ARCHIVE` | medium | Tag or category archive with a single post |
+| `WP-REPLYTOCOM` | medium | Crawlable `?replytocom` URLs |
+| `WP-PAGINATION-TRAP` | high | `/page/N/` pagination that continues past the real total |
+| `WP-SITEMAP-MISMATCH` | high | The Yoast/RankMath sitemap does not match the published content |
+| `WP-MISSING-SEO-META` | medium | Post without a meta description in Yoast/RankMath |
+| `WP-OUTDATED-PLUGIN` | info | Plugin version detected via `?ver=` that is out of date |
+| `WP-XMLRPC-OPEN` | low | `/xmlrpc.php` reachable |
+| `WP-FEED-DUPLICATE` | low | Indexable feeds duplicating content |
 
-## 11. Sitios estáticos / Astro (`STATIC`) — nivel Pro
+## 11. Static sites / Astro (`STATIC`) — Pro tier
 
-| ID | Sev. | Condición |
+| ID | Sev. | Condition |
 |---|---|---|
-| `STATIC-ROUTE-NOT-IN-SITEMAP` | medium | Ruta generada en `dist/` ausente del sitemap |
-| `STATIC-SITEMAP-ORPHAN` | high | URL en sitemap sin fichero correspondiente en `dist/` |
-| `STATIC-COLLECTION-NO-ROUTE` | medium | Entrada de colección de contenido sin ruta generada |
-| `STATIC-HYDRATION-ONLY-LINK` | high | Enlace que solo existe tras hidratar la isla → invisible para el rastreador |
-| `STATIC-BROKEN-RELATIVE` | critical | Enlace relativo que no resuelve a ningún fichero de `dist/` |
-| `STATIC-ASSET-UNREFERENCED` | info | Fichero en `dist/` al que no apunta nada |
+| `STATIC-ROUTE-NOT-IN-SITEMAP` | medium | Route generated in `dist/` that is absent from the sitemap |
+| `STATIC-SITEMAP-ORPHAN` | high | URL in the sitemap with no corresponding file in `dist/` |
+| `STATIC-COLLECTION-NO-ROUTE` | medium | Content-collection entry with no generated route |
+| `STATIC-HYDRATION-ONLY-LINK` | high | Link that only exists after the island hydrates → invisible to the crawler |
+| `STATIC-BROKEN-RELATIVE` | critical | Relative link that resolves to no file in `dist/` |
+| `STATIC-ASSET-UNREFERENCED` | info | File in `dist/` that nothing points to |
 
-## 12. Accesibilidad (`A11Y`) — previsto, puente con la normativa europea
+## 12. Accessibility (`A11Y`) — planned, bridge to the European regulation
 
-Reservado. Se poblará inyectando `axe-core` a través del webview de renderizado. Los IDs seguirán
-el patrón `A11Y-<regla-axe>` y cada hallazgo citará su referencia en **WCAG 2.1 AA + EN 301 549 +
-Directiva UE 2019/882**, con el disclaimer de revisión manual siempre visible, tal como se definió
-en el plan de MVP de cumplimiento EAA.
+Reserved. It will be populated by injecting `axe-core` through the rendering webview. The IDs will
+follow the `A11Y-<axe-rule>` pattern and every finding will cite its reference in **WCAG 2.1 AA +
+EN 301 549 + EU Directive 2019/882**, with the manual-review disclaimer always visible, as defined
+in the EAA compliance MVP plan.
 
-**Todavía no se implementa.** Pero el `trait Rule` debe admitir ya un campo de
-referencias normativas para no refactorizar después:
+**Not implemented yet.** But the `trait Rule` must already accept a normative-references field so
+there is no refactor later:
 
 ```rust
 fn references(&self) -> &[Reference];   // { standard, clause, url }
 ```
 
-## 13. Reparto por nivel — resumen
+## 13. Split by tier — summary
 
-| Nivel | Reglas | Criterio |
+| Tier | Rules | Criterion |
 |---|---|---|
-| Free | ~50 | Todo el SEO técnico fundamental. **No se oculta ningún hallazgo dentro del límite de 1.000 URLs** |
-| Pro | +25 | Casi-duplicados, schema, soft-404, WordPress, estáticos, hreflang avanzado, render JS |
-| Agency | +A11Y y reglas propias | Motor de reglas personalizadas del usuario |
+| Free | ~50 | All the fundamental technical SEO. **No finding is hidden within the 1,000-URL limit** |
+| Pro | +25 | Near-duplicates, schema, soft 404s, WordPress, static sites, advanced hreflang, JS rendering |
+| Agency | +A11Y and custom rules | The user's own custom rule engine |
 
-Recuerda el principio de `00-VISION.md §6`: **el Free limita la escala, no el conocimiento.** Un
-usuario gratuito con un blog de 400 páginas debe obtener una auditoría completa y quedar impresionado.
-Ese es el motor de conversión.
+Remember the principle: **Free limits scale, not knowledge.** A free user
+with a 400-page blog must get a complete audit and walk away impressed. That is the conversion
+engine.
 
-## 14. Motor de reglas personalizadas (Agency, previsto)
+## 14. Custom rule engine (Agency, planned)
 
-Definidas por el usuario en YAML, evaluadas sobre el almacén:
+Defined by the user in YAML, evaluated over the store:
 
 ```yaml
 - id: CUSTOM-PRICE-BLOCK-MISSING
@@ -270,9 +276,9 @@ Definidas por el usuario en YAML, evaluadas sobre el almacén:
   when:
     url_matches: "^/producto/"
     css_absent: ".precio"
-  message: "Ficha de producto sin bloque de precio"
+  message: "Product page without its price block"
 ```
 
-Selectores CSS, expresiones regulares sobre el HTML, condiciones sobre columnas del almacén, y
-consultas SQL directas para casos avanzados. Es la respuesta a la "extracción personalizada" de
-Screaming Frog, yendo un paso más allá: allí extraes, aquí además evalúas.
+CSS selectors, regular expressions over the HTML, conditions on store columns, and direct SQL
+queries for advanced cases. It is the answer to Screaming Frog's "custom extraction", taken one
+step further: there you extract, here you also evaluate.

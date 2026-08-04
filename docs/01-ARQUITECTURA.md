@@ -1,6 +1,8 @@
-# 01 — Arquitectura
+# 01 — Architecture
 
-## 1. Vista general
+> Versión en español: [`es/01-ARQUITECTURA.md`](es/01-ARQUITECTURA.md)
+
+## 1. Overview
 
 ```
 ┌─────────────────────┐   ┌─────────────────────┐
@@ -8,7 +10,7 @@
 │  SwiftUI + GRDB     │   │  WinUI 3 + C#       │
 └──────┬───────┬──────┘   └──────┬───────┬──────┘
        │       │                 │       │
-   FFI │       │ lectura     FFI │       │ lectura
+   FFI │       │ read        FFI │       │ read
  (~10 fn)      │ SQLite    (~10 fn)      │ SQLite
        │       │  R/O            │       │  R/O
 ┌──────▼───────┴─────────────────▼───────┴──────┐
@@ -18,56 +20,56 @@
        │
 ┌──────▼─────────────────────────────────────────┐
 │  crawlforge-core                                │
-│  planificador · fetch · parseo · almacén        │
+│  scheduler · fetch · parse · store              │
 │  ┌──────────────┐ ┌──────────────┐ ┌─────────┐ │
 │  │ -rules       │ │ -adapters    │ │ -hub    │ │
 │  └──────────────┘ └──────────────┘ └────┬────┘ │
 └─────────────────────────────────────────┼──────┘
        │                                  │ sqlx
-       ▼ escribe                          ▼
+       ▼ writes                           ▼
   ┌──────────┐                   ┌──────────────────┐
   │ crawl_N  │                   │ Postgres/MariaDB │
-  │ .sqlite  │                   │  (agregados)     │
+  │ .sqlite  │                   │  (aggregates)    │
   └──────────┘                   └──────────────────┘
        ▲
-       │ mismo core
+       │ same core
 ┌──────┴──────────┐
-│ crawlforge-cli  │  → CI, cron, uso interno
+│ crawlforge-cli  │  → CI, cron, internal use
 └─────────────────┘
 ```
 
-## 2. SQLite como frontera FFI
+## 2. SQLite as the FFI boundary
 
-**Este es el concepto central de la arquitectura.** Los datos no cruzan el puente FFI.
+**This is the central concept of the architecture.** Data does not cross the FFI bridge.
 
-El core escribe el resultado del rastreo en un fichero SQLite. La UI abre **ese mismo fichero** en
-solo lectura y lanza sus propias consultas. Por el FFI solo viajan órdenes de control y un
-`ProgressSnapshot` pequeño.
+The core writes the crawl result to a SQLite file. The UI opens **that same file** read-only and
+runs its own queries. Only control commands and a small `ProgressSnapshot` travel across the FFI.
 
-Consecuencias, todas buenas:
+Consequences, all of them good:
 
-- La superficie FFI queda en ~10 funciones y un callback. Escribirla a mano en C para Windows es
-  media jornada de trabajo, no una dependencia de riesgo.
-- Cada UI ordena, filtra y pagina con SQL nativo, aprovechando índices. Nada de reimplementar
-  ordenación en Swift o C#.
-- El core es testeable en Rust puro sin ninguna UI.
-- La CLI usa exactamente el mismo almacén: los ficheros son intercambiables entre CLI y app.
-- Un rastreo es **un fichero**. Se comprime y se envía a un cliente. Ventaja de UX enorme.
+- The FFI surface stays at ~10 functions and one callback. Writing it by hand in C for Windows is
+  half a day of work, not a risky dependency.
+- Each UI sorts, filters and paginates with native SQL, riding on indexes. No reimplementing
+  sorting in Swift or C#.
+- The core is testable in pure Rust without any UI.
+- The CLI uses exactly the same store: files are interchangeable between CLI and app.
+- A crawl is **one file**. Compress it and send it to a client. Huge UX advantage.
 
-**Reglas:**
-- La UI abre la conexión con `mode=ro` y `immutable=false` (el core puede estar escribiendo en WAL).
-- Durante un rastreo activo, la UI refresca por polling cada 500 ms sobre la vista de progreso,
-  no por notificación de fila.
-- La UI **nunca** escribe en el fichero de rastreo. Preferencias y estado de vista van en su propio
-  almacén (`UserDefaults` / `ApplicationData`).
+**Rules:**
+- The UI opens the connection with `mode=ro` and `immutable=false` (the core may be writing to
+  the WAL).
+- During an active crawl, the UI refreshes by polling the progress view every 500 ms, not by
+  row notification.
+- The UI **never** writes to the crawl file. Preferences and view state live in their own store
+  (`UserDefaults` / `ApplicationData`).
 
 ## 3. Crates
 
 ### `crawlforge-core`
-El motor. No conoce UI ni FFI. Expone:
+The engine. Knows nothing about UI or FFI. Exposes:
 
 ```rust
-pub struct Engine { /* pool tokio, config, almacén */ }
+pub struct Engine { /* tokio pool, config, store */ }
 
 impl Engine {
     pub fn new(config: EngineConfig) -> Result<Self>;
@@ -80,11 +82,12 @@ impl Engine {
 }
 ```
 
-Submódulos: `frontier` (cola y planificación), `fetch` (HTTP + sistema de ficheros), `parse`
-(extracción con `lol_html`), `store` (SQLite), `normalize` (canonicalización de URL), `robots`.
+Submodules: `frontier` (queue and scheduling), `fetch` (HTTP + filesystem), `parse` (extraction
+with `lol_html`), `store` (SQLite), `normalize` (URL canonicalization), `robots`.
 
 ### `crawlforge-rules`
-Crate aparte deliberadamente: las reglas son el producto y evolucionan a otro ritmo que el motor.
+A separate crate on purpose: the rules are the product and evolve at a different pace than the
+engine.
 
 ```rust
 pub trait Rule: Send + Sync {
@@ -96,73 +99,73 @@ pub trait Rule: Send + Sync {
 }
 ```
 
-Dos modos de evaluación:
-- **Por página** (`PageRule`): se evalúa durante el rastreo, en streaming. Barato.
-- **Sobre el conjunto** (`SiteRule`): requiere el rastreo completo (duplicados, huérfanas,
-  profundidad). Se ejecuta en una pasada final con SQL sobre el almacén.
+Two evaluation modes:
+- **Per page** (`PageRule`): evaluated during the crawl, streaming. Cheap.
+- **Over the whole set** (`SiteRule`): needs the complete crawl (duplicates, orphans, depth).
+  Runs in a final pass with SQL over the store.
 
 ### `crawlforge-adapters`
-`trait SiteAdapter` y sus implementaciones. Ver `05-ADAPTADORES.md`.
+`trait SiteAdapter` and its implementations. See `05-ADAPTADORES.md`.
 
 ### `crawlforge-hub`
-**Único crate que usa `sqlx`.** Sincroniza agregados a Postgres o MariaDB. Opcional, nivel Pro.
-Aislado para que una compilación sin la feature `hub` no arrastre las dependencias.
+**The only crate that uses `sqlx`.** Syncs aggregates to Postgres or MariaDB. Optional, Pro tier.
+Isolated so that a build without the `hub` feature does not drag in its dependencies.
 
 ### `crawlforge-ffi`
-Dos módulos hermanos sobre la misma lógica:
-- `swift`: `#[uniffi::export]`, se compila a XCFramework.
-- `c`: `#[no_mangle] extern "C"`, cabecera generada con `cbindgen`, se compila a `cdylib`.
+Two sibling modules over the same logic:
+- `swift`: `#[uniffi::export]`, compiled into an XCFramework.
+- `c`: `#[no_mangle] extern "C"`, header generated with `cbindgen`, compiled to a `cdylib`.
 
-**Ninguna función FFI es `async`.** El core gestiona sus propios hilos; el progreso se comunica por
-callback registrado o por polling.
+**No FFI function is `async`.** The core manages its own threads; progress is reported through a
+registered callback or by polling.
 
 ### `crawlforge-cli`
-Interfaz de línea de comandos con `clap`. Es a la vez herramienta interna, producto del nivel Agency
-y banco de pruebas.
+Command-line interface built on `clap`. It is at once internal tool, Agency-tier product and
+test bench.
 
-## 3.bis Decisión sobre `spider-rs` — cerrada
+## 3.bis The `spider-rs` decision — closed
 
-**`spider` se usa como referencia, no como dependencia.** Escribimos nuestro propio planificador.
-Decidido tras evaluarlo con el motor delante. **No se reabre.**
+**`spider` is used as a reference, not as a dependency.** We write our own scheduler. Decided
+after evaluating it with the engine in front of us. **Not up for reopening.**
 
-Es un crate maduro y rápido (2M descargas, MIT). Los motivos de no depender de él son cuatro:
+It is a mature, fast crate (2M downloads, MIT). The reasons for not depending on it are four:
 
-1. **Cadencia de publicación.** 11 versiones entre el 23 de junio y el 23 de julio de 2026. Anclar
-   el hot path del producto a una API que se mueve así convierte cada actualización en trabajo de
-   mantenimiento sobre la pieza más crítica.
-2. **Choca con la decisión cerrada #2.** `spider` trae su propio modelo de página y su propia
-   gestión de resultados. Nosotros escribimos a SQLite por lotes desde un único hilo escritor, y
-   el fichero *es* la frontera con la UI. Adaptar su salida a eso cuesta aproximadamente lo mismo
-   que escribir el `frontier`, y nos deja con una capa de traducción que mantener para siempre.
-3. **Necesitamos control fino del parseo.** El `PageAccumulator` de una sola pasada con `lol_html`
-   (§5 de `03-MOTOR-CRAWL.md`) depende del orden de aparición de los elementos: primer `h1`,
-   jerarquía de encabezados, `region` deducida del ancestro semántico, posición del enlace. Eso es
-   nuestro, no delegable.
-4. **Build de tienda.** Una superficie de dependencias amplia es riesgo directo en firma,
-   notarización y sandbox, donde los problemas aparecen tarde y caros.
+1. **Release cadence.** 11 releases between June 23 and July 23, 2026. Pinning the product's hot
+   path to an API that moves like that turns every update into maintenance work on the most
+   critical piece.
+2. **It collides with closed decision #2.** `spider` brings its own page model and its own result
+   handling. We write to SQLite in batches from a single writer thread, and the file *is* the
+   boundary with the UI. Adapting its output to that costs roughly the same as writing the
+   `frontier`, and leaves us with a translation layer to maintain forever.
+3. **We need fine-grained control of parsing.** The single-pass `PageAccumulator` built on
+   `lol_html` (§5 of `03-MOTOR-CRAWL.md`) depends on the order elements appear in: first `h1`,
+   heading hierarchy, `region` derived from the semantic ancestor, link position. That is ours,
+   not delegable.
+4. **Store builds.** A wide dependency surface is direct risk in signing, notarization and
+   sandboxing, where problems show up late and expensive.
 
-Lo que sí tomamos de él como referencia al escribir el planificador: su control de concurrencia y
-su estrategia de caché.
+What we do take from it as a reference when writing the scheduler: its concurrency control and
+its cache strategy.
 
-## 4. Superficie FFI completa
+## 4. The complete FFI surface
 
-Diez funciones. Si crece más allá de quince, es que estás pasando datos por el puente. Revisa §2.
+Ten functions. If it grows past fifteen, you are pushing data across the bridge. Reread §2.
 
 ```
 engine_create(config_json: String) -> EngineHandle
 engine_destroy(h)
 
-crawl_start(h, job_json: String) -> String        // devuelve crawl_id (uuid)
+crawl_start(h, job_json: String) -> String        // returns crawl_id (uuid)
 crawl_pause(h, crawl_id)
 crawl_resume(h, crawl_id)
 crawl_cancel(h, crawl_id)
-crawl_progress(h, crawl_id) -> ProgressSnapshot   // struct plano, ~12 campos
+crawl_progress(h, crawl_id) -> ProgressSnapshot   // flat struct, ~12 fields
 crawl_store_path(h, crawl_id) -> String
 
-crawl_diff(h, path_a, path_b, out_path)           // genera un SQLite de diff
+crawl_diff(h, path_a, path_b, out_path)           // produces a diff SQLite file
 export(h, crawl_id, format, out_path)             // csv | xlsx | parquet | html
 
-set_progress_callback(h, cb)                      // opcional, alternativa al polling
+set_progress_callback(h, cb)                      // optional, alternative to polling
 last_error(h) -> String
 ```
 
@@ -170,56 +173,57 @@ last_error(h) -> String
 `urls_errored`, `issues_found`, `bytes_downloaded`, `elapsed_ms`, `eta_ms`, `current_rate_per_s`,
 `current_url`.
 
-## 5. Concurrencia
+## 5. Concurrency
 
-- Un runtime `tokio` multi-hilo por `Engine`.
-- **Un limitador por host**, no global — el `Throttle` propio de `throttle.rs`, consultado con
-  el host de cada URL. (`governor` se descartó: modela un ritmo, no conexiones simultáneas, y no
-  trae el freno adaptativo; razonamiento en la cabecera de `throttle.rs`.) Un rastreo de un solo
-  dominio va limitado por la
-  concurrencia configurada para ese host (por defecto 5, máximo 20); un rastreo de cartera con 20
-  dominios puede ir a 100 peticiones en vuelo sin castigar a ningún servidor.
-- Respeto obligatorio de `Crawl-delay` de robots.txt cuando existe.
-- **Backoff exponencial con jitter** ante 429 y 5xx. Tres reintentos, luego se marca la URL como
-  errónea y se continúa. Un fallo nunca aborta el rastreo.
-- Escrituras a SQLite **por lotes** desde un único hilo escritor que consume un canal `mpsc`.
-  Nunca escribas desde los workers: la contención de WAL con 20 escritores es peor que el propio
-  rastreo. Lote por defecto: 200 URLs o 2 segundos, lo que llegue antes.
-- La cola (`frontier`) vive en memoria con desbordamiento a SQLite si supera 100.000 URLs pendientes.
+- One multi-threaded `tokio` runtime per `Engine`.
+- **One limiter per host**, not global — the in-house `Throttle` from `throttle.rs`, looked up
+  with each URL's host. (`governor` was rejected: it models a rate, not simultaneous connections,
+  and lacks the adaptive brake; reasoning in the header of `throttle.rs`.) A single-domain crawl
+  is bounded by the
+  concurrency configured for that host (default 5, maximum 20); a portfolio crawl across 20
+  domains can run 100 requests in flight without punishing any one server.
+- Honoring the robots.txt `Crawl-delay` is mandatory whenever one exists.
+- **Exponential backoff with jitter** on 429 and 5xx. Three retries, then the URL is marked as
+  errored and the crawl moves on. A failure never aborts the crawl.
+- SQLite writes happen **in batches** from a single writer thread consuming an `mpsc` channel.
+  Never write from the workers: WAL contention with 20 writers is worse than the crawl itself.
+  Default batch: 200 URLs or 2 seconds, whichever comes first.
+- The queue (`frontier`) lives in memory, spilling over to SQLite past 100,000 pending URLs.
 
-## 6. Los dos únicos `#[cfg]` de plataforma
+## 6. The only two platform `#[cfg]`s
 
-Todo lo demás debe ser idéntico entre tienda y build directo.
+Everything else must be identical between store and direct builds.
 
 ```rust
-#[cfg(feature = "render_cdp")]      // build directo: chromiumoxide contra Chrome del sistema
-#[cfg(feature = "render_webview")]  // tienda: WKWebView / WebView2, in-process
+#[cfg(feature = "render_cdp")]      // direct build: chromiumoxide against the system Chrome
+#[cfg(feature = "render_webview")]  // store: WKWebView / WebView2, in-process
 
-#[cfg(feature = "scheduler_daemon")] // build directo: servicio de fondo
-#[cfg(feature = "scheduler_in_app")] // tienda: app abierta o login item
+#[cfg(feature = "scheduler_daemon")] // direct build: background service
+#[cfg(feature = "scheduler_in_app")] // store: app open, or login item
 ```
 
-Si te encuentras añadiendo un tercer `#[cfg]` de plataforma, párate y consulta: probablemente hay
-una solución in-process que mantiene la paridad.
+If you find yourself adding a third platform `#[cfg]`, stop and ask: there is probably an
+in-process solution that keeps parity.
 
-## 7. Manejo de errores
+## 7. Error handling
 
-- `crawlforge-core` define `CoreError` con `thiserror`. Variantes explícitas, nunca `Box<dyn Error>`.
-- Errores de red por URL **no son errores del rastreo**: se guardan en la fila de la URL y el
-  rastreo sigue.
-- El FFI nunca hace panic. Todo `Result` se traduce a un código de error + `last_error()`. Un panic
-  cruzando el límite FFI es comportamiento indefinido: envuelve el punto de entrada en
+- `crawlforge-core` defines `CoreError` with `thiserror`. Explicit variants, never
+  `Box<dyn Error>`.
+- Per-URL network errors **are not crawl errors**: they are stored on the URL's row and the
+  crawl continues.
+- The FFI never panics. Every `Result` is translated into an error code plus `last_error()`. A
+  panic crossing the FFI boundary is undefined behavior: wrap the entry point in
   `catch_unwind`.
 
-## 8. Rendimiento — objetivos medibles
+## 8. Performance — measurable targets
 
-Se verifican con el banco de pruebas y se convierten en tests de regresión.
+Verified with the benchmark harness and turned into regression tests.
 
-| Métrica | Objetivo | Referencia |
+| Metric | Target | Reference |
 |---|---|---|
-| Rastreo HTTP, sitio de 10k URLs | > 150 URL/s | Screaming Frog: ~50-80 |
-| Rastreo de sistema de ficheros (`dist/`) | > 2.000 URL/s | No tiene equivalente |
-| RAM con 500k URLs rastreadas | < 500 MB | SF necesita configurar el heap de la JVM |
-| Apertura de tabla con 500k filas en la UI | < 300 ms | |
-| Scroll de la tabla | 60 fps sostenidos | |
-| Tamaño del instalador | < 40 MB | |
+| HTTP crawl, 10k-URL site | > 150 URL/s | Screaming Frog: ~50-80 |
+| Filesystem crawl (`dist/`) | > 2,000 URL/s | Has no equivalent |
+| RAM with 500k URLs crawled | < 500 MB | SF requires tuning the JVM heap |
+| Opening a 500k-row table in the UI | < 300 ms | |
+| Table scrolling | sustained 60 fps | |
+| Installer size | < 40 MB | |

@@ -101,32 +101,15 @@ mod tests {
         let dir = std::env::temp_dir()
             .join(format!("crawlforge-check-{}-{nombre}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("crear el directorio temporal");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }
 
-    /// Un fichero de rastreo con el **esquema real**: las migraciones del core, no una copia
-    /// parecida que haría pasar el test y fallar el comando.
+    /// A crawl file with the **real schema**: every published migration, from the shared
+    /// helper in `test_schema.rs` — not a similar-looking copy that would pass the test and
+    /// fail the command.
     fn crawl_file(path: &Path) -> Connection {
-        let conn = Connection::open(path).expect("crear el fichero de rastreo");
-        conn.execute_batch(
-            "CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL);",
-        )
-        .expect("crear schema_version");
-        for sql in [
-            include_str!("../../crawlforge-core/migrations/001_initial.sql"),
-            include_str!("../../crawlforge-core/migrations/002_truncated.sql"),
-            include_str!("../../crawlforge-core/migrations/003_orphans_exclude_seed.sql"),
-            include_str!("../../crawlforge-core/migrations/004_robots_y_sitemaps.sql"),
-        ] {
-            conn.execute_batch(sql).expect("aplicar la migración");
-        }
-        conn.execute(
-            "INSERT INTO schema_version (version, applied_at) VALUES (4, datetime('now'))",
-            [],
-        )
-        .expect("versión de esquema");
-        conn
+        crate::test_schema::crawl_file(path)
     }
 
     fn crawl_meta(conn: &Connection, started_at: &str) {
@@ -137,7 +120,7 @@ mod tests {
              VALUES ('c','p','P','https://ejemplo.es/','http', ?1, 'done','{}','0','0','free',0)",
             [started_at],
         )
-        .expect("insertar crawl_meta");
+        .expect("insert crawl_meta");
     }
 
     #[test]
@@ -146,8 +129,8 @@ mod tests {
         let path = dir.join("crawl.sqlite");
         drop(crawl_file(&path));
 
-        assert_eq!(identify(&path).expect("identificar"), StoreKind::Crawl);
-        ensure_crawl_store(&path).expect("un rastreo tiene que pasar");
+        assert_eq!(identify(&path).expect("identify"), StoreKind::Crawl);
+        ensure_crawl_store(&path).expect("a crawl must pass");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -165,24 +148,24 @@ mod tests {
             crawl_meta(&conn, cuando);
         }
         let salida = dir.join("miweb-diff.sqlite");
-        crate::diff::compare(&antes, &despues, Some(&salida), &[]).expect("generar el diff real");
+        crate::diff::compare(&antes, &despues, Some(&salida), &[]).expect("generate the real diff");
 
-        assert_eq!(identify(&salida).expect("identificar"), StoreKind::Diff);
-        let err = ensure_crawl_store_lang(&salida, Lang::En).expect_err("un diff no es un rastreo");
+        assert_eq!(identify(&salida).expect("identify"), StoreKind::Diff);
+        let err = ensure_crawl_store_lang(&salida, Lang::En).expect_err("a diff is not a crawl");
         let msg = format!("{err:#}");
-        assert!(msg.contains("is a diff file"), "dice qué es: {msg}");
-        assert!(msg.contains("diff --out"), "y de dónde salió: {msg}");
+        assert!(msg.contains("is a diff file"), "says what it is: {msg}");
+        assert!(msg.contains("diff --out"), "and where it came from: {msg}");
         assert!(
             msg.contains("crawl") && msg.contains("audit"),
-            "y qué comandos generan lo que hacía falta: {msg}"
+            "and which commands produce what was needed: {msg}"
         );
-        assert!(!msg.contains("no such table"), "sin jerga de SQLite: {msg}");
+        assert!(!msg.contains("no such table"), "no SQLite jargon: {msg}");
 
         // El mismo callejón, explicado en español y con los comandos intactos.
-        let err = ensure_crawl_store_lang(&salida, Lang::Es).expect_err("un diff no es un rastreo");
+        let err = ensure_crawl_store_lang(&salida, Lang::Es).expect_err("a diff is not a crawl");
         let msg = format!("{err:#}");
-        assert!(msg.contains("es un fichero de diff"), "dice qué es: {msg}");
-        assert!(msg.contains("diff --out"), "los comandos no se traducen: {msg}");
+        assert!(msg.contains("es un fichero de diff"), "says what it is: {msg}");
+        assert!(msg.contains("diff --out"), "commands are not translated: {msg}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -191,15 +174,15 @@ mod tests {
         let dir = tmpdir("ajeno");
         let path = dir.join("ajeno.sqlite");
         {
-            let conn = Connection::open(&path).expect("crear");
-            conn.execute_batch("CREATE TABLE cosas (id INTEGER);").expect("tabla ajena");
+            let conn = Connection::open(&path).expect("create");
+            conn.execute_batch("CREATE TABLE cosas (id INTEGER);").expect("foreign table");
         }
 
-        assert_eq!(identify(&path).expect("identificar"), StoreKind::Foreign);
-        let err = ensure_crawl_store_lang(&path, Lang::En).expect_err("no es un rastreo");
+        assert_eq!(identify(&path).expect("identify"), StoreKind::Foreign);
+        let err = ensure_crawl_store_lang(&path, Lang::En).expect_err("not a crawl");
         let msg = format!("{err:#}");
         assert!(msg.contains("does not have its tables"), "{msg}");
-        assert!(!msg.contains("no such table"), "sin jerga de SQLite: {msg}");
+        assert!(!msg.contains("no such table"), "no SQLite jargon: {msg}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -208,10 +191,10 @@ mod tests {
         let dir = tmpdir("texto");
         let path = dir.join("notas.sqlite");
         std::fs::write(&path, "esto es un fichero de texto con extensión mentirosa\n")
-            .expect("escribir");
+            .expect("write");
 
-        assert_eq!(identify(&path).expect("identificar"), StoreKind::NotSqlite);
-        let err = ensure_crawl_store_lang(&path, Lang::En).expect_err("no es SQLite");
+        assert_eq!(identify(&path).expect("identify"), StoreKind::NotSqlite);
+        let err = ensure_crawl_store_lang(&path, Lang::En).expect_err("not SQLite");
         assert!(format!("{err:#}").contains("SQLite database"), "{err:#}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -224,8 +207,8 @@ mod tests {
         drop(crawl_file(&path));
         let antes = std::fs::metadata(&path).and_then(|m| m.modified()).expect("mtime");
 
-        identify(&path).expect("identificar");
-        ensure_crawl_store(&path).expect("comprobar");
+        identify(&path).expect("identify");
+        ensure_crawl_store(&path).expect("check");
 
         let despues = std::fs::metadata(&path).and_then(|m| m.modified()).expect("mtime");
         assert_eq!(antes, despues);

@@ -1,81 +1,94 @@
-# 03 — Motor de rastreo
+# 03 — Crawl engine
 
-## 1. Los tres modos
+> Versión en español: [`es/03-MOTOR-CRAWL.md`](es/03-MOTOR-CRAWL.md)
 
-| Modo | Origen | Uso |
+## 1. The three modes
+
+| Mode | Source | Use |
 |---|---|---|
-| `http` | Rastreo desde una URL semilla | Modo normal |
-| `filesystem` | Directorio local (`dist/`, `public/`, `_site/`) | Auditoría pre-deploy. **Diferenciador** |
-| `list` | Lista de URLs pegada o importada | Auditar un conjunto concreto. Muy demandado, coste casi nulo |
+| `http` | Crawl from a seed URL | Normal mode |
+| `filesystem` | Local directory (`dist/`, `public/`, `_site/`) | Pre-deploy audit. **Differentiator** |
+| `list` | Pasted or imported list of URLs | Audit a specific set. In high demand, near-zero cost |
 
-Los tres desembocan en el mismo pipeline de parseo, reglas y almacén. Solo cambia la fuente de bytes:
+All three flow into the same parsing, rules and storage pipeline. Only the source of bytes changes:
 
 ```rust
 trait Fetcher: Send + Sync {
     async fn fetch(&self, target: &Target) -> Result<FetchedDoc>;
 }
-// HttpFetcher · FilesystemFetcher · WebviewFetcher (render JS, Pro)
+// HttpFetcher · FilesystemFetcher · WebviewFetcher (JS rendering, Pro)
 ```
 
-**El modo `filesystem` es lo que Screaming Frog no puede hacer.** Se resuelven las rutas como lo
-haría el servidor (`/about` → `about/index.html` o `about.html`), se reescriben los enlaces contra
-`--base`, y se rastrean miles de páginas en segundos sin red.
+**The `filesystem` mode is what Screaming Frog cannot do.** Paths are resolved the way the server
+would (`/about` → `about/index.html` or `about.html`), links are rewritten against `--base`, and
+thousands of pages are crawled in seconds with no network.
 
-## 2. Ciclo de vida
+**The `list` mode audits exactly the requested set, and the file knows it.** Each page's links are
+a property of that page and all of them are recorded —the target gets its row in `urls` with
+`crawl_state='skipped'`—, but **nothing outside the list is downloaded**: not link targets, not
+redirect targets, not the URLs the sitemaps declare (those are recorded with `in_sitemap=1`; the
+cross-check is information, not an expansion of the crawl). External URLs are checked the same way
+as in `http` mode (§9). And since the pages linking to a given page are never downloaded, the link
+graph is incomplete **by definition**: every list-mode crawl sets `crawl_meta.truncated=1` with
+`truncated_reason='list_mode'`, which turns off the `REQUIERE_GRAFO_COMPLETO` rules and keeps
+`diff` from asserting absences over it. It is not a cutoff —the crawl did exactly what it was asked
+to do— so the CLI reports it with its own wording, never with the "truncated crawl" warning.
+
+## 2. Lifecycle
 
 ```
-semillas (URL | sitemap | directorio | lista)
-   → normalizar
-   → ¿vista ya? (índice url_hash en memoria)
-   → ¿permitida? (robots, patrones de inclusión/exclusión, profundidad, límite de nivel)
-   → encolar en frontier (prioridad por profundidad)
-   → fetch (con hueco libre en el límite de concurrencia del host)
-   → parsear (lol_html, streaming)
-   → extraer enlaces → volver a normalizar
-   → evaluar PageRules
-   → enviar lote al hilo escritor
-   → [al agotar la cola] pasada final: SiteRules + métricas agregadas + FTS + VACUUM
+seeds (URL | sitemap | directory | list)
+   → normalize
+   → seen already? (in-memory url_hash index)
+   → allowed? (robots, include/exclude patterns, depth, tier limit)
+   → enqueue in frontier (priority by depth)
+   → fetch (with a free slot in the host's concurrency limit)
+   → parse (lol_html, streaming)
+   → extract links → normalize again
+   → evaluate PageRules
+   → send batch to the writer thread
+   → [queue drained] final pass: SiteRules + aggregate metrics + FTS + VACUUM
 ```
 
-## 3. Normalización de URL
+## 3. URL normalization
 
-El error más común y el más caro: rastrear la misma página cincuenta veces con querystrings
-distintas. Reglas, en este orden:
+The most common and most expensive mistake: crawling the same page fifty times with different
+querystrings. Rules, in this order:
 
-1. Minúsculas en esquema y host. **Nunca en la ruta** (puede ser sensible a mayúsculas).
-2. Eliminar puerto por defecto (`:80` en http, `:443` en https).
-3. Resolver `.` y `..`.
-4. Decodificar percent-encoding innecesario; recodificar de forma consistente.
-5. Eliminar el fragmento (`#...`) salvo que empiece por `#!` (hashbang legado).
-6. **Ordenar los parámetros de query alfabéticamente.**
-7. Eliminar parámetros de la lista de descarte configurable. Por defecto: `utm_*`, `gclid`,
-   `fbclid`, `msclkid`, `mc_cid`, `mc_eid`, `_ga`, `ref`, `si`.
-8. Normalizar barra final según lo que responda el servidor en la primera resolución del host,
-   no según una suposición.
-9. IDN a Punycode.
+1. Lowercase scheme and host. **Never the path** (it may be case-sensitive).
+2. Remove the default port (`:80` on http, `:443` on https).
+3. Resolve `.` and `..`.
+4. Decode unnecessary percent-encoding; re-encode consistently.
+5. Remove the fragment (`#...`) unless it starts with `#!` (legacy hashbang).
+6. **Sort query parameters alphabetically.**
+7. Remove parameters on the configurable strip list. By default: `utm_*`, `gclid`, `fbclid`,
+   `msclkid`, `mc_cid`, `mc_eid`, `_ga`, `ref`, `si`.
+8. Normalize the trailing slash according to what the server answers on the host's first
+   resolution, not according to an assumption.
+9. IDN to Punycode.
 
-Guardar siempre **ambas**: la URL original tal como aparece en el HTML (para los informes) y la
-normalizada (para deduplicar).
+Always store **both**: the original URL as it appears in the HTML (for reports) and the normalized
+one (for deduplication).
 
-## 4. robots.txt y sitemaps
+## 4. robots.txt and sitemaps
 
-- Un `robots.txt` por host, cacheado durante todo el rastreo.
-- Se respeta `Disallow` para el user-agent configurado, con fallback a `*`.
-- `Crawl-delay` se respeta y **anula** la configuración de concurrencia del usuario para ese host.
-- Las URLs bloqueadas se registran con `crawl_state='excluded'`, `exclusion_reason='robots'`.
-  **No se ocultan**: saber qué está bloqueado es un hallazgo en sí mismo.
-- Modo "ignorar robots.txt" disponible solo tras confirmación explícita y con aviso de que solo
-  debe usarse en sitios propios.
-- Sitemaps: descubrir por `robots.txt` (`Sitemap:`), por `/sitemap.xml` y por `/sitemap_index.xml`.
-  Soportar índices anidados, `.gz` y sitemaps de imágenes y noticias. Marcar `in_sitemap = 1`.
-  El cruce sitemap ↔ enlaces es lo que produce los hallazgos de huérfanas.
+- One `robots.txt` per host, cached for the whole crawl.
+- `Disallow` is respected for the configured user-agent, with a fallback to `*`.
+- `Crawl-delay` is respected and **overrides** the user's concurrency setting for that host.
+- Blocked URLs are recorded with `crawl_state='excluded'`, `exclusion_reason='robots'`. **They are
+  not hidden**: knowing what is blocked is a finding in itself.
+- An "ignore robots.txt" mode is available only after explicit confirmation and with a warning
+  that it must only be used on sites you own.
+- Sitemaps: discover via `robots.txt` (`Sitemap:`), via `/sitemap.xml` and via
+  `/sitemap_index.xml`. Support nested indexes, `.gz`, and image and news sitemaps. Mark
+  `in_sitemap = 1`. The sitemap ↔ links cross-check is what produces the orphan findings.
 
-## 5. Parseo con `lol_html`
+## 5. Parsing with `lol_html`
 
-`lol_html` procesa en streaming mediante manejadores por selector, sin construir el DOM. Es la
-razón de rendimiento del proyecto: 5-10x más rápido que `scraper` en páginas grandes.
+`lol_html` processes in streaming through per-selector handlers, without building the DOM. It is
+the project's performance reason: 5-10x faster than `scraper` on large pages.
 
-Manejadores necesarios en una sola pasada:
+Handlers needed in a single pass:
 
 ```
 title, meta[name=description], meta[name=robots], meta[name=viewport]
@@ -85,142 +98,146 @@ h1..h6
 a[href], img[src], img[srcset], script[src], link[rel=stylesheet], iframe[src]
 meta[property^=og:], meta[name^=twitter:]
 script[type="application/ld+json"]
-nav, main, footer, aside          → para deducir `region` de los enlaces
+nav, main, footer, aside          → to infer the links' `region`
 ```
 
-**Cuidado con el estado:** el orden de aparición importa (primer `h1`, jerarquía de encabezados,
-posición de enlaces). Mantén un `struct PageAccumulator` mutable a lo largo de la pasada.
+**Watch the state:** order of appearance matters (first `h1`, heading hierarchy, link position).
+Keep a mutable `struct PageAccumulator` across the pass.
 
-Texto de cuerpo: acumular solo si el nivel lo permite (`word_count` siempre, texto completo para
-FTS solo en Pro). Excluir el contenido de `<script>`, `<style>`, `<nav>`, `<footer>` del recuento
-de palabras.
+Body text: accumulate only if the tier allows it (`word_count` always, full text for FTS only on
+Pro). Exclude the content of `<script>`, `<style>`, `<nav>`, `<footer>` from the word count.
 
-## 6. Indexabilidad
+## 6. Indexability
 
-Regla central de todo el producto. Una página es indexable si **todas** se cumplen:
+The central rule of the whole product. A page is indexable if **all** of these hold:
 
-1. Código de estado 200.
-2. `Content-Type` es HTML.
-3. No hay `noindex` en `meta robots` ni en cabecera `X-Robots-Tag`.
-4. No está bloqueada por `robots.txt`.
-5. El canonical apunta a sí misma o está ausente.
-6. No es el origen de una redirección.
+1. Status code 200.
+2. `Content-Type` is HTML.
+3. No `noindex` in `meta robots` or in the `X-Robots-Tag` header.
+4. Not blocked by `robots.txt`.
+5. The canonical points to itself or is absent.
+6. It is not the origin of a redirect.
 
-Se guarda siempre el motivo en `indexability_reason`. La pregunta "¿por qué esta página no está en
-Google?" se responde con esa columna, y es la consulta más frecuente que hace un SEO.
+The reason is always stored in `indexability_reason`. The question "why is this page not on
+Google?" is answered with that column, and it is the most frequent query an SEO makes.
 
-## 7. Reintentos y resiliencia
+## 7. Retries and resilience
 
 ```
-timeout de conexión: 10 s
-timeout total por petición: 30 s
-reintentos: 3, backoff exponencial con jitter (1s, 2s, 4s ±50%)
-reintentar en: 429, 500, 502, 503, 504, timeout, error de conexión
-no reintentar en: 4xx salvo 429, error TLS, error DNS
-límite de tamaño de respuesta: 10 MB (configurable). Superarlo → error_kind='toolarge'
+connection timeout: 10 s
+total timeout per request: 30 s
+retries: 3, exponential backoff with jitter (1s, 2s, 4s ±50%)
+retry on: 429, 500, 502, 503, 504, timeout, connection error
+do not retry on: 4xx except 429, TLS error, DNS error
+response size limit: 10 MB (configurable). Exceeding it → error_kind='toolarge'
 ```
 
-Ante tres 429 consecutivos del mismo host, **reducir automáticamente su concurrencia a la mitad**
-y avisar en la UI. Un crawler que tumba el servidor del cliente es un crawler inservible.
+After three consecutive overload responses from the same host —**429 or 503**— automatically halve
+its concurrency and warn in the UI. A crawler that takes down the client's server is a useless
+crawler. The 503 counts because a saturated Varnish or Cloudflare answers 503 rather than 429 and
+the effect on the server is the same: telling them apart would be faithful to the letter of this
+document and unfaithful to its reason. Recovery is deliberately slower than the braking — halved
+at once, raised one point at a time after a run of good responses.
 
-Un rastreo interrumpido (cierre de la app, corte de red) debe poder reanudarse: la cola pendiente
-vive en `urls` con `crawl_state='pending'`, así que reanudar es releer esa tabla.
+An interrupted crawl (app closed, network drop) must be resumable: the pending queue lives in
+`urls` with `crawl_state='pending'`, so resuming is re-reading that table.
 
-Hecho en `engine::resume` (CLI: `crawlforge resume <fichero>`). Semántica cerrada:
+Done in `engine::resume` (CLI: `crawlforge resume <file>`). Settled semantics:
 
-- **La configuración que manda es la del rastreo original** (`crawl_meta.config_json`), y no se
-  aceptan flags nuevos: reanudar tiene que dar el mismo resultado que no haber parado. Con otra
-  configuración se rastrea de nuevo, no se reanuda.
-- Las `pending` vuelven al frontier con su `depth` guardado: el orden BFS sobrevive al corte.
-- Un corte cooperativo (Ctrl+C en la CLI, `CancelSignal` en el motor) vacía el hilo escritor y
-  deja `status='paused'`; un corte brusco (kill, cuelgue) deja `status='running'`. Los dos se
-  reanudan. La pasada final no se ejecuta al interrumpir: la ejecuta quien termina.
-- **No se reanuda**: un rastreo terminado (`status='done'`), un fichero de otra versión de
-  esquema ni uno cuya configuración guardada no se pueda leer.
+- **The configuration that rules is the original crawl's** (`crawl_meta.config_json`), and no new
+  flags are accepted: resuming has to give the same result as never having stopped. With a
+  different configuration you crawl again, you do not resume.
+- The `pending` URLs return to the frontier with their stored `depth`: the BFS order survives the
+  interruption.
+- A cooperative stop (Ctrl+C in the CLI, `CancelSignal` in the engine) drains the writer thread
+  and leaves `status='paused'`; an abrupt one (kill, crash) leaves `status='running'`. Both
+  resume. The final pass does not run on interruption: whoever finishes runs it.
+- **Not resumable**: a finished crawl (`status='done'`), a file from another schema version, or
+  one whose stored configuration cannot be read.
 
-## 8. Renderizado JavaScript (Pro, previsto)
+## 8. JavaScript rendering (Pro, planned)
 
-Dos implementaciones tras la misma interfaz:
+Two implementations behind the same interface:
 
-| Build | Motor | Fidelidad |
+| Build | Engine | Fidelity |
 |---|---|---|
-| Tienda | WKWebView (macOS) / **WebView2 = Chromium** (Windows) | Windows: alta. macOS: WebKit, suficiente para el 95% de casos |
-| Directo (Agency) | `chromiumoxide` → CDP contra el Chrome instalado | Alta, con interceptación fina de peticiones |
+| Store | WKWebView (macOS) / **WebView2 = Chromium** (Windows) | Windows: high. macOS: WebKit, enough for 95% of cases |
+| Direct (Agency) | `chromiumoxide` → CDP against the installed Chrome | High, with fine-grained request interception |
 
-Reglas comunes:
-- El render es **opt-in por proyecto**, nunca por defecto. Es 20-50x más lento.
-- Concurrencia de render limitada a 2-4 instancias, independientemente de la concurrencia HTTP.
-- Comparar siempre HTML crudo vs. HTML renderizado y registrar la diferencia: enlaces que solo
-  existen tras hidratar, contenido inyectado, canonical modificado por JS. **Esa comparación es un
-  hallazgo en sí misma** y es una de las cosas por las que se paga.
-- Tiempo de espera: `networkidle` con techo de 15 s.
+Common rules:
+- Rendering is **opt-in per project**, never the default. It is 20-50x slower.
+- Render concurrency capped at 2-4 instances, regardless of HTTP concurrency.
+- Always compare raw HTML vs. rendered HTML and record the difference: links that only exist after
+  hydration, injected content, canonical modified by JS. **That comparison is a finding in
+  itself** and one of the things people pay for.
+- Wait condition: `networkidle` with a 15 s ceiling.
 
-## 9. Presupuesto de rastreo y límites
+## 9. Crawl budget and limits
 
 ```rust
 struct CrawlLimits {
-    max_urls: Option<u64>,        // Free: 1_000 (forzado por EntitlementSource)
+    max_urls: Option<u64>,        // Free: 1_000 (enforced by EntitlementSource)
     max_depth: Option<u32>,
     max_duration: Option<Duration>,
     max_size_per_url: u64,
-    include_patterns: Vec<Regex>,
-    exclude_patterns: Vec<Regex>,
-    follow_external: bool,        // por defecto: solo comprobar estado, no rastrear
-    check_external: bool,         // esa comprobación de estado; activada por defecto
-    max_external: u64,            // tope de externas comprobadas; 10_000 por defecto
+    include_patterns: Vec<String>,   // compiled in `pattern.rs`, not stored compiled
+    exclude_patterns: Vec<String>,
+    follow_external: bool,        // default: only check status, do not crawl
+    check_external: bool,         // that status check; enabled by default
+    max_external: u64,            // cap on externals checked; 10_000 by default
     respect_nofollow: bool,
-    concurrency_per_host: u8,     // 1..=20, por defecto 5
+    concurrency_per_host: u8,     // 1..=20, default 5
     user_agent: String,
+    ignore_robots: bool,          // crawls what robots.txt forbids, and marks it
+    http_basic_auth: Option<Credential>,  // #[serde(skip)]: never reaches config_json
 }
 ```
 
-**El límite del nivel Free se aplica en el core, no en la UI.** Al alcanzarlo, el rastreo termina
-limpiamente con `status='done'`, marca `truncated=true` en `crawl_meta`, y **muestra todos los
-hallazgos encontrados hasta ahí**. No se ocultan resultados: se limita la escala. Ver
-`00-VISION.md §6`.
+**The Free tier limit is enforced in the core, not in the UI.** On reaching it, the crawl ends
+cleanly with `status='done'`, sets `truncated=true` in `crawl_meta`, and **shows every finding
+gathered up to that point**. Results are not hidden: scale is limited.
 
-**La comprobación de externas es solo estado.** Una petición `HEAD` por URL externa única —con
-un `GET` de respaldo si el servidor responde 405/501—, con una sola petición en vuelo por host
-ajeno y un timeout más corto que el del rastreo: no se parsea, no se extraen enlaces, no se crea
-fila en `pages`; solo se rellena el estado de la fila de `urls`, que es lo que necesita
-`HTTP-404-EXTERNAL`. No se pide el `robots.txt` del host ajeno: comprobar que un enlace resuelve
-es lo que hace el navegador cuando el visitante lo pulsa, y pedirlo casi duplicaría las
-peticiones a terceros para poder decir menos. Las externas **no cuentan contra `max_urls`**, y
-alcanzar `max_external` **no marca `crawl_meta.truncated`** —ese campo apaga las reglas de
-`REQUIERE_GRAFO_COMPLETO`—: deja externas sin comprobar y el resumen dice cuántas.
+**The external check is status only.** One `HEAD` request per unique external URL —with a `GET`
+fallback if the server answers 405/501—, with a single in-flight request per foreign host and a
+shorter timeout than the crawl's: nothing is parsed, no links are extracted, no `pages` row is
+created; only the status of the `urls` row is filled in, which is what `HTTP-404-EXTERNAL` needs.
+The foreign host's `robots.txt` is not requested: checking that a link resolves is what the browser
+does when the visitor clicks it, and requesting it would nearly double the requests to third
+parties in order to say less. Externals **do not count against `max_urls`**, and reaching
+`max_external` **does not set `crawl_meta.truncated`** —that field turns off the
+`REQUIERE_GRAFO_COMPLETO` rules—: it leaves externals unchecked and the summary says how many.
 
-### 9.bis Patrones de inclusión y exclusión (`pattern.rs`)
+### 9.bis Include and exclude patterns (`pattern.rs`)
 
-Expresiones regulares **sin anclar** sobre la URL completa normalizada, como en Screaming Frog:
-una cadena literal (`/wp-admin/`) funciona como un «contiene» y los patrones de siempre
-(`\?replytocom=`, `/page/\d+/`) valen tal cual. Se compilan **una vez** por rastreo —un patrón
-inválido es un error antes de empezar, no un rastreo a medias— y el crate `regex` no tiene
-*backtracking*, así que un patrón patológico no puede degenerar.
+**Unanchored** regular expressions over the full normalized URL, as in Screaming Frog: a literal
+string (`/wp-admin/`) works as a "contains" and the usual patterns (`\?replytocom=`,
+`/page/\d+/`) work as-is. They are compiled **once** per crawl —an invalid pattern is an error
+before starting, not a half-finished crawl— and the `regex` crate has no *backtracking*, so a
+pathological pattern cannot degenerate.
 
-Reglas, aplicadas en `engine.rs` donde se decide encolar (enlaces, destinos de redirección,
-URLs de sitemap y semillas):
+Rules, applied in `engine.rs` where enqueueing is decided (links, redirect targets, sitemap URLs
+and seeds):
 
-- **`exclude` gana sobre `include`.** Es la convención de Screaming Frog y la única que permite
-  «todo el blog menos los borradores».
-- **Un `include` no vacío restringe**: solo se rastrea lo que case con alguno de sus patrones.
-- **Lo excluido queda registrado**, con `crawl_state='excluded'` y `exclusion_reason='pattern'`:
-  el resumen enseña cuántas URLs quedaron fuera por patrón, para que excluir media web por error
-  se vea en la primera pantalla.
-- **La semilla de un rastreo HTTP se rastrea siempre** (como la start URL de Screaming Frog):
-  con `--include '/blog/'` y semilla en la raíz, filtrarla mataría el rastreo antes de descubrir
-  nada. En `filesystem` y `list` las semillas son un conjunto descubierto o importado y **sí** se
-  filtran — es el único sitio donde `audit --exclude` puede actuar.
-- **Las URLs de sitemap siguen la misma regla** que los enlaces; la exclusión se registra con
-  `in_sitemap=1`.
+- **`exclude` wins over `include`.** It is Screaming Frog's convention and the only one that
+  allows "the whole blog except the drafts".
+- **A non-empty `include` restricts**: only what matches one of its patterns is crawled.
+- **What is excluded gets recorded**, with `crawl_state='excluded'` and
+  `exclusion_reason='pattern'`: the summary shows how many URLs were left out by pattern, so that
+  excluding half the site by mistake is visible on the first screen.
+- **The seed of an HTTP crawl is always crawled** (like Screaming Frog's start URL): with
+  `--include '/blog/'` and the seed at the root, filtering it would kill the crawl before
+  discovering anything. In `filesystem` and `list` the seeds are a discovered or imported set and
+  **are** filtered — it is the only place where `audit --exclude` can act.
+- **Sitemap URLs follow the same rule** as links; the exclusion is recorded with `in_sitemap=1`.
 
 ## 10. User-Agent
 
-Por defecto, identificarse honestamente y de forma verificable:
+By default, identify honestly and verifiably:
 
 ```
-CrawlForge/1.0 (+https://[dominio]/bot)
+CrawlForge/1.0 (+https://[domain]/bot)
 ```
 
-Permitir simular Googlebot para diagnóstico, con aviso de que solo debe usarse en sitios propios.
-Nunca falsear un navegador por defecto: además de ser mala práctica, es exactamente el tipo de
-comportamiento que provoca un rechazo en la revisión de la App Store.
+Allow spoofing Googlebot for diagnostics, with a warning that it must only be used on sites you
+own. Never impersonate a browser by default: besides being bad practice, it is exactly the kind of
+behavior that gets an App Store review rejected.

@@ -1,18 +1,19 @@
-//! `CANON` y `DUP` — canonical y contenido duplicado. `docs/04-CATALOGO-REGLAS.md §5`.
+//! `CANON` and `DUP` — canonicals and duplicate content. `docs/04-CATALOGO-REGLAS.md §5`.
 //!
-//! # El `JOIN` de las reglas de conjunto
+//! # The `JOIN` behind the site-scope rules
 //!
-//! Las cinco reglas de alcance `site` de esta sección necesitan unir la página de origen con la
-//! fila de `urls` a la que apunta su canonical. `pages.canonical` guarda la **URL absoluta ya
-//! normalizada** (`engine::finish_page` la resuelve contra la URL de la página), y `urls` se
-//! indexa por `url_hash`, que es un `xxh3_64` calculado en Rust
-//! (`crawlforge_core::engine::url_hash`). SQLite no tiene esa función, así que **el `JOIN` por
-//! hash no se puede escribir en SQL puro**: habría que registrar un `create_scalar_function` en
-//! la conexión, y una regla no debe modificar la conexión que le presta el motor.
+//! The five `site`-scope rules in this section need to join the source page with the `urls` row
+//! its canonical points at. `pages.canonical` stores the **already-normalised absolute URL**
+//! (`engine::finish_page` resolves it against the page URL), and `urls` is indexed by
+//! `url_hash`, an `xxh3_64` computed in Rust (`crawlforge_core::engine::url_hash`). SQLite has
+//! no such function, so **the hash `JOIN` cannot be written in pure SQL**: it would take
+//! registering a `create_scalar_function` on the connection, and a rule must not modify the
+//! connection the engine lends it.
 //!
-//! La salida es unir por texto: `JOIN urls tgt ON tgt.url = p.canonical`. `urls.url` es `UNIQUE`,
-//! por lo que el `JOIN` usa su índice y es igual de selectivo que el del hash. Las dos cadenas
-//! salen del mismo normalizador, así que coinciden byte a byte cuando apuntan a la misma URL.
+//! The way out is joining by text: `JOIN urls tgt ON tgt.url = p.canonical`. `urls.url` is
+//! `UNIQUE`, so the `JOIN` uses its index and is exactly as selective as the hash one. Both
+//! strings come out of the same normaliser, so they match byte for byte when they point at the
+//! same URL.
 
 use crate::{Category, Issue, PageContext, PageRule, RuleMeta, Scope, Severity, SiteRule, Tier};
 use rusqlite::Connection;
@@ -177,19 +178,19 @@ pub static DUP_CONTENT_EXACT: RuleMeta = RuleMeta {
     references: &[],
 };
 
-// ---------------------------------------------------------------- Utilidades de URL
+// ---------------------------------------------------------------- URL utilities
 
-/// El host de una URL absoluta, sin `userinfo` ni puerto.
+/// The host of an absolute URL, without `userinfo` or port.
 ///
-/// Se hace a mano porque este crate no depende de `url` a propósito: las reglas reciben cadenas
-/// ya resueltas por el motor y no deben volver a parsear nada pesado.
+/// Hand-rolled because this crate deliberately does not depend on `url`: rules receive strings
+/// the engine has already resolved and must not re-parse anything heavy.
 fn host_of(url: &str) -> Option<&str> {
     let (_, resto) = url.split_once("://")?;
     let autoridad = resto.split(['/', '?', '#']).next()?;
-    // `usuario:clave@host` — el último `@` delimita la autoridad real.
+    // `user:password@host` — the last `@` delimits the real authority.
     let sin_userinfo = autoridad.rsplit_once('@').map_or(autoridad, |(_, h)| h);
-    // El puerto es lo que va tras el último `:` **y son todos dígitos**. Así un literal IPv6
-    // como `[::1]` no se recorta, y `[::1]:8080` sí pierde el puerto.
+    // The port is whatever follows the last `:` **and is all digits**. That way an IPv6 literal
+    // like `[::1]` is not clipped, while `[::1]:8080` does lose its port.
     let host = match sin_userinfo.rsplit_once(':') {
         Some((h, puerto)) if !puerto.is_empty() && puerto.bytes().all(|b| b.is_ascii_digit()) => h,
         _ => sin_userinfo,
@@ -197,9 +198,10 @@ fn host_of(url: &str) -> Option<&str> {
     (!host.is_empty()).then_some(host)
 }
 
-/// `www.` inicial fuera. Se compara sin él porque `ejemplo.es` y `www.ejemplo.es` son el mismo
-/// sitio: un canonical entre ellos es consolidación de host, no un canonical a otro dominio, y
-/// avisarlo como tal sería un falso positivo en el patrón más común que existe.
+/// Leading `www.` off. Hosts are compared without it because `ejemplo.es` and `www.ejemplo.es`
+/// are the same site: a canonical between them is host consolidation, not a cross-domain
+/// canonical, and flagging it as one would be a false positive on the single most common
+/// pattern there is.
 fn sin_www(host: &str) -> &str {
     if host.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("www.")) {
         &host[4..]
@@ -208,20 +210,20 @@ fn sin_www(host: &str) -> &str {
     }
 }
 
-/// ¿Son el mismo sitio los hosts de estas dos URLs absolutas?
+/// Are the hosts of these two absolute URLs the same site?
 ///
-/// `None` si alguna de las dos no tiene host reconocible: sin saberlo no se puede afirmar que
-/// haya cruce de dominio, y una regla no inventa hallazgos sobre datos que no entiende.
+/// `None` if either has no recognisable host: without knowing it, no cross-domain claim can be
+/// made, and a rule does not invent findings out of data it does not understand.
 fn same_host(a: &str, b: &str) -> Option<bool> {
     let (ha, hb) = (host_of(a)?, host_of(b)?);
     Some(sin_www(ha).eq_ignore_ascii_case(sin_www(hb)))
 }
 
-/// ¿La referencia trae esquema propio (`https:`, `mailto:`) y por tanto es absoluta?
+/// Does the reference carry its own scheme (`https:`, `mailto:`) and is therefore absolute?
 ///
-/// Por RFC 3986 una referencia es absoluta si y solo si empieza por un esquema. Eso deja
-/// `//ejemplo.es/a` —una *network-path reference*— del lado de las relativas, que es lo correcto:
-/// depende del esquema de la página que la contiene.
+/// Per RFC 3986 a reference is absolute if and only if it starts with a scheme. That leaves
+/// `//ejemplo.es/a` — a *network-path reference* — on the relative side, which is correct: it
+/// depends on the scheme of the page that contains it.
 fn tiene_esquema(referencia: &str) -> bool {
     let bytes = referencia.as_bytes();
     if bytes.first().is_none_or(|b| !b.is_ascii_alphabetic()) {
@@ -238,12 +240,12 @@ fn tiene_esquema(referencia: &str) -> bool {
     false
 }
 
-// ---------------------------------------------------------------- Reglas de página
+// ---------------------------------------------------------------- Page rules
 
-/// Página indexable sin `rel=canonical`.
+/// Indexable page without `rel=canonical`.
 ///
-/// No es un fallo grave por sí solo —Google infiere el canonical— pero sin él cualquier
-/// parámetro de URL puede generar un duplicado. Severidad media, no alta.
+/// Not a serious failure on its own — Google infers the canonical — but without it any URL
+/// parameter can spawn a duplicate. Medium severity, not high.
 pub struct CanonMissing;
 
 impl PageRule for CanonMissing {
@@ -262,13 +264,14 @@ impl PageRule for CanonMissing {
     }
 }
 
-/// Más de un `link rel=canonical` en la misma página.
+/// More than one `link rel=canonical` on the same page.
 ///
-/// **No se filtra por `is_indexable`.** Si los canonical apuntan a otra URL, el motor marca la
-/// página como `canonicalised` y por tanto no indexable; exigir `is_indexable` silenciaría
-/// justo los casos peores. Sí se exige un 2xx, como en todas las reglas que auditan el HTML
-/// servido: el canonical de la plantilla de error de un 404 no lo procesa ningún buscador, y
-/// sin la puerta cada URL rota repetiría los hallazgos del tema. Ver `PageContext::is_success`.
+/// **Not filtered by `is_indexable`.** If the canonicals point at another URL, the engine marks
+/// the page as `canonicalised` and therefore non-indexable; requiring `is_indexable` would
+/// silence precisely the worst cases. A 2xx is required, though, as in every rule that audits
+/// the served HTML: no search engine processes the canonical in a 404's error template, and
+/// without the gate every broken URL would repeat the theme's findings.
+/// See `PageContext::is_success`.
 pub struct CanonMultiple;
 
 impl PageRule for CanonMultiple {
@@ -285,11 +288,11 @@ impl PageRule for CanonMultiple {
     }
 }
 
-/// Canonical declarado como referencia relativa.
+/// Canonical declared as a relative reference.
 ///
-/// Se mira `canonical_raw` —lo que venía en el HTML— y no `canonical`, que el motor ya ha
-/// resuelto a absoluto. Es el único sitio del catálogo donde la forma original importa más que
-/// la resuelta.
+/// Looks at `canonical_raw` — what the HTML actually carried — and not `canonical`, which the
+/// engine has already resolved to absolute. It is the one place in the catalogue where the
+/// original form matters more than the resolved one.
 pub struct CanonRelative;
 
 impl PageRule for CanonRelative {
@@ -298,7 +301,7 @@ impl PageRule for CanonRelative {
     }
 
     fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
-        // El 2xx corta la plantilla de error: ver `CanonMultiple` y `PageContext::is_success`.
+        // The 2xx cuts off the error template: see `CanonMultiple` and `PageContext::is_success`.
         if !ctx.is_html || !ctx.is_success() {
             return Vec::new();
         }
@@ -315,10 +318,10 @@ impl PageRule for CanonRelative {
     }
 }
 
-/// Canonical hacia un host distinto del de la página.
+/// Canonical to a host other than the page's own.
 ///
-/// Compara el host del canonical ya resuelto con el de la propia URL. Un `www.` de diferencia no
-/// cuenta: ver [`sin_www`].
+/// Compares the host of the resolved canonical with the page's own. A `www.` of difference does
+/// not count: see [`sin_www`].
 pub struct CanonCrossDomain;
 
 impl PageRule for CanonCrossDomain {
@@ -327,14 +330,14 @@ impl PageRule for CanonCrossDomain {
     }
 
     fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
-        // El 2xx corta la plantilla de error: ver `CanonMultiple` y `PageContext::is_success`.
+        // The 2xx cuts off the error template: see `CanonMultiple` and `PageContext::is_success`.
         if !ctx.is_html || !ctx.is_success() {
             return Vec::new();
         }
         let Some(canonical) = ctx.canonical.map(str::trim).filter(|c| !c.is_empty()) else {
             return Vec::new();
         };
-        // `None` = no se pudo determinar alguno de los dos hosts: no se afirma nada.
+        // `None` = one of the two hosts could not be determined: claim nothing.
         if same_host(ctx.url, canonical).unwrap_or(true) {
             return Vec::new();
         }
@@ -346,24 +349,24 @@ impl PageRule for CanonCrossDomain {
     }
 }
 
-// ---------------------------------------------------------------- Reglas de conjunto
+// ---------------------------------------------------------------- Site rules
 
-/// Tronco común de las reglas «el canonical apunta a algo que no debería».
+/// Common trunk of the "the canonical points at something it shouldn't" rules.
 ///
-/// `tgt.id <> src.id` es la forma de decir «el canonical señala a otra URL». Se prefiere a
-/// `pages.canonical_is_self` porque se deduce del propio `JOIN`: si el canonical resuelve a la
-/// fila de la propia página, no hay nada que avisar, sin depender de cómo se comparó la cadena
-/// al escribirla. El `JOIN` por texto está justificado en la cabecera del módulo.
+/// `tgt.id <> src.id` is how "the canonical designates another URL" is spelled. It is preferred
+/// over `pages.canonical_is_self` because it falls out of the `JOIN` itself: if the canonical
+/// resolves to the page's own row there is nothing to report, without depending on how the
+/// string was compared when it was written. The text `JOIN` is justified in the module header.
 const CANONICAL_JOIN: &str = "FROM pages p
      JOIN urls src ON src.id = p.url_id
      JOIN urls tgt ON tgt.url = p.canonical
      ";
 
-/// El canonical apunta a una URL que responde 4xx o 5xx.
+/// The canonical points at a URL that answers 4xx or 5xx.
 ///
-/// El ID dice `4XX` porque es el caso normal, pero la condición normativa del catálogo es «URL
-/// con error» y un canonical hacia un 500 es igual de fatal, así que se cubre de 400 arriba. El
-/// código real va en el detalle del hallazgo.
+/// The ID says `4XX` because that is the normal case, but the catalogue's normative condition is
+/// "error URL" and a canonical to a 500 is every bit as fatal, so it covers 400 and up. The
+/// actual code goes in the finding's detail.
 pub struct CanonToError;
 
 impl SiteRule for CanonToError {
@@ -395,10 +398,10 @@ impl SiteRule for CanonToError {
     }
 }
 
-/// El canonical apunta a una URL que redirige.
+/// The canonical points at a URL that redirects.
 ///
-/// Dos formas de detectarlo, porque el motor guarda las dos cosas: un `status_code` 3xx, y un
-/// `redirect_to` resuelto en la pasada del escritor.
+/// Two ways to detect it, because the engine stores both: a 3xx `status_code`, and a
+/// `redirect_to` resolved during the writer's pass.
 pub struct CanonToRedirect;
 
 impl SiteRule for CanonToRedirect {
@@ -441,11 +444,11 @@ impl SiteRule for CanonToRedirect {
     }
 }
 
-/// El canonical apunta a una página marcada con `noindex`.
+/// The canonical points at a page marked `noindex`.
 ///
-/// Se mira la directiva declarada (`meta robots` o `X-Robots-Tag`) y no `is_indexable`: una
-/// página puede ser no indexable por media docena de motivos, y cada uno tiene su propia regla.
-/// Aquí el hallazgo es la contradicción entre dos señales explícitas.
+/// Looks at the declared directive (`meta robots` or `X-Robots-Tag`), not at `is_indexable`: a
+/// page can be non-indexable for half a dozen reasons, and each one has its own rule. The
+/// finding here is the contradiction between two explicit signals.
 pub struct CanonToNoindex;
 
 impl SiteRule for CanonToNoindex {
@@ -483,12 +486,12 @@ impl SiteRule for CanonToNoindex {
     }
 }
 
-/// A canoniza a B y B canoniza a C.
+/// A canonicalises to B and B canonicalises to C.
 ///
-/// **Qué cuenta como cadena:** que el destino del canonical tenga a su vez un canonical que
-/// resuelva a una URL distinta de sí mismo. No se exige que C sea distinta de A, así que el
-/// bucle `A → B → A` también se avisa: es el mismo defecto y el mismo arreglo. El hallazgo se
-/// registra en A, que es la página que hay que corregir.
+/// **What counts as a chain:** the canonical's target has, in turn, a canonical that resolves to
+/// a URL other than itself. C is not required to differ from A, so the `A → B → A` loop is
+/// reported too: same defect, same fix. The finding is recorded on A, which is the page that
+/// needs correcting.
 pub struct CanonChain;
 
 impl SiteRule for CanonChain {
@@ -524,11 +527,11 @@ impl SiteRule for CanonChain {
     }
 }
 
-/// Dos o más URLs indexables devuelven un HTML idéntico byte a byte.
+/// Two or more indexable URLs return byte-for-byte identical HTML.
 ///
-/// Se restringe a `is_indexable = 1` igual que `META-TITLE-DUPLICATE`: dos copias donde una
-/// canoniza a la otra son el arreglo, no el problema, y avisarlas sería ruido sobre trabajo ya
-/// hecho.
+/// Restricted to `is_indexable = 1`, like `META-TITLE-DUPLICATE`: two copies where one
+/// canonicalises to the other are the fix, not the problem, and reporting them would be noise
+/// over work already done.
 pub struct DupContentExact;
 
 impl SiteRule for DupContentExact {
@@ -577,17 +580,13 @@ pub(crate) fn page_rules() -> Vec<Box<dyn PageRule>> {
 }
 
 pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
-    // `CanonToRedirect` está implementada y probada contra base en memoria, pero **no
-    // registrada**: su defecto no se puede provocar con un árbol de ficheros. Los fixtures se
-    // rastrean en modo `filesystem`, donde el fetcher solo devuelve 200 o 404, así que
-    // `urls.status_code` nunca cae en el rango 3xx y `urls.redirect_to` nunca se rellena. Es el
-    // mismo hueco que tienen las reglas `HTTP-REDIRECT-*`.
-    //
-    // Para activarla hacen falta tres cosas, y ninguna es de este módulo: añadir
-    // `Box::new(CanonToRedirect)` a esta lista, escribir `fixtures/CANON-TO-REDIRECT/` con el
-    // caso documentado, y declararla en `SIN_FIXTURE_EN_FILESYSTEM`
-    // (`crawlforge-core/tests/fixtures_de_reglas.rs`), que es el inventario de lo que este arnés
-    // no cubre. Se quita de ahí cuando el caso se pueda provocar con el servidor HTTP de pruebas.
+    // `CanonToRedirect`'s defect cannot be provoked from a file tree: fixtures are crawled in
+    // `filesystem` mode, where the fetcher only answers 200 or 404, so `urls.status_code` never
+    // falls in the 3xx range and `urls.redirect_to` never gets filled in — the same gap the
+    // `HTTP-REDIRECT-*` rules have. Its end-to-end proof therefore runs against the local HTTP
+    // test server (`crawlforge-core/tests/reglas_http.rs`), and the rule is declared in
+    // `DEMOSTRADAS_CONTRA_EL_SERVIDOR` (`crawlforge-core/tests/fixtures_de_reglas.rs`), the
+    // inventory of what the fixture harness cannot cover.
     vec![
         Box::new(CanonToError),
         Box::new(CanonToNoindex),
@@ -612,23 +611,23 @@ mod tests {
     // ------------------------------------------------------------ CANON-MISSING
 
     #[test]
-    fn no_avisa_cuando_hay_canonical() {
+    fn no_finding_when_a_canonical_is_present() {
         assert!(CanonMissing.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn avisa_cuando_falta_el_canonical() {
+    fn a_missing_canonical_produces_a_finding() {
         let mut c = ctx();
         c.canonical = None;
         c.canonical_raw = None;
         c.canonical_count = 0;
         let issues = CanonMissing.evaluate(&c);
         assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].severity, Severity::Medium, "sin canonical no es crítico");
+        assert_eq!(issues[0].severity, Severity::Medium, "a missing canonical is not critical");
     }
 
     #[test]
-    fn no_avisa_en_una_pagina_no_indexable() {
+    fn a_non_indexable_page_produces_no_finding() {
         let mut c = ctx();
         c.canonical = None;
         c.is_indexable = false;
@@ -636,17 +635,17 @@ mod tests {
     }
 
     #[test]
-    fn el_canonical_de_la_plantilla_de_error_no_se_audita() {
-        // Las tres reglas que no filtran por `is_indexable` exigen un 2xx: el canonical del HTML
-        // de un 404 no lo procesa ningún buscador, y sin la puerta la plantilla de error del
-        // tema se auditaba una vez por cada URL rota. Ver `PageContext::is_success`.
+    fn the_error_template_canonical_is_not_audited() {
+        // The three rules that do not filter by `is_indexable` require a 2xx: no search engine
+        // processes the canonical in a 404's HTML, and without the gate the theme's error
+        // template got audited once per broken URL. See `PageContext::is_success`.
         for status in [301, 404, 410, 500] {
             let mut c = ctx();
             c.status = status;
             c.canonical_count = 2;
             assert!(
                 CanonMultiple.evaluate(&c).is_empty(),
-                "CANON-MULTIPLE no debería auditar el HTML de un {status}"
+                "CANON-MULTIPLE should not audit the HTML of a {status}"
             );
 
             let mut c = ctx();
@@ -654,7 +653,7 @@ mod tests {
             c.canonical_raw = Some("/a");
             assert!(
                 CanonRelative.evaluate(&c).is_empty(),
-                "CANON-RELATIVE no debería auditar el HTML de un {status}"
+                "CANON-RELATIVE should not audit the HTML of a {status}"
             );
 
             let mut c = ctx();
@@ -662,7 +661,7 @@ mod tests {
             c.canonical = Some("https://otro.com/a");
             assert!(
                 CanonCrossDomain.evaluate(&c).is_empty(),
-                "CANON-CROSS-DOMAIN no debería auditar el HTML de un {status}"
+                "CANON-CROSS-DOMAIN should not audit the HTML of a {status}"
             );
         }
     }
@@ -670,12 +669,12 @@ mod tests {
     // ------------------------------------------------------------ CANON-MULTIPLE
 
     #[test]
-    fn un_solo_canonical_no_es_multiple() {
+    fn a_single_canonical_is_not_multiple() {
         assert!(CanonMultiple.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn ningun_canonical_no_es_multiple() {
+    fn no_canonical_at_all_is_not_multiple() {
         let mut c = ctx();
         c.canonical = None;
         c.canonical_raw = None;
@@ -684,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn dos_canonical_disparan_la_regla() {
+    fn two_canonicals_trigger_the_rule() {
         let mut c = ctx();
         c.canonical_count = 2;
         let issues = CanonMultiple.evaluate(&c);
@@ -695,9 +694,10 @@ mod tests {
     }
 
     #[test]
-    fn avisa_de_varios_canonical_aunque_la_pagina_no_sea_indexable() {
-        // Si los canonical apuntan a otra URL el motor la marca como `canonicalised`, y ese es
-        // precisamente el caso que más importa: filtrar por `is_indexable` lo escondería.
+    fn multiple_canonicals_are_reported_even_on_a_non_indexable_page() {
+        // If the canonicals point at another URL the engine marks the page as `canonicalised`,
+        // and that is precisely the case that matters most: filtering by `is_indexable` would
+        // hide it.
         let mut c = ctx();
         c.canonical_count = 3;
         c.canonical = Some("https://ejemplo.es/otra");
@@ -706,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_de_varios_canonical_sobre_algo_que_no_es_html() {
+    fn multiple_canonicals_on_something_that_is_not_html_produce_no_finding() {
         let mut c = ctx();
         c.canonical_count = 2;
         c.is_html = false;
@@ -716,12 +716,12 @@ mod tests {
     // ------------------------------------------------------------ CANON-RELATIVE
 
     #[test]
-    fn un_canonical_absoluto_no_es_relativo() {
+    fn an_absolute_canonical_is_not_relative() {
         assert!(CanonRelative.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn un_canonical_con_ruta_absoluta_sigue_siendo_relativo() {
+    fn a_root_relative_canonical_is_still_relative() {
         let mut c = ctx();
         c.canonical_raw = Some("/a");
         let issues = CanonRelative.evaluate(&c);
@@ -731,29 +731,29 @@ mod tests {
     }
 
     #[test]
-    fn un_canonical_relativo_al_documento_dispara_la_regla() {
+    fn a_document_relative_canonical_triggers_the_rule() {
         let mut c = ctx();
         c.canonical_raw = Some("../otra/");
         assert_eq!(CanonRelative.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn un_canonical_sin_esquema_es_relativo_aunque_traiga_host() {
-        // `//ejemplo.es/a` es una *network-path reference*: hereda el esquema de la página.
+    fn a_schemeless_canonical_is_relative_even_with_a_host() {
+        // `//ejemplo.es/a` is a *network-path reference*: it inherits the page's scheme.
         let mut c = ctx();
         c.canonical_raw = Some("//ejemplo.es/a");
         assert_eq!(CanonRelative.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn un_canonical_en_http_no_se_considera_relativo() {
+    fn an_http_canonical_is_not_considered_relative() {
         let mut c = ctx();
         c.canonical_raw = Some("http://ejemplo.es/a");
         assert!(CanonRelative.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn sin_canonical_no_hay_nada_que_decir_del_relativo() {
+    fn without_a_canonical_there_is_nothing_to_say_about_relative() {
         let mut c = ctx();
         c.canonical = None;
         c.canonical_raw = None;
@@ -761,8 +761,9 @@ mod tests {
     }
 
     #[test]
-    fn un_canonical_de_solo_espacios_no_cuenta_como_relativo() {
-        // Un `href=""` o con espacios es otro defecto: para esta regla no hay referencia.
+    fn a_whitespace_only_canonical_does_not_count_as_relative() {
+        // An `href=""` or a whitespace-only one is a different defect: for this rule there is
+        // no reference at all.
         let mut c = ctx();
         c.canonical_raw = Some("   ");
         assert!(CanonRelative.evaluate(&c).is_empty());
@@ -771,12 +772,12 @@ mod tests {
     // ------------------------------------------------------------ CANON-CROSS-DOMAIN
 
     #[test]
-    fn un_canonical_al_mismo_host_no_cruza_dominio() {
+    fn a_canonical_to_the_same_host_does_not_cross_domains() {
         assert!(CanonCrossDomain.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn un_canonical_a_otro_dominio_dispara_la_regla() {
+    fn a_canonical_to_another_domain_triggers_the_rule() {
         let mut c = ctx();
         c.canonical = Some("https://otrodominio.example/a");
         let issues = CanonCrossDomain.evaluate(&c);
@@ -786,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn el_www_no_cuenta_como_otro_dominio() {
+    fn www_does_not_count_as_another_domain() {
         let mut c = ctx();
         c.canonical = Some("https://www.ejemplo.es/a");
         assert!(CanonCrossDomain.evaluate(&c).is_empty());
@@ -797,40 +798,40 @@ mod tests {
     }
 
     #[test]
-    fn un_subdominio_si_cuenta_como_otro_dominio() {
-        // Para la canonicalización de Google `blog.ejemplo.es` es otro host, no otra sección.
+    fn a_subdomain_does_count_as_another_domain() {
+        // For Google's canonicalisation `blog.ejemplo.es` is another host, not another section.
         let mut c = ctx();
         c.canonical = Some("https://blog.ejemplo.es/a");
         assert_eq!(CanonCrossDomain.evaluate(&c).len(), 1);
     }
 
     #[test]
-    fn el_puerto_y_el_esquema_no_hacen_que_cruce_dominio() {
+    fn port_and_scheme_do_not_make_it_cross_domain() {
         let mut c = ctx();
         c.canonical = Some("http://ejemplo.es:8080/a");
         assert!(CanonCrossDomain.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn el_host_se_compara_sin_distinguir_mayusculas() {
+    fn the_host_comparison_is_case_insensitive() {
         let mut c = ctx();
         c.canonical = Some("https://EJEMPLO.ES/a");
         assert!(CanonCrossDomain.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn un_canonical_sin_host_reconocible_no_produce_hallazgo() {
-        // El motor entrega el canonical ya resuelto a absoluto; si aun así no se le ve el host,
-        // la regla calla en vez de inventarse un cruce de dominio.
+    fn a_canonical_with_no_recognisable_host_produces_no_finding() {
+        // The engine hands over the canonical already resolved to absolute; if even then no host
+        // can be seen, the rule stays quiet instead of inventing a cross-domain finding.
         let mut c = ctx();
         c.canonical = Some("mailto:hola@ejemplo.es");
         assert!(CanonCrossDomain.evaluate(&c).is_empty());
     }
 
-    // ------------------------------------------------------------ Utilidades
+    // ------------------------------------------------------------ Utilities
 
     #[test]
-    fn el_host_se_extrae_de_una_url_absoluta() {
+    fn the_host_is_extracted_from_an_absolute_url() {
         assert_eq!(host_of("https://ejemplo.es/a?b=1#c"), Some("ejemplo.es"));
         assert_eq!(host_of("https://ejemplo.es"), Some("ejemplo.es"));
         assert_eq!(host_of("https://ejemplo.es:8443/a"), Some("ejemplo.es"));
@@ -842,7 +843,7 @@ mod tests {
     }
 
     #[test]
-    fn el_esquema_se_detecta_como_lo_dice_la_rfc_3986() {
+    fn the_scheme_is_detected_as_rfc_3986_says() {
         assert!(tiene_esquema("https://ejemplo.es/a"));
         assert!(tiene_esquema("HTTP://ejemplo.es/a"));
         assert!(tiene_esquema("mailto:hola@ejemplo.es"));
@@ -850,50 +851,38 @@ mod tests {
         assert!(!tiene_esquema("/a"));
         assert!(!tiene_esquema("a/b"));
         assert!(!tiene_esquema(""));
-        // Un `:` dentro de la ruta no es un esquema.
+        // A `:` inside the path is not a scheme.
         assert!(!tiene_esquema("/a/b:c"));
-        assert!(!tiene_esquema("2ejemplo:/a"), "un esquema no empieza por dígito");
+        assert!(!tiene_esquema("2ejemplo:/a"), "a scheme does not start with a digit");
     }
 
-    // ------------------------------------------------------------ Reglas de conjunto
+    // ------------------------------------------------------------ Site rules
 
-    /// Una base en memoria con el esquema real. Se carga la migración publicada en vez de un
-    /// `CREATE TABLE` a mano: así un cambio de esquema rompe estos tests en vez de dejarlos
-    /// midiendo una tabla que ya no existe.
-    fn bd() -> Connection {
-        let conn = Connection::open_in_memory().expect("abrir en memoria");
-        // **Todas** las migraciones, no solo la 001. Se quedó en la inicial y por eso el índice
-        // de la 006 no existía aquí: un test sobre un esquema que ya no es el que se despliega
-        // mide otra cosa. Al añadir una migración nueva, añádela también a esta lista.
-        for sql in [
-            include_str!("../../crawlforge-core/migrations/001_initial.sql"),
-            include_str!("../../crawlforge-core/migrations/002_truncated.sql"),
-            include_str!("../../crawlforge-core/migrations/003_orphans_exclude_seed.sql"),
-            include_str!("../../crawlforge-core/migrations/004_robots_y_sitemaps.sql"),
-            include_str!("../../crawlforge-core/migrations/005_orphans_solo_paginas.sql"),
-            include_str!("../../crawlforge-core/migrations/006_indice_html_hash.sql"),
-            include_str!("../../crawlforge-core/migrations/007_indice_images_src.sql"),
-        ] {
-            conn.execute_batch(sql).expect("cargar el esquema");
-        }
-        conn
+    /// An in-memory database with the real schema. Loads the published migrations instead of a
+    /// hand-written `CREATE TABLE`: that way a schema change breaks these tests instead of
+    /// leaving them measuring a table that no longer exists.
+    fn db() -> Connection {
+        // **All** the migrations, always, from the shared helper in `test_schema.rs`. This
+        // module once carried its own list, the list once stopped at 001, and that is why the
+        // index from 006 did not exist here. Now the helper holds the only list and a guard
+        // test keeps it in sync with the `migrations/` directory.
+        crate::test_schema::full_schema()
     }
 
-    /// La consulta de contenido duplicado no puede ordenar la tabla entera.
+    /// The duplicate-content query must not sort the whole table.
     ///
-    /// Sin el índice de la migración 006, SQLite resuelve sus dos agrupaciones por `html_hash`
-    /// con B-trees temporales sobre toda la tabla. **Medido el 2026-08-02 rastreando
-    /// un medio de comunicación entero: más de ocho horas en esta única regla**, sobre 216.349
-    /// páginas en un fichero de 5,3 GB, cuando el rastreo de 487.621 URLs había terminado en
-    /// nueve horas y media.
+    /// Without the index from migration 006, SQLite resolves its two groupings by `html_hash`
+    /// with temporary B-trees over the entire table. **Measured on 2026-08-02 while crawling a
+    /// full news site: over eight hours spent in this single rule**, across 216,349 pages in a
+    /// 5.3 GB file, when the whole crawl of 487,621 URLs had finished in nine and a half hours.
     ///
-    /// Se afirma sobre el plan y no sobre el tiempo porque a la escala que cabe en un test el
-    /// reloj no distingue los dos mundos. Lo que distingue es que la agrupación tenga índice
-    /// donde apoyarse — y este test es además el que descartó la primera forma del índice, un
-    /// parcial sobre `html_hash` que SQLite ni llegaba a usar.
+    /// The assertion is about the plan, not the time, because at the scale that fits in a test
+    /// the clock cannot tell the two worlds apart. What can is whether the grouping has an index
+    /// to lean on — and this test is also the one that rejected the index's first form, a
+    /// partial index over `html_hash` that SQLite would not even use.
     #[test]
-    fn la_deteccion_de_duplicados_tiene_indice_donde_agrupar() {
-        let conn = bd();
+    fn duplicate_detection_has_an_index_to_group_on() {
+        let conn = db();
         let existe: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
@@ -901,10 +890,10 @@ mod tests {
                 [],
                 |r| r.get(0),
             )
-            .expect("consultar sqlite_master");
-        assert_eq!(existe, 1, "falta el índice sobre pages(html_hash) de la migración 006");
+            .expect("query sqlite_master");
+        assert_eq!(existe, 1, "the pages(html_hash) index from migration 006 is missing");
 
-        // Y que sea utilizable por la subconsulta que agrupa, que es la que costaba las horas.
+        // And it must be usable by the grouping subquery, which is the one that cost the hours.
         let mut stmt = conn
             .prepare(
                 "EXPLAIN QUERY PLAN
@@ -912,21 +901,21 @@ mod tests {
                  WHERE is_indexable = 1 AND html_hash IS NOT NULL
                  GROUP BY html_hash HAVING COUNT(*) > 1",
             )
-            .expect("preparar el plan");
+            .expect("prepare the plan");
         let plan: String = stmt
             .query_map([], |r| r.get::<_, String>(3))
-            .expect("leer el plan")
+            .expect("read the plan")
             .filter_map(Result::ok)
             .collect::<Vec<_>>()
             .join(" | ");
         assert!(
             plan.contains("idx_pages_html_hash"),
-            "la agrupación por html_hash debe apoyarse en su índice, y el plan dice: {plan}"
+            "the html_hash grouping must lean on its index, and the plan says: {plan}"
         );
     }
 
-    /// Inserta una URL. El `url_hash` se hace igual al `id` para que el test pueda comprobar
-    /// sobre qué fila se registró el hallazgo.
+    /// Inserts a URL. The `url_hash` is set equal to the `id` so the test can check which row a
+    /// finding was recorded against.
     fn url(conn: &Connection, id: i64, u: &str, status: Option<i64>) {
         conn.execute(
             "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
@@ -934,15 +923,15 @@ mod tests {
              VALUES (?1, ?2, ?1, 'https', 'fixture.local', '/', 1, 0, 'done', ?3)",
             rusqlite::params![id, u, status],
         )
-        .expect("insertar url");
+        .expect("insert url");
     }
 
     fn redirige(conn: &Connection, id: i64, hacia: i64) {
         conn.execute("UPDATE urls SET redirect_to = ?2 WHERE id = ?1", [id, hacia])
-            .expect("marcar redirección");
+            .expect("mark redirect");
     }
 
-    /// Inserta la página de una URL. `canonical` en `None` es «sin etiqueta».
+    /// Inserts a URL's page row. `canonical` as `None` means "no tag".
     fn page(
         conn: &Connection,
         url_id: i64,
@@ -954,7 +943,7 @@ mod tests {
         conn.execute(
             "INSERT INTO pages (url_id, title, canonical, canonical_is_self, meta_robots,
                                 is_indexable, html_hash)
-             VALUES (?1, 'Una página', ?2, ?3, ?4, ?5, ?6)",
+             VALUES (?1, 'A page', ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 url_id,
                 canonical,
@@ -964,7 +953,7 @@ mod tests {
                 url_id * 1000,
             ],
         )
-        .expect("insertar página");
+        .expect("insert page");
     }
 
     fn ids(hallazgos: &[(Option<i64>, Issue)]) -> Vec<i64> {
@@ -972,98 +961,99 @@ mod tests {
     }
 
     #[test]
-    fn el_canonical_a_un_404_dispara_la_regla() {
-        let conn = bd();
+    fn a_canonical_to_a_404_triggers_the_rule() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/roto", Some(404));
         page(&conn, 1, Some("https://fixture.local/roto"), "https://fixture.local/a", None, false);
 
-        let hallazgos = CanonToError.evaluate(&conn).expect("evaluar");
-        assert_eq!(ids(&hallazgos), vec![1], "el hallazgo va en la página de origen");
+        let hallazgos = CanonToError.evaluate(&conn).expect("evaluate");
+        assert_eq!(ids(&hallazgos), vec![1], "the finding goes on the source page");
         assert_eq!(hallazgos[0].1.severity, Severity::Critical);
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("404"), "el detalle lleva el código real: {detalle}");
+        assert!(detalle.contains("404"), "the detail carries the real status code: {detalle}");
     }
 
     #[test]
-    fn el_canonical_a_un_500_tambien_dispara_la_regla() {
-        let conn = bd();
+    fn a_canonical_to_a_500_also_triggers_the_rule() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/roto", Some(500));
         page(&conn, 1, Some("https://fixture.local/roto"), "https://fixture.local/a", None, false);
-        assert_eq!(ids(&CanonToError.evaluate(&conn).expect("evaluar")), vec![1]);
+        assert_eq!(ids(&CanonToError.evaluate(&conn).expect("evaluate")), vec![1]);
     }
 
     #[test]
-    fn el_canonical_a_un_200_no_dispara_la_regla_de_error() {
-        let conn = bd();
+    fn a_canonical_to_a_200_does_not_trigger_the_error_rule() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, Some("https://fixture.local/b"), "https://fixture.local/a", None, false);
-        assert!(CanonToError.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(CanonToError.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn un_canonical_a_si_misma_no_dispara_ninguna_regla_de_destino() {
-        // Caso límite: la propia página responde 404 y se canoniza a sí misma. No es un
-        // canonical roto, es un 404, y de eso avisa otra regla.
-        let conn = bd();
+    fn a_self_canonical_triggers_no_target_rule() {
+        // Edge case: the page itself answers 404 and canonicalises to itself. That is not a
+        // broken canonical, it is a 404, and another rule reports that.
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(404));
         page(&conn, 1, Some("https://fixture.local/a"), "https://fixture.local/a", None, false);
-        assert!(CanonToError.evaluate(&conn).expect("evaluar").is_empty());
-        assert!(CanonChain.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(CanonToError.evaluate(&conn).expect("evaluate").is_empty());
+        assert!(CanonChain.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn un_canonical_a_una_url_no_rastreada_no_produce_hallazgo() {
-        // Sin fila de destino no hay nada que afirmar: el canonical puede ser correcto y estar
-        // fuera del alcance del rastreo.
-        let conn = bd();
+    fn a_canonical_to_an_uncrawled_url_produces_no_finding() {
+        // With no target row there is nothing to claim: the canonical may be correct and simply
+        // outside the crawl's scope.
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         page(&conn, 1, Some("https://otro.example/b"), "https://fixture.local/a", None, false);
-        assert!(CanonToError.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(CanonToError.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn el_canonical_a_una_redireccion_dispara_la_regla_por_el_codigo() {
-        let conn = bd();
+    fn a_canonical_to_a_redirect_triggers_the_rule_via_the_status_code() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/vieja", Some(301));
         url(&conn, 3, "https://fixture.local/nueva", Some(200));
         redirige(&conn, 2, 3);
         page(&conn, 1, Some("https://fixture.local/vieja"), "https://fixture.local/a", None, false);
 
-        let hallazgos = CanonToRedirect.evaluate(&conn).expect("evaluar");
+        let hallazgos = CanonToRedirect.evaluate(&conn).expect("evaluate");
         assert_eq!(ids(&hallazgos), vec![1]);
         assert_eq!(hallazgos[0].1.severity, Severity::High);
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("/nueva"), "el detalle dice a dónde acaba: {detalle}");
+        assert!(detalle.contains("/nueva"), "the detail says where it ends up: {detalle}");
     }
 
     #[test]
-    fn el_canonical_a_una_redireccion_dispara_la_regla_por_redirect_to() {
-        // Caso límite: el código quedó en 200 pero el motor resolvió el destino. Basta uno.
-        let conn = bd();
+    fn a_canonical_to_a_redirect_triggers_the_rule_via_redirect_to() {
+        // Edge case: the status stayed 200 but the engine resolved the target. Either one is
+        // enough.
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/vieja", Some(200));
         url(&conn, 3, "https://fixture.local/nueva", Some(200));
         redirige(&conn, 2, 3);
         page(&conn, 1, Some("https://fixture.local/vieja"), "https://fixture.local/a", None, false);
-        assert_eq!(ids(&CanonToRedirect.evaluate(&conn).expect("evaluar")), vec![1]);
+        assert_eq!(ids(&CanonToRedirect.evaluate(&conn).expect("evaluate")), vec![1]);
     }
 
     #[test]
-    fn el_canonical_a_un_200_sin_redireccion_no_dispara_la_regla() {
-        let conn = bd();
+    fn a_canonical_to_a_200_without_a_redirect_does_not_trigger_the_rule() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, Some("https://fixture.local/b"), "https://fixture.local/a", None, false);
-        assert!(CanonToRedirect.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(CanonToRedirect.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn el_canonical_a_una_pagina_con_noindex_dispara_la_regla() {
-        let conn = bd();
+    fn a_canonical_to_a_noindexed_page_triggers_the_rule() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, Some("https://fixture.local/b"), "https://fixture.local/a", None, false);
@@ -1076,14 +1066,14 @@ mod tests {
             false,
         );
 
-        let hallazgos = CanonToNoindex.evaluate(&conn).expect("evaluar");
+        let hallazgos = CanonToNoindex.evaluate(&conn).expect("evaluate");
         assert_eq!(ids(&hallazgos), vec![1]);
         assert_eq!(hallazgos[0].1.severity, Severity::Critical);
     }
 
     #[test]
-    fn el_noindex_del_destino_se_reconoce_en_mayusculas() {
-        let conn = bd();
+    fn the_target_noindex_is_recognised_in_uppercase() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, Some("https://fixture.local/b"), "https://fixture.local/a", None, false);
@@ -1095,12 +1085,12 @@ mod tests {
             Some("NOINDEX"),
             false,
         );
-        assert_eq!(ids(&CanonToNoindex.evaluate(&conn).expect("evaluar")), vec![1]);
+        assert_eq!(ids(&CanonToNoindex.evaluate(&conn).expect("evaluate")), vec![1]);
     }
 
     #[test]
-    fn el_canonical_a_una_pagina_indexable_no_dispara_la_regla_de_noindex() {
-        let conn = bd();
+    fn a_canonical_to_an_indexable_page_does_not_trigger_the_noindex_rule() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, Some("https://fixture.local/b"), "https://fixture.local/a", None, false);
@@ -1112,12 +1102,12 @@ mod tests {
             Some("index, follow"),
             true,
         );
-        assert!(CanonToNoindex.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(CanonToNoindex.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn una_cadena_de_canonical_dispara_la_regla_en_el_primer_eslabon() {
-        let conn = bd();
+    fn a_canonical_chain_triggers_the_rule_on_the_first_link() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         url(&conn, 3, "https://fixture.local/c", Some(200));
@@ -1125,107 +1115,108 @@ mod tests {
         page(&conn, 2, Some("https://fixture.local/c"), "https://fixture.local/b", None, false);
         page(&conn, 3, Some("https://fixture.local/c"), "https://fixture.local/c", None, true);
 
-        let hallazgos = CanonChain.evaluate(&conn).expect("evaluar");
-        assert_eq!(ids(&hallazgos), vec![1], "solo A está en cadena; B ya apunta al final");
+        let hallazgos = CanonChain.evaluate(&conn).expect("evaluate");
+        assert_eq!(ids(&hallazgos), vec![1], "only A is in a chain; B already points at the end");
         assert_eq!(hallazgos[0].1.severity, Severity::High);
     }
 
     #[test]
-    fn un_bucle_de_canonical_tambien_es_una_cadena() {
-        let conn = bd();
+    fn a_canonical_loop_is_also_a_chain() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, Some("https://fixture.local/b"), "https://fixture.local/a", None, false);
         page(&conn, 2, Some("https://fixture.local/a"), "https://fixture.local/b", None, false);
-        assert_eq!(ids(&CanonChain.evaluate(&conn).expect("evaluar")).len(), 2);
+        assert_eq!(ids(&CanonChain.evaluate(&conn).expect("evaluate")).len(), 2);
     }
 
     #[test]
-    fn un_canonical_de_un_solo_salto_no_es_cadena() {
-        let conn = bd();
+    fn a_single_hop_canonical_is_not_a_chain() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, Some("https://fixture.local/b"), "https://fixture.local/a", None, false);
         page(&conn, 2, Some("https://fixture.local/b"), "https://fixture.local/b", None, true);
-        assert!(CanonChain.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(CanonChain.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn un_destino_sin_canonical_no_forma_cadena() {
-        let conn = bd();
+    fn a_target_without_a_canonical_forms_no_chain() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, Some("https://fixture.local/b"), "https://fixture.local/a", None, false);
         page(&conn, 2, None, "https://fixture.local/b", None, true);
-        assert!(CanonChain.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(CanonChain.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn dos_paginas_con_el_mismo_html_disparan_la_regla_de_duplicado() {
-        let conn = bd();
+    fn two_pages_with_identical_html_trigger_the_duplicate_rule() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, None, "https://fixture.local/a", None, true);
         page(&conn, 2, None, "https://fixture.local/b", None, true);
-        // `page` deriva el `html_hash` del `url_id`: se igualan a mano.
-        conn.execute("UPDATE pages SET html_hash = 42", []).expect("igualar el hash");
+        // `page` derives the `html_hash` from the `url_id`: equalise them by hand.
+        conn.execute("UPDATE pages SET html_hash = 42", []).expect("equalise the hashes");
 
-        let hallazgos = DupContentExact.evaluate(&conn).expect("evaluar");
-        assert_eq!(ids(&hallazgos).len(), 2, "el hallazgo se registra en las dos páginas");
+        let hallazgos = DupContentExact.evaluate(&conn).expect("evaluate");
+        assert_eq!(ids(&hallazgos).len(), 2, "the finding is recorded on both pages");
         assert_eq!(hallazgos[0].1.severity, Severity::High);
         assert_eq!(
             hallazgos[0].1.group_key, hallazgos[1].1.group_key,
-            "las dos copias comparten group_key para que la UI las presente juntas"
+            "both copies share the group_key so the UI can present them together"
         );
     }
 
     #[test]
-    fn dos_paginas_con_html_distinto_no_son_duplicados() {
-        let conn = bd();
+    fn two_pages_with_different_html_are_not_duplicates() {
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, None, "https://fixture.local/a", None, true);
         page(&conn, 2, None, "https://fixture.local/b", None, true);
-        assert!(DupContentExact.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(DupContentExact.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn una_copia_ya_canonizada_no_cuenta_como_duplicado() {
-        // Caso límite y motivo del filtro por `is_indexable`: si una copia canoniza a la otra,
-        // el problema está resuelto y avisarlo sería ruido sobre trabajo ya hecho.
-        let conn = bd();
+    fn an_already_canonicalised_copy_does_not_count_as_a_duplicate() {
+        // Edge case and the reason for the `is_indexable` filter: if one copy canonicalises to
+        // the other, the problem is already solved and reporting it would be noise over work
+        // already done.
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/a?utm_x=1", Some(200));
         let a = "https://fixture.local/a";
         page(&conn, 1, Some(a), a, None, true);
         page(&conn, 2, Some(a), "https://fixture.local/a?utm_x=1", None, false);
-        conn.execute("UPDATE pages SET html_hash = 42", []).expect("igualar el hash");
-        assert!(DupContentExact.evaluate(&conn).expect("evaluar").is_empty());
+        conn.execute("UPDATE pages SET html_hash = 42", []).expect("equalise the hashes");
+        assert!(DupContentExact.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn una_pagina_sin_html_hash_no_es_duplicado_de_nadie() {
-        // Un 404 o un PDF no tienen fila en `pages`, pero un HTML truncado puede quedarse sin
-        // hash. `NULL` no agrupa con `NULL`.
-        let conn = bd();
+    fn a_page_without_an_html_hash_is_no_ones_duplicate() {
+        // A 404 or a PDF has no `pages` row, but a truncated HTML document can end up without a
+        // hash. `NULL` does not group with `NULL`.
+        let conn = db();
         url(&conn, 1, "https://fixture.local/a", Some(200));
         url(&conn, 2, "https://fixture.local/b", Some(200));
         page(&conn, 1, None, "https://fixture.local/a", None, true);
         page(&conn, 2, None, "https://fixture.local/b", None, true);
-        conn.execute("UPDATE pages SET html_hash = NULL", []).expect("borrar el hash");
-        assert!(DupContentExact.evaluate(&conn).expect("evaluar").is_empty());
+        conn.execute("UPDATE pages SET html_hash = NULL", []).expect("clear the hashes");
+        assert!(DupContentExact.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn las_reglas_de_conjunto_no_avisan_sobre_un_rastreo_vacio() {
-        let conn = bd();
+    fn site_rules_produce_no_findings_on_an_empty_crawl() {
+        let conn = db();
         for regla in site_rules() {
             assert!(
-                regla.evaluate(&conn).expect("evaluar").is_empty(),
-                "{} avisa sobre una base vacía",
+                regla.evaluate(&conn).expect("evaluate").is_empty(),
+                "{} reports findings on an empty database",
                 regla.id()
             );
         }
-        assert!(CanonToRedirect.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(CanonToRedirect.evaluate(&conn).expect("evaluate").is_empty());
     }
 }

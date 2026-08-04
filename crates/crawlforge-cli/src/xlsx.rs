@@ -820,21 +820,12 @@ mod tests {
         std::env::temp_dir().join(format!("crawlforge-xlsx-{}-{n}-{nombre}", std::process::id()))
     }
 
-    /// Un fichero de rastreo con el **esquema real**, leído del core en tiempo de compilación.
-    /// Copiar el esquema a mano haría pasar el test con una columna que el motor no escribe.
-    ///
-    /// **Al añadir una migración al core hay que añadirla también aquí.**
+    /// A crawl file with the **real schema**: every published migration, from the shared
+    /// helper in `test_schema.rs`, whose guard test keeps it in sync with `migrations/`.
+    /// Copying the schema by hand would let the test pass with a column the engine never
+    /// writes.
     fn crawl_file(path: &std::path::Path) -> Connection {
-        let conn = Connection::open(path).expect("crear el fichero de rastreo");
-        for sql in [
-            include_str!("../../crawlforge-core/migrations/001_initial.sql"),
-            include_str!("../../crawlforge-core/migrations/002_truncated.sql"),
-            include_str!("../../crawlforge-core/migrations/003_orphans_exclude_seed.sql"),
-            include_str!("../../crawlforge-core/migrations/004_robots_y_sitemaps.sql"),
-        ] {
-            conn.execute_batch(sql).expect("aplicar la migración");
-        }
-        conn
+        crate::test_schema::crawl_file(path)
     }
 
     /// Rastreo de ejemplo con lo que hace daño de verdad: acentos, comillas, emojis, una celda
@@ -949,7 +940,7 @@ mod tests {
             poblar(&conn);
         }
         let out = temp_path(&format!("{nombre}.xlsx"));
-        let sheets = to_xlsx(&store, &out).expect("exportar");
+        let sheets = to_xlsx(&store, &out).expect("export");
         let _ = std::fs::remove_file(&store);
         (out, sheets)
     }
@@ -957,18 +948,18 @@ mod tests {
     #[test]
     fn exporta_un_fichero_con_todas_las_hojas() {
         let (out, sheets) = exportar_ejemplo("completo");
-        assert_eq!(sheets, sheets_esperadas(), "una hoja por vista más Summary");
-        assert!(out.exists(), "el fichero no se escribió");
+        assert_eq!(sheets, sheets_esperadas(), "one sheet per view plus Summary");
+        assert!(out.exists(), "the file was not written");
 
         let bytes = std::fs::metadata(&out).expect("metadata").len();
         // Un xlsx vacío ronda los 3 KB; con doce hojas y una celda de 32k caracteres tiene que
         // pesar bastante más, y aun así no dispararse.
-        assert!(bytes > 6_000, "el fichero pesa {bytes} bytes, parece vacío");
-        assert!(bytes < 5_000_000, "el fichero pesa {bytes} bytes, algo se ha desbordado");
+        assert!(bytes > 6_000, "the file weighs {bytes} bytes, it looks empty");
+        assert!(bytes < 5_000_000, "the file weighs {bytes} bytes, something overflowed");
 
         // Es un ZIP: la firma local de fichero.
-        let cabecera = std::fs::read(&out).expect("leer");
-        assert_eq!(&cabecera[..4], b"PK\x03\x04", "no parece un xlsx");
+        let cabecera = std::fs::read(&out).expect("read");
+        assert_eq!(&cabecera[..4], b"PK\x03\x04", "does not look like an xlsx");
 
         let _ = std::fs::remove_file(&out);
     }
@@ -1005,11 +996,11 @@ mod tests {
         for spec in sheets() {
             assert!(
                 spec.name.chars().count() <= 31,
-                "«{}» pasa de 31 caracteres",
+                "«{}» exceeds 31 characters",
                 spec.name
             );
             for c in ['[', ']', ':', '*', '?', '/', '\\'] {
-                assert!(!spec.name.contains(c), "«{}» contiene {c}", spec.name);
+                assert!(!spec.name.contains(c), "«{}» contains {c}", spec.name);
             }
         }
     }
@@ -1023,11 +1014,11 @@ mod tests {
             let conn = crawl_file(&store);
             poblar(&conn);
         }
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
         for spec in sheets() {
             let sql = spec.sql.replace("{SEV}", SEVERITY_ORDER);
             conn.prepare(&sql)
-                .unwrap_or_else(|e| panic!("la consulta de «{}» no compila: {e}", spec.name));
+                .unwrap_or_else(|e| panic!("the query for «{}» does not compile: {e}", spec.name));
         }
         drop(conn);
         let _ = std::fs::remove_file(&store);
@@ -1038,7 +1029,7 @@ mod tests {
         let largo = "ñ".repeat(MAX_CELL_CHARS + 1_000);
         let recortado = clamp_cell(&largo);
         assert_eq!(recortado.chars().count(), MAX_CELL_CHARS);
-        assert!(recortado.ends_with(TRUNCATION_MARK), "falta la marca de recorte");
+        assert!(recortado.ends_with(TRUNCATION_MARK), "the truncation mark is missing");
         // Y no parte un carácter multibyte por la mitad: quedan exactamente los caracteres que
         // caben, no los bytes.
         let enes = recortado.chars().filter(|c| *c == 'ñ').count();
@@ -1073,11 +1064,11 @@ mod tests {
     fn un_rastreo_del_esquema_inicial_se_exporta_igual() {
         let store = temp_path("viejo.sqlite");
         {
-            let conn = Connection::open(&store).expect("crear");
+            let conn = Connection::open(&store).expect("create");
             conn.execute_batch(include_str!(
                 "../../crawlforge-core/migrations/001_initial.sql"
             ))
-            .expect("migración 001");
+            .expect("migration 001");
             conn.execute(
                 "INSERT INTO crawl_meta (id, project_id, project_name, base_url, mode,
                                          started_at, status, config_json, core_version,
@@ -1089,7 +1080,7 @@ mod tests {
             .expect("meta");
         }
         let out = temp_path("viejo.xlsx");
-        let sheets = to_xlsx(&store, &out).expect("exportar un rastreo antiguo");
+        let sheets = to_xlsx(&store, &out).expect("export an old crawl");
         assert_eq!(sheets, sheets_esperadas());
         assert!(out.exists());
         let _ = std::fs::remove_file(&store);
@@ -1103,7 +1094,7 @@ mod tests {
             let _ = crawl_file(&store);
         }
         let out = temp_path("vacio.xlsx");
-        let sheets = to_xlsx(&store, &out).expect("exportar un rastreo vacío");
+        let sheets = to_xlsx(&store, &out).expect("export an empty crawl");
         assert_eq!(sheets, sheets_esperadas());
         // Aun sin datos, cada hoja lleva su cabecera y su autofiltro.
         assert!(std::fs::metadata(&out).expect("metadata").len() > 3_000);
@@ -1121,24 +1112,24 @@ mod tests {
         // «Is a directory (os error 21)» al guardar, con el libro entero ya generado.
         let dir = std::env::temp_dir().join(format!("crawlforge-xlsx-dir-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("crear el directorio");
+        std::fs::create_dir_all(&dir).expect("create the directory");
 
-        let err = ensure_xlsx_out_file(&dir).expect_err("un directorio no es un fichero");
+        let err = ensure_xlsx_out_file(&dir).expect_err("a directory is not a file");
         let msg = format!("{err:#}");
-        assert!(msg.contains("--out is a file"), "dice qué se espera: {msg}");
-        assert!(msg.contains("audit.xlsx"), "y propone la orden correcta: {msg}");
-        assert!(msg.contains("--format csv"), "y a dónde iba lo del directorio: {msg}");
-        assert!(!msg.contains("os error"), "sin errno: {msg}");
+        assert!(msg.contains("--out is a file"), "states what is expected: {msg}");
+        assert!(msg.contains("audit.xlsx"), "and proposes the right command: {msg}");
+        assert!(msg.contains("--format csv"), "and where the directory part belonged: {msg}");
+        assert!(!msg.contains("os error"), "no errno: {msg}");
 
         // Un fichero normal, exista o no, pasa.
-        ensure_xlsx_out_file(&dir.join("auditoria.xlsx")).expect("un .xlsx vale");
+        ensure_xlsx_out_file(&dir.join("auditoria.xlsx")).expect("a .xlsx is fine");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn un_out_con_extension_csv_avisa_del_cruce_de_formatos() {
         let err = ensure_xlsx_out_file(std::path::Path::new("datos.csv"))
-            .expect_err("xlsx con salida .csv es un cruce");
+            .expect_err("xlsx with a .csv output is a mix-up");
         assert!(format!("{err:#}").contains("--format csv"), "{err:#}");
     }
 
@@ -1146,15 +1137,15 @@ mod tests {
     fn exportar_un_fichero_que_no_es_un_rastreo_falla_sin_jerga() {
         let store = temp_path("ajeno.sqlite");
         {
-            let conn = Connection::open(&store).expect("crear");
-            conn.execute_batch("CREATE TABLE cosas (id INTEGER);").expect("tabla ajena");
+            let conn = Connection::open(&store).expect("create");
+            conn.execute_batch("CREATE TABLE cosas (id INTEGER);").expect("foreign table");
         }
         let out = temp_path("ajeno.xlsx");
-        let err = to_xlsx(&store, &out).expect_err("no es un rastreo");
+        let err = to_xlsx(&store, &out).expect_err("not a crawl");
         let msg = format!("{err:#}");
         assert!(msg.contains("is not a CrawlForge crawl file"), "{msg}");
-        assert!(!msg.contains("no such table"), "sin jerga de SQLite: {msg}");
-        assert!(!out.exists(), "no se escribe nada");
+        assert!(!msg.contains("no such table"), "no SQLite jargon: {msg}");
+        assert!(!out.exists(), "nothing is written");
         let _ = std::fs::remove_file(&store);
     }
 }
@@ -1178,7 +1169,7 @@ mod prueba_manual {
             .unwrap_or_else(|_| std::env::temp_dir().join("crawlforge.xlsx").display().to_string());
         let inicio = std::time::Instant::now();
         let hojas = super::to_xlsx(std::path::Path::new(&store), std::path::Path::new(&out))
-            .expect("exportar");
+            .expect("export");
         let bytes = std::fs::metadata(&out).expect("metadata").len();
         println!(
             "{hojas} hojas, {:.1} MB, {:.1} s → {out}",

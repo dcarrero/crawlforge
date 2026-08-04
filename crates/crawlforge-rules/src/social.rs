@@ -1,19 +1,19 @@
-//! `SOCIAL` — tarjetas de Open Graph. `docs/04-CATALOGO-REGLAS.md §9`.
+//! `SOCIAL` — Open Graph cards. `docs/04-CATALOGO-REGLAS.md §9`.
 //!
-//! De la sección solo es de nivel `free` esta regla: las `SCHEMA-*` y `SOCIAL-OG-IMAGE-BROKEN`
-//! son de pago.
+//! Only this rule from the section is `free`-tier: the `SCHEMA-*` rules and
+//! `SOCIAL-OG-IMAGE-BROKEN` are paid.
 //!
-//! Open Graph no es un factor de posicionamiento, y por eso la severidad es `low`. Lo que se
-//! pierde sin él es el clic: un enlace compartido en WhatsApp, LinkedIn o Slack sin título, sin
-//! descripción y sin imagen es una URL desnuda que nadie abre. En un cliente que vive de
-//! distribuir contenido en 100+ blogs, eso es tráfico que se queda por el camino.
+//! Open Graph is not a ranking factor, which is why the severity is `low`. What is lost
+//! without it is the click: a link shared on WhatsApp, LinkedIn or Slack with no title, no
+//! description and no image is a naked URL nobody opens. For a client that lives off
+//! distributing content across 100+ blogs, that is traffic left on the road.
 
 use crate::{Category, Issue, PageContext, PageRule, RuleMeta, Scope, Severity, SiteRule, Tier};
 
-/// Las tres propiedades sin las cuales una tarjeta de enlace no se construye entera.
+/// The three properties without which a link card cannot be built whole.
 ///
-/// `og:url` y `og:type` quedan fuera a propósito: las redes las infieren de la URL compartida y
-/// del contenido, así que exigirlas sería ruido.
+/// `og:url` and `og:type` are left out on purpose: the networks infer them from the shared
+/// URL and from the content, so demanding them would be noise.
 const REQUIRED_OG: [&str; 3] = ["og:title", "og:description", "og:image"];
 
 pub static SOCIAL_OG_MISSING: RuleMeta = RuleMeta {
@@ -33,12 +33,12 @@ pub static SOCIAL_OG_MISSING: RuleMeta = RuleMeta {
     references: &[],
 };
 
-/// Página indexable a la que le falta alguna de las tres propiedades Open Graph básicas.
+/// Indexable page missing any of the three basic Open Graph properties.
 ///
-/// Un solo hallazgo por página, con la lista de las que faltan en el detalle: tres hallazgos
-/// separados para la misma etiqueta `<head>` incompleta serían tres veces el mismo trabajo para
-/// el usuario. Se agrupa por el conjunto que falta, que en un sitio con plantilla es siempre el
-/// mismo y así la UI puede decir «a 12.000 páginas les falta og:image».
+/// One finding per page, with the list of missing ones in the detail: three separate findings
+/// for the same incomplete `<head>` tag would be three times the same work for the user. It
+/// groups by the missing set, which on a templated site is always the same one, so the UI can
+/// say "12,000 pages are missing og:image".
 pub struct SocialOgMissing;
 
 impl PageRule for SocialOgMissing {
@@ -51,9 +51,9 @@ impl PageRule for SocialOgMissing {
             return Vec::new();
         }
 
-        // Las claves llegan ya en minúsculas del parser, pero la comparación es insensible por
-        // si algún día el atributo `property` se leyera tal cual: `og:Image` es la misma
-        // propiedad.
+        // The keys arrive already lowercased from the parser, but the comparison is
+        // case-insensitive in case the `property` attribute were one day read verbatim:
+        // `og:Image` is the same property.
         let faltan: Vec<&str> = REQUIRED_OG
             .iter()
             .filter(|requerida| {
@@ -87,7 +87,7 @@ pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
 mod tests {
     use super::*;
 
-    /// Una página sana. Cada test le quita de la tarjeta lo que le interesa.
+    /// A healthy page. Each test removes from the card what it cares about.
     fn ctx<'a>(og: &'a [&'a str]) -> PageContext<'a> {
         let mut c = PageContext::indexable_html("https://ejemplo.es/a");
         c.og_keys = og;
@@ -97,23 +97,23 @@ mod tests {
     const COMPLETO: &[&str] = &["og:title", "og:description", "og:image"];
 
     #[test]
-    fn no_avisa_con_la_tarjeta_completa() {
+    fn does_not_flag_a_complete_card() {
         assert!(SocialOgMissing.evaluate(&ctx(COMPLETO)).is_empty());
     }
 
     #[test]
-    fn no_avisa_por_las_propiedades_de_adorno() {
-        // `og:url`, `og:type` y `og:site_name` no se exigen.
+    fn does_not_flag_missing_decorative_properties() {
+        // `og:url`, `og:type` and `og:site_name` are not required.
         let c = ctx(&["og:title", "og:description", "og:image", "og:url", "og:type"]);
         assert!(SocialOgMissing.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn avisa_cuando_no_hay_ninguna_etiqueta() {
+    fn flags_a_page_with_no_og_tags_at_all() {
         let issues = SocialOgMissing.evaluate(&ctx(&[]));
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].rule_id, "SOCIAL-OG-MISSING");
-        assert_eq!(issues[0].severity, Severity::Low, "sin Open Graph no es un fallo grave");
+        assert_eq!(issues[0].severity, Severity::Low, "missing Open Graph is not a serious failure");
         assert_eq!(
             issues[0].group_key.as_deref(),
             Some("og-missing:og:title,og:description,og:image")
@@ -121,8 +121,8 @@ mod tests {
     }
 
     #[test]
-    fn un_solo_hallazgo_aunque_falten_varias() {
-        // Tres avisos por el mismo `<head>` incompleto serían tres veces el mismo trabajo.
+    fn a_single_finding_even_when_several_are_missing() {
+        // Three warnings for the same incomplete `<head>` would be three times the same work.
         let issues = SocialOgMissing.evaluate(&ctx(&["og:title"]));
         assert_eq!(issues.len(), 1);
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
@@ -132,30 +132,31 @@ mod tests {
     }
 
     #[test]
-    fn avisa_cuando_solo_falta_la_imagen() {
-        // El caso más común: el tema pinta título y descripción y se olvida de la imagen.
+    fn flags_when_only_the_image_is_missing() {
+        // The most common case: the theme renders title and description and forgets the
+        // image.
         let issues = SocialOgMissing.evaluate(&ctx(&["og:title", "og:description"]));
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].group_key.as_deref(), Some("og-missing:og:image"));
     }
 
     #[test]
-    fn la_comparacion_no_distingue_mayusculas() {
+    fn the_comparison_is_case_insensitive() {
         let c = ctx(&["OG:Title", "og:DESCRIPTION", "og:image"]);
         assert!(SocialOgMissing.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn no_avisa_en_una_pagina_no_indexable() {
-        // La tarjeta de una página con `noindex` no la va a ver nadie desde un buscador, y si se
-        // comparte a mano no es un problema de auditoría SEO.
+    fn does_not_flag_a_non_indexable_page() {
+        // Nobody will see the card of a `noindex` page coming from a search engine, and if
+        // it is shared by hand it is not an SEO-audit problem.
         let mut c = ctx(&[]);
         c.is_indexable = false;
         assert!(SocialOgMissing.evaluate(&c).is_empty());
     }
 
     #[test]
-    fn no_avisa_sobre_algo_que_no_es_html() {
+    fn does_not_flag_something_that_is_not_html() {
         let mut c = ctx(&[]);
         c.is_html = false;
         assert!(SocialOgMissing.evaluate(&c).is_empty());

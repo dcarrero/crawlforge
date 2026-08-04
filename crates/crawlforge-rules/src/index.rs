@@ -1,45 +1,43 @@
-//! `INDEX` — indexabilidad y rastreo. `docs/04-CATALOGO-REGLAS.md §2`.
+//! `INDEX` — indexability and crawling. `docs/04-CATALOGO-REGLAS.md §2`.
 //!
-//! Es la categoría que responde a «¿por qué esta página no está en Google?», la consulta más
-//! frecuente que hace un SEO. Todo lo demás del catálogo —títulos, imágenes, hreflang— solo
-//! importa si la respuesta de esta sección es «sí está».
+//! This is the category that answers "why is this page not on Google?", the most frequent
+//! question an SEO asks. Everything else in the catalogue —titles, images, hreflang— only
+//! matters if this section's answer is "it is".
 //!
-//! # Reglas de §2 escritas pero **no registradas**
+//! # Every §2 rule is registered, and how they got there is the useful part
 //!
-//! El registro obliga a tener un fixture que dispare la regla al rastrearlo de verdad, y el
-//! banco de fixtures (`crawlforge-core/tests/fixtures_de_reglas.rs`) rastrea siempre en modo
-//! `filesystem`. Ese modo no descubre sitemaps: [`CrawlJob::filesystem`] deja
-//! `discover_sitemaps = false` y `engine::run_with` solo lee sitemaps si ese campo está a `true`,
-//! así que **`urls.in_sitemap` vale 0 en todas las filas de un fixture**. Cuatro reglas de esta
-//! sección dependen de ese dato:
+//! This header used to be an inventory of rules that were written but not registered. It is
+//! not one any more —[`site_rules`] carries all eleven, [`page_rules`] the other two— and the
+//! history is worth keeping, because it is the pattern this category keeps repeating: **a rule
+//! stays unregistered while the engine cannot produce the datum it needs, and the fix belongs
+//! in the engine, not in the rule.**
 //!
-//! - [`BlockedInSitemap`], [`NoindexInSitemap`], [`OrphanPage`] y [`SitemapMissing`] llevan su
-//!   consulta escrita y probada contra el esquema real, pero no están en [`site_rules`] porque
-//!   ningún fixture puede producir su hallazgo. Registrarlas rompería el banco de fixtures.
-//! - [`RobotsBlocked`] es peor: el catálogo la declara de alcance `page` y en un rastreo normal
-//!   el motor nunca entrega una página con `PageContext::blocked_by_robots = true` — cuando
-//!   `robots.txt` prohíbe una URL, `engine::process_url` devuelve `Excluded(Robots)` **antes** de
-//!   descargarla, así que no hay `PageContext` que evaluar. El dato sí queda en el almacén
-//!   (`crawl_state='excluded'`, `exclusion_reason='robots'`), pero leerlo la convierte en una
-//!   `SiteRule` y el alcance del catálogo es normativo.
+//! What unblocked them:
 //!
-//!   La excepción es `--ignore-robots`: ahí la página bloqueada **sí** se descarga y desde el
-//!   2026-08-04 llega marcada, de modo que `evaluate_indexability` le pone
-//!   `IndexabilityReason::Robots`. Aun así la regla sigue sin registrarse, y por el motivo del
-//!   párrafo anterior: ningún fixture puede producir el hallazgo, porque hace falta un
-//!   `robots.txt` servido por HTTP más el flag. Registrarla rompería el banco de fixtures. Lo que
-//!   el usuario de `--ignore-robots` sí ve hoy es el motivo de no indexabilidad en la fila de la
-//!   página, que es donde iba a buscarlo.
+//! - [`BlockedInSitemap`], [`NoindexInSitemap`], [`OrphanPage`] and [`SitemapMissing`] all read
+//!   `urls.in_sitemap`, which was 0 in every fixture because `filesystem` mode did not discover
+//!   sitemaps. It does since 2026-07-30, and the four went in the same day.
+//! - `INDEX-ROBOTS-TXT-MISSING`, `INDEX-ROBOTS-TXT-BLOCKS-ALL` and `INDEX-SITEMAP-ERROR` needed
+//!   the state of `/robots.txt` and of each sitemap, which the engine downloaded, used and threw
+//!   away. Migration 004 gave them the `robots_txt` and `sitemaps` tables.
+//! - [`RobotsBlocked`] was catalogued `page`-scoped and could never be one: when `robots.txt`
+//!   forbids a URL, `engine::process_url` returns `Excluded(Robots)` **before** downloading it,
+//!   so there is no `PageContext` to evaluate. The datum lives in the store
+//!   (`crawl_state='excluded'`, `exclusion_reason='robots'`), and reading it is a site-wide
+//!   query. The catalogue was corrected to `Scope::Site`; the rule was not bent to fit it.
 //!
-//! Tres reglas de §2 no están ni escritas, porque el dato que necesitan no existe en ninguna
-//! parte del esquema:
+//!   There is one case where a blocked page does get downloaded, and it is `--ignore-robots`.
+//!   Since 2026-08-04 it arrives marked, so `evaluate_indexability` gives it
+//!   `IndexabilityReason::Robots` and the user who asked to see what Google cannot gets the
+//!   reason on the page's own row — which is where they were going to look for it.
 //!
-//! - `INDEX-ROBOTS-TXT-MISSING` y `INDEX-ROBOTS-TXT-BLOCKS-ALL` necesitan el estado de
-//!   `/robots.txt` (si respondió, con qué código y con qué contenido). El motor lo descarga en
-//!   `engine::load_host_rules` y lo guarda en un `RobotsCache` **en memoria**: no hay tabla ni
-//!   columna donde acabe.
-//! - `INDEX-SITEMAP-ERROR` necesita, por cada sitemap descargado, si el XML era válido, cuántas
-//!   URLs declaraba y cuántos bytes pesaba. `engine::collect_sitemap` descarta todo eso.
+//! # The two that no fixture proves, and it is on purpose
+//!
+//! `INDEX-ROBOTS-TXT-MISSING` and `INDEX-SITEMAP-MISSING` are restricted to `http` mode, so the
+//! fixture bank lists them in `SIN_FIXTURE_EN_FILESYSTEM` with the reason spelled out: in a
+//! `dist/` the hosting serves `robots.txt`, not the generator, and the site is not published
+//! yet, so warning about either on every build would be noise in a CI pipeline. Their fixtures
+//! exist and are ready for the day they are served over HTTP.
 //!
 //! [`CrawlJob::filesystem`]: https://docs.rs/crawlforge-core
 
@@ -103,29 +101,30 @@ pub static INDEX_SITEMAP_ERROR: RuleMeta = RuleMeta {
     references: &[],
 };
 
-/// Límites del protocolo de sitemaps: 50.000 URLs y 50 MB sin comprimir.
+/// Sitemap protocol limits: 50,000 URLs and 50 MB uncompressed.
 pub const SITEMAP_MAX_URLS: i64 = 50_000;
 pub const SITEMAP_MAX_BYTES: i64 = 50 * 1024 * 1024;
 
-/// Profundidad de clic máxima admitida antes de avisar. `04-CATALOGO-REGLAS.md §2`: «> 4».
+/// Maximum click depth allowed before warning. `04-CATALOGO-REGLAS.md §2`: "> 4".
 pub const MAX_CLICK_DEPTH: i64 = 4;
 
-/// Cuántos enlaces de ejemplo se guardan en el detalle de un hallazgo de enlazado.
+/// How many example links are kept in the detail of a linking finding.
 ///
-/// Un menú con cincuenta enlaces internos en `nofollow` no debe producir un `detail_json` de
-/// cincuenta entradas repetido en cada página del sitio: con unos pocos ejemplos el usuario ya
-/// sabe dónde mirar.
+/// A menu with fifty internal `nofollow` links must not produce a fifty-entry `detail_json`
+/// repeated on every page of the site: with a few examples the user already knows where to
+/// look.
 const MAX_EJEMPLOS: usize = 10;
 
-// ---------------------------------------------------------------- Metadatos
+// ---------------------------------------------------------------- Metadata
 
-// La severidad bajó de `critical` a `medium` el 2026-08-01, con datos de un rastreo real: 848
-// hallazgos `critical` en un sitio de 1.500 páginas, el 55%, y todos eran archivos `/tag/`,
-// paginaciones y `/author/` con el `follow, noindex` que pone a propósito el plugin SEO. Un
-// informe cuya mitad es «crítico» y deliberado deja de leerse. Los casos donde un noindex sí es
-// una emergencia conservan su severidad por otra vía: la contradicción con el sitemap es
-// `INDEX-NOINDEX-IN-SITEMAP` (`critical`), y un noindex en la portada se eleva a `critical` en
-// la propia evaluación, porque ahí no hay lectura benigna posible.
+// Severity went down from `critical` to `medium` on 2026-08-01, with data from a real crawl:
+// 848 `critical` findings on a site of 1,500 pages, 55% of the total, and every one was a
+// `/tag/` archive, a pagination page or an `/author/` page with the deliberate `follow,
+// noindex` the SEO plugin sets. A report where half the rows are "critical" and deliberate
+// stops being read. The cases where a noindex is a genuine emergency keep their severity
+// through other routes: the contradiction with the sitemap is `INDEX-NOINDEX-IN-SITEMAP`
+// (`critical`), and a noindex on the home page is escalated to `critical` in the evaluation
+// itself, because there is no benign reading there.
 pub static INDEX_NOINDEX: RuleMeta = RuleMeta {
     id: "INDEX-NOINDEX",
     severity: Severity::Medium,
@@ -324,17 +323,17 @@ pub static INDEX_SECTION_DISCONNECTED: RuleMeta = RuleMeta {
     references: &[],
 };
 
-// ---------------------------------------------------------------- Reglas de página
+// ---------------------------------------------------------------- Page rules
 
-/// ¿Lleva esta directiva un `noindex`?
+/// Does this directive carry a `noindex`?
 ///
-/// El valor es una lista separada por comas y puede llevar prefijo de bot
-/// (`googlebot: noindex`). Buscar la subcadena a secas daría un falso positivo con
-/// `max-image-preview` o con cualquier palabra que contenga «index».
+/// The value is a comma-separated list and may carry a bot prefix
+/// (`googlebot: noindex`). Searching for the bare substring would give a false positive on
+/// `max-image-preview` or on any word containing "index".
 ///
-/// Duplica `crawlforge_core::job::has_noindex` a propósito: este crate no conoce al core y la
-/// dirección de la dependencia es la contraria. Las dos implementaciones tienen que coincidir,
-/// así que los casos límite están cubiertos con los mismos tests en los dos lados.
+/// It duplicates `crawlforge_core::job::has_noindex` on purpose: this crate does not know the
+/// core and the dependency points the other way. The two implementations have to agree, so the
+/// edge cases are covered by the same tests on both sides.
 fn declares_noindex(directive: Option<&str>) -> bool {
     directive.is_some_and(|d| {
         d.to_ascii_lowercase()
@@ -344,15 +343,14 @@ fn declares_noindex(directive: Option<&str>) -> bool {
     })
 }
 
-/// La página pide no ser indexada.
+/// The page asks not to be indexed.
 ///
-/// **No se filtra por `is_indexable`**, al contrario que casi todas las reglas de página: un
-/// `noindex` es precisamente lo que hace que `is_indexable` valga `false`, así que filtrar por
-/// ahí dejaría la regla muerta.
+/// **It does not filter by `is_indexable`**, unlike almost every page rule: a `noindex` is
+/// precisely what makes `is_indexable` false, so filtering on it would leave the rule dead.
 ///
-/// Sí se exige un `200`. Un `noindex` en un 404 o en una redirección es ruido: la causa raíz de
-/// que esa URL no esté en el índice es el código de estado, y hay una regla `HTTP` para eso.
-/// Es el mismo orden de prioridad que aplica `evaluate_indexability` en el core.
+/// A `200` is required, though. A `noindex` on a 404 or on a redirect is noise: the root cause
+/// of that URL being out of the index is the status code, and there is an `HTTP` rule for that.
+/// It is the same order of precedence `evaluate_indexability` applies in the core.
 pub struct Noindex;
 
 impl PageRule for Noindex {
@@ -364,17 +362,17 @@ impl PageRule for Noindex {
         if ctx.status != 200 {
             return Vec::new();
         }
-        // El orden importa para el detalle: si las dos fuentes lo declaran, se nombra la meta,
-        // que es la que el usuario puede cambiar en su plantilla.
+        // Order matters for the detail: if both sources declare it, the meta is named, which
+        // is the one the user can change in their template.
         let fuente = [("meta_robots", ctx.meta_robots), ("x_robots_tag", ctx.x_robots_tag)]
             .into_iter()
             .find(|(_, valor)| declares_noindex(*valor));
 
         match fuente {
             Some((nombre, valor)) => {
-                // Un noindex en la raíz del host no tiene lectura benigna: no es un archivo ni
-                // una página de sistema, es el sitio pidiendo desaparecer de Google. Es el único
-                // caso en que esta regla mantiene el `critical` que tenía para todo.
+                // A noindex on the host root has no benign reading: it is not an archive or a
+                // utility page, it is the site asking to disappear from Google. It is the only
+                // case where this rule keeps the `critical` it used to have across the board.
                 let en_portada = is_host_root(ctx.url);
                 let mut issue = Issue::new(&INDEX_NOINDEX).with_detail(serde_json::json!({
                     "source": nombre,
@@ -391,16 +389,17 @@ impl PageRule for Noindex {
     }
 }
 
-/// ¿La URL es la raíz de su host (`https://ejemplo.es/`, con o sin barra, con o sin query)?
+/// Is the URL the root of its host (`https://ejemplo.es/`, with or without slash, with or
+/// without query)?
 fn is_host_root(url: &str) -> bool {
     let path = &url[origin(url).len()..];
     let path = path.split(['?', '#']).next().unwrap_or("");
     path.is_empty() || path == "/"
 }
 
-/// `scheme://host` de una URL absoluta, sin barra final. Si no parece absoluta, la devuelve
-/// entera: quien la use para recortar obtiene una ruta vacía y quien la use para concatenar no
-/// inventa un host.
+/// `scheme://host` of an absolute URL, without trailing slash. If it does not look absolute,
+/// it is returned whole: a caller trimming with it gets an empty path and a caller
+/// concatenating with it does not invent a host.
 fn origin(url: &str) -> &str {
     let Some(esquema) = url.find("://") else {
         return url;
@@ -412,18 +411,19 @@ fn origin(url: &str) -> &str {
     }
 }
 
-/// URL prohibida en `robots.txt` a la que el propio sitio enlaza.
+/// URL forbidden in `robots.txt` that the site itself links to.
 ///
-/// **Es de alcance `site`, no `page` como decía el catálogo (corregido el 2026-07-30).** No es un
-/// matiz de implementación: el motor devuelve `Excluded(Robots)` *antes* de descargar la URL, que
-/// es lo que significa respetar `robots.txt`, así que nunca existe un `PageContext` sobre el que
-/// evaluarla. La alternativa —descargar las bloqueadas que estén enlazadas, como hace Screaming
-/// Frog— cambia el comportamiento del rastreador y no se hace de tapadillo para que encaje una
-/// regla.
+/// **It is `site`-scoped, not `page`-scoped as the catalogue used to say (corrected
+/// 2026-07-30).** This is not an implementation nuance: the engine returns `Excluded(Robots)`
+/// *before* downloading the URL, which is what honouring `robots.txt` means, so a
+/// `PageContext` to evaluate it on never exists. The alternative —downloading the blocked URLs
+/// that are linked, as Screaming Frog does— changes the crawler's behaviour, and that is not
+/// something to do on the sly just so a rule fits.
 ///
-/// El dato sí queda en el almacén: `crawl_state='excluded'` con `exclusion_reason='robots'`, y
-/// una fila en `links` que apunta a ella. Eso es exactamente el hallazgo: el sitio gasta enlaces
-/// internos en una URL que él mismo ha prohibido rastrear.
+/// The datum does end up in the store: `crawl_state='excluded'` with
+/// `exclusion_reason='robots'`, and a row in `links` pointing at it. That is exactly the
+/// finding: the site spends internal links on a URL it has itself forbidden from being
+/// crawled.
 pub struct RobotsBlocked;
 
 impl SiteRule for RobotsBlocked {
@@ -432,16 +432,16 @@ impl SiteRule for RobotsBlocked {
     }
 
     fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
-        // La infraestructura del CDN queda fuera, igual que en `INDEX-NOFOLLOW-INTERNAL`:
-        // Cloudflare inyecta los enlaces a `/cdn-cgi/` y los prohíbe él mismo en el robots.txt
-        // que gestiona, así que «el sitio enlaza una URL que él mismo bloquea» es literalmente
-        // cierto y completamente inaccionable. En un rastreo real eran los tres únicos
-        // `critical` del informe. El filtro de página (`LinkView::is_infrastructure`) no llega
-        // aquí porque esta regla es de sitio y lee `urls` con SQL.
+        // CDN infrastructure stays out, as in `INDEX-NOFOLLOW-INTERNAL`: Cloudflare injects
+        // the links to `/cdn-cgi/` and forbids them itself in the robots.txt it manages, so
+        // "the site links a URL it blocks itself" is literally true and completely
+        // unactionable. In a real crawl they were the only three `critical` findings in the
+        // report. The page filter (`LinkView::is_infrastructure`) does not reach here because
+        // this rule is site-scoped and reads `urls` with SQL.
         //
-        // `INDEX-BLOCKED-IN-SITEMAP` no lleva este filtro a propósito: si una URL de
-        // infraestructura aparece en el sitemap es porque el dueño del sitio la declaró, y
-        // quitarla del sitemap sí está en su mano.
+        // `INDEX-BLOCKED-IN-SITEMAP` deliberately does not carry this filter: if an
+        // infrastructure URL shows up in the sitemap it is because the site owner declared it,
+        // and taking it out of the sitemap is within their power.
         let sql = format!(
             "SELECT u.url_hash, u.url, COUNT(DISTINCT l.from_url_id) AS inlinks
              FROM urls u
@@ -471,12 +471,12 @@ impl SiteRule for RobotsBlocked {
     }
 }
 
-/// Enlace a otra página del mismo sitio con `rel=nofollow`.
+/// Link to another page of the same site with `rel=nofollow`.
 ///
-/// Emite **un hallazgo por página, no uno por enlace**. Un `nofollow` en el menú aparece en
-/// todas las páginas del sitio: con un hallazgo por enlace, un sitio de 10.000 páginas con tres
-/// enlaces así en su plantilla generaría 30.000 filas en `issues` que dicen lo mismo. El
-/// `detail_json` lleva la cuenta y hasta [`MAX_EJEMPLOS`] destinos para poder localizarlos.
+/// Emits **one finding per page, not one per link**. A `nofollow` in the menu shows up on
+/// every page of the site: with one finding per link, a 10,000-page site with three such links
+/// in its template would generate 30,000 rows in `issues` that all say the same thing. The
+/// `detail_json` carries the count and up to [`MAX_EJEMPLOS`] targets so they can be located.
 pub struct NofollowInternal;
 
 impl PageRule for NofollowInternal {
@@ -485,24 +485,24 @@ impl PageRule for NofollowInternal {
     }
 
     fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
-        // El `is_success` corta la plantilla de error: sin él, cada 404 del sitio repetía el
-        // nofollow del pie del tema como si fuera un hallazgo de esa URL. Ver
+        // `is_success` cuts off the error template: without it, every 404 on the site repeated
+        // the nofollow of the theme's footer as if it were a finding of that URL. See
         // `PageContext::is_success`.
         if !ctx.is_html || !ctx.is_success() {
             return Vec::new();
         }
-        // Solo enlaces de navegación: un `rel` en un `<img>` o en un `<script>` no existe, y
-        // `is_resource` es lo que distingue lo que el usuario pulsa de lo que la página carga.
+        // Navigation links only: a `rel` on an `<img>` or a `<script>` does not exist, and
+        // `is_resource` is what separates what the user clicks from what the page loads.
         //
-        // La infraestructura del CDN queda fuera: Cloudflare reescribe los `mailto:` como
-        // `/cdn-cgi/l/email-protection#…` con `rel=nofollow`, y eso llenaba el informe de un
-        // aviso que nadie puso ni puede quitar —39 de 40 páginas en un sitio real—.
+        // CDN infrastructure stays out: Cloudflare rewrites `mailto:` links as
+        // `/cdn-cgi/l/email-protection#…` with `rel=nofollow`, and that filled the report with
+        // a warning nobody wrote and nobody can remove —39 out of 40 pages on a real site—.
         let mut destinos: Vec<&str> = Vec::new();
         let mut causas: Vec<(&str, &str)> = Vec::new();
         for link in ctx.links {
             if link.is_internal && link.is_nofollow && !link.is_resource && !link.is_infrastructure
             {
-                // El mismo destino enlazado dos veces es un solo defecto.
+                // The same target linked twice is a single defect.
                 if !destinos.contains(&link.href) {
                     destinos.push(link.href);
                 }
@@ -516,17 +516,17 @@ impl PageRule for NofollowInternal {
             return Vec::new();
         }
 
-        // El `group_key` identifica **la causa y no la página**: el conjunto de enlaces
-        // ofensivos, cada uno por su destino y su ancla. El bloque de «webs amigas» del pie es
-        // el mismo conjunto en las 18.089 páginas de un rastreo real, así que todas comparten
-        // clave; una página que además añade un nofollow propio en su contenido es otro conjunto
-        // y queda fuera del grupo, que es exactamente lo que debe pasar. El ancla entra en la
-        // clave porque dos enlaces de plantilla al mismo destino con anclas distintas —el logo
-        // y el enlace del pie— son dos sitios distintos que tocar en el tema.
+        // The `group_key` identifies **the cause, not the page**: the set of offending links,
+        // each one by its target and its anchor. The "friendly sites" block in the footer is
+        // the same set across the 18,089 pages of a real crawl, so they all share the key; a
+        // page that additionally adds its own nofollow in its content is a different set and
+        // stays out of the group, which is exactly what should happen. The anchor is part of
+        // the key because two template links to the same target with different anchors —the
+        // logo and the footer link— are two different places to touch in the theme.
         //
-        // Se hashea porque la clave es un conjunto de URLs de longitud arbitraria, no un valor
-        // legible; los destinos legibles ya van en `examples`. Mismo criterio que el
-        // `title:{hash}` de META-TITLE-DUPLICATE.
+        // It is hashed because the key is a set of URLs of arbitrary length, not a readable
+        // value; the readable targets already go in `examples`. Same criterion as the
+        // `title:{hash}` of META-TITLE-DUPLICATE.
         causas.sort_unstable();
         let mut huella = String::new();
         for (href, ancla) in &causas {
@@ -549,19 +549,20 @@ impl PageRule for NofollowInternal {
     }
 }
 
-// ---------------------------------------------------------------- Reglas de conjunto
+// ---------------------------------------------------------------- Site-wide rules
 
-/// SQL que reconoce la portada del rastreo entre las filas de `urls`.
+/// SQL that recognizes the crawl's home page among the rows of `urls`.
 ///
-/// `crawl_meta.base_url` guarda lo que escribió el usuario al lanzar el rastreo, con barra final
-/// o sin ella, mientras la URL normalizada siempre la lleva. Es la misma comparación que hace la
-/// migración 003 para que la portada no salga como huérfana, y por el mismo motivo: un falso
-/// positivo en la primera fila del informe hace que no se lea el resto.
+/// `crawl_meta.base_url` stores whatever the user typed when launching the crawl, with or
+/// without trailing slash, while the normalized URL always carries it. It is the same
+/// comparison migration 003 makes so the home page does not come out as an orphan, and for the
+/// same reason: a false positive in the first row of the report keeps the rest from being
+/// read.
 const ES_LA_PORTADA: &str = "u.url IN (SELECT base_url FROM crawl_meta)
       OR u.url IN (SELECT RTRIM(base_url, '/') FROM crawl_meta)
       OR u.url IN (SELECT RTRIM(base_url, '/') || '/' FROM crawl_meta)";
 
-/// Recoge los `url_hash` de una consulta y los convierte en hallazgos de una regla.
+/// Collects the `url_hash`es of a query and turns them into findings of a rule.
 fn hallazgos_por_url(
     conn: &Connection,
     sql: &str,
@@ -577,15 +578,15 @@ fn hallazgos_por_url(
     Ok(out)
 }
 
-/// Modo del rastreo, tal como quedó en `crawl_meta`.
+/// The crawl mode, as it was left in `crawl_meta`.
 fn crawl_mode(conn: &Connection) -> rusqlite::Result<Option<String>> {
     conn.query_row("SELECT mode FROM crawl_meta LIMIT 1", [], |r| r.get(0)).optional()
 }
 
-/// URL del sitemap y a la vez prohibida en `robots.txt`.
+/// URL in the sitemap and at the same time forbidden in `robots.txt`.
 ///
-/// **No está registrada**: `urls.in_sitemap` vale 0 en todo fixture porque el modo `filesystem`
-/// no descubre sitemaps. Ver la cabecera del módulo.
+/// Registered since 2026-07-30. Before that it could not be: `urls.in_sitemap` was 0 in every
+/// fixture because `filesystem` mode did not discover sitemaps. See the module header.
 pub struct BlockedInSitemap;
 
 impl SiteRule for BlockedInSitemap {
@@ -606,13 +607,14 @@ impl SiteRule for BlockedInSitemap {
     }
 }
 
-/// URL del sitemap que además pide no ser indexada.
+/// URL in the sitemap that also asks not to be indexed.
 ///
-/// **No está registrada**, por el mismo motivo que [`BlockedInSitemap`].
+/// Registered since 2026-07-30, for the same reason as [`BlockedInSitemap`].
 ///
-/// Se apoya en `pages.indexability_reason` y no en un `LIKE '%noindex%'` sobre `meta_robots`:
-/// el motor ya resolvió ahí la meta, la cabecera y sus prefijos de bot, y repetir esa lógica en
-/// SQL sería una segunda implementación que se desincronizaría con la primera.
+/// It relies on `pages.indexability_reason` and not on a `LIKE '%noindex%'` over
+/// `meta_robots`: the engine already resolved the meta, the header and their bot prefixes
+/// there, and repeating that logic in SQL would be a second implementation drifting away from
+/// the first.
 pub struct NoindexInSitemap;
 
 impl SiteRule for NoindexInSitemap {
@@ -634,17 +636,16 @@ impl SiteRule for NoindexInSitemap {
     }
 }
 
-/// No se encontró ningún sitemap en todo el rastreo.
+/// No sitemap was found in the whole crawl.
 ///
-/// **No está registrada.** La consulta es correcta para el modo `http`, pero no hay forma de
-/// que un fixture la dispare: los fixtures se rastrean en modo `filesystem`, que no busca
-/// sitemaps, y por eso la regla se limita al modo `http` en vez de avisar en los tres. Sin ese
-/// límite, toda auditoría de un `dist/` reportaría «sin sitemap» aunque el `dist/` traiga uno,
-/// que es exactamente la clase de falso positivo que corrigió la migración 003.
+/// Registered, and **deliberately limited to `http` mode**, which is why no filesystem fixture
+/// triggers it: the fixture bank lists it in `SIN_FIXTURE_EN_FILESYSTEM` with that reason. In an
+/// audit of a `dist/` the site is not published yet, so "no sitemap" on every build would be
+/// noise in a CI pipeline — the same class of false positive migration 003 fixed.
 ///
-/// El dato que falta para hacerlo bien es un registro de los sitemaps consultados: qué URL, con
-/// qué código respondió y cuántas URLs declaraba. Con eso, esta regla y `INDEX-SITEMAP-ERROR`
-/// se implementan sin heurística.
+/// The missing piece to do this properly is a record of the sitemaps consulted: which URL,
+/// what status it answered with and how many URLs it declared. With that, this rule and
+/// `INDEX-SITEMAP-ERROR` can be implemented without heuristics.
 pub struct SitemapMissing;
 
 impl SiteRule for SitemapMissing {
@@ -656,8 +657,8 @@ impl SiteRule for SitemapMissing {
         if crawl_mode(conn)?.as_deref() != Some("http") {
             return Ok(Vec::new());
         }
-        // `config_json` es el `CrawlJob` serializado íntegro: si el usuario desactivó el
-        // descubrimiento de sitemaps, no haberlos encontrado no es un hallazgo del sitio.
+        // `config_json` is the full serialized `CrawlJob`: if the user turned sitemap
+        // discovery off, not having found any is not a finding about the site.
         let buscados: Option<i64> = conn
             .query_row(
                 "SELECT json_extract(config_json, '$.discover_sitemaps') FROM crawl_meta LIMIT 1",
@@ -679,13 +680,15 @@ impl SiteRule for SitemapMissing {
     }
 }
 
-/// URL declarada en el sitemap a la que no llega ningún enlace interno.
+/// URL declared in the sitemap that no internal link reaches.
 ///
-/// **No está registrada**: `urls.in_sitemap` vale 0 en todo fixture. Ver la cabecera del módulo.
+/// Registered since 2026-07-30, when `filesystem` mode started discovering sitemaps and
+/// `urls.in_sitemap` stopped being 0 in every fixture. See the module header.
 ///
-/// Usa `v_orphans`, que ya resuelve el cruce y excluye la portada (migración 003). La otra mitad
-/// de la condición del catálogo —«o en adaptador»— llegará con los adaptadores: hasta entonces nada
-/// puebla `adapter_entities`, así que añadirla ahora sería código sin ejecutar.
+/// It uses `v_orphans`, which already resolves the cross-check and excludes the home page
+/// (migration 003). The other half of the catalogue's condition —"or in an adapter"— will
+/// arrive with the adapters: until then nothing populates `adapter_entities`, so adding it now
+/// would be code that never runs.
 pub struct OrphanPage;
 
 impl SiteRule for OrphanPage {
@@ -703,11 +706,11 @@ impl SiteRule for OrphanPage {
     }
 }
 
-/// El CTE `home(id)` con el que arranca todo recorrido de clics: la portada más las alternativas
-/// de idioma que la portada declara por `hreflang` (ver [`hreflang_seed_ids`]).
+/// The `home(id)` CTE every click traversal starts from: the home page plus the language
+/// alternates the home page declares via `hreflang` (see [`hreflang_seed_ids`]).
 ///
-/// Los `seed_ids` se interpolan y no se ligan como parámetros porque son `i64` que acaban de
-/// salir de la propia base: no hay entrada del usuario que escapar.
+/// The `seed_ids` are interpolated rather than bound as parameters because they are `i64`s
+/// fresh out of the database itself: there is no user input to escape.
 fn home_cte(seed_ids: &[i64]) -> String {
     let extra = if seed_ids.is_empty() {
         String::new()
@@ -719,16 +722,16 @@ fn home_cte(seed_ids: &[i64]) -> String {
     format!("home(id) AS (SELECT u.id FROM urls u WHERE {ES_LA_PORTADA}{extra})")
 }
 
-/// El CTE `reach(id)`: todo lo alcanzable desde `home` siguiendo enlaces `<a>`, sin límite de
-/// profundidad. Es lo que separa «profunda» de «inalcanzable», que son dos diagnósticos
-/// distintos con dos reglas distintas.
+/// The `reach(id)` CTE: everything reachable from `home` following `<a>` links, with no depth
+/// limit. It is what separates "deep" from "unreachable", which are two different diagnoses
+/// with two different rules.
 ///
-/// Mantiene el `INDEXED BY` de `shallow` y por el mismo motivo: sin él SQLite construye un
-/// índice automático sobre `links` entero en RAM. Al llevar una sola columna, `UNION` deduplica
-/// por nodo y el recorrido visita cada nodo alcanzado una vez: es O(enlaces) sobre el índice
-/// persistente. Medido sobre los rastreos reales el 2026-08-01, en frío con `sqlite3`:
-/// un sitio de 220.491 enlaces, 0,03 s; uno de 2.413.074 enlaces, 1,4 s. El plan no
-/// crea ningún índice automático (verificado con EXPLAIN QUERY PLAN en ambos).
+/// It keeps the `INDEXED BY` from `shallow`, and for the same reason: without it SQLite builds
+/// an automatic index over the whole of `links` in RAM. Since it carries a single column,
+/// `UNION` deduplicates by node and the traversal visits each reached node once: it is
+/// O(links) over the persistent index. Measured on the real crawls on 2026-08-01, cold with
+/// `sqlite3`: a site with 220,491 links, 0.03 s; one with 2,413,074 links, 1.4 s. The plan
+/// creates no automatic index (verified with EXPLAIN QUERY PLAN on both).
 const REACH_CTE: &str = "reach(id) AS (
                      SELECT id FROM home
                      UNION
@@ -738,18 +741,18 @@ const REACH_CTE: &str = "reach(id) AS (
                      WHERE l.element = 'a'
                  )";
 
-/// Los `urls.id` de los destinos `hreflang` de la portada, para sembrar el recorrido de clics.
+/// The `urls.id`s of the home page's `hreflang` targets, to seed the click traversal.
 ///
-/// **Por qué existen:** en un sitio bilingüe real, el único puente de `/es` a `/en` era el
-/// `<link rel="alternate" hreflang="en">` de la cabecera —el selector visible era JavaScript— y
-/// el recorrido que solo sigue `<a>` daba las 1.987 páginas inglesas por «profundas» con
-/// `depth = 0`. Google sí descubre y rastrea los destinos `hreflang`, así que tratarlos como
-/// puntos de entrada equivalentes a la portada es fiel a cómo se navega y a cómo se indexa; la
-/// profundidad de la sección se mide entonces desde su propia portada de idioma.
+/// **Why they exist:** on a real bilingual site, the only bridge from `/es` to `/en` was the
+/// `<link rel="alternate" hreflang="en">` in the head —the visible selector was JavaScript—
+/// and the traversal that only follows `<a>` reported the 1,987 English pages as "deep" with
+/// `depth = 0`. Google does discover and crawl `hreflang` targets, so treating them as entry
+/// points equivalent to the home page is faithful to how the site is browsed and to how it is
+/// indexed; the section's depth is then measured from its own language home page.
 ///
-/// Solo se leen los de la portada: es donde un sitio multilingüe declara sus raíces de idioma.
-/// Sembrar con los `hreflang` de todas las páginas convertiría cada alternativa de artículo en
-/// un punto de entrada y desactivaría la medición de profundidad entera.
+/// Only the home page's are read: that is where a multilingual site declares its language
+/// roots. Seeding with the `hreflang`s of every page would turn each article's alternate into
+/// an entry point and disable the depth measurement altogether.
 fn hreflang_seed_ids(conn: &Connection) -> rusqlite::Result<Vec<i64>> {
     let sql = format!(
         "SELECT u.url, p.hreflang_json FROM urls u
@@ -763,8 +766,8 @@ fn hreflang_seed_ids(conn: &Connection) -> rusqlite::Result<Vec<i64>> {
     let mut candidatas: Vec<String> = Vec::new();
     for fila in filas {
         let (base, json) = fila?;
-        // Un JSON que no se pueda leer no aborta la regla: sin alternativas, el recorrido
-        // arranca solo desde la portada, que es el comportamiento de siempre.
+        // A JSON that cannot be read does not abort the rule: with no alternates, the
+        // traversal starts from the home page alone, which is the behaviour it always had.
         let Ok(pares) = serde_json::from_str::<Vec<(String, String)>>(&json) else {
             continue;
         };
@@ -774,8 +777,8 @@ fn hreflang_seed_ids(conn: &Connection) -> rusqlite::Result<Vec<i64>> {
             } else if href.starts_with('/') {
                 format!("{}{href}", origin(&base))
             } else {
-                // Un `hreflang` relativo sin barra inicial es rarísimo y ambiguo: mejor no
-                // sembrar que sembrar mal.
+                // A relative `hreflang` without a leading slash is vanishingly rare and
+                // ambiguous: better not to seed than to seed wrong.
                 continue;
             };
             if !candidatas.contains(&absoluta) {
@@ -787,8 +790,8 @@ fn hreflang_seed_ids(conn: &Connection) -> rusqlite::Result<Vec<i64>> {
         return Ok(Vec::new());
     }
 
-    // El `hreflang` puede venir con o sin barra final y la URL normalizada del almacén también:
-    // se prueban las dos formas, como hace `ES_LA_PORTADA` con la portada.
+    // The `hreflang` may come with or without trailing slash and so may the normalized URL in
+    // the store: both forms are tried, as `ES_LA_PORTADA` does with the home page.
     let mut ids: Vec<i64> = Vec::new();
     let mut stmt =
         conn.prepare("SELECT id FROM urls WHERE is_internal = 1 AND url IN (?1, ?2)")?;
@@ -807,30 +810,30 @@ fn hreflang_seed_ids(conn: &Connection) -> rusqlite::Result<Vec<i64>> {
     Ok(ids)
 }
 
-/// Recorrido en anchura que deja en `temp.deep_bfs_depth (id, d)` la profundidad de clic
-/// **mínima** de cada URL alcanzable desde la portada (y las semillas `hreflang`) siguiendo
-/// enlaces `<a>`.
+/// Breadth-first traversal that leaves in `temp.deep_bfs_depth (id, d)` the **minimum** click
+/// depth of every URL reachable from the home page (and the `hreflang` seeds) following `<a>`
+/// links.
 ///
-/// Sustituye a los dos CTE recursivos que usaba `DeepPage` (`shallow` acotado a 4 niveles más
-/// el cierre completo [`REACH_CTE`]): un solo recorrido da a la vez el conjunto alcanzable, el
-/// conjunto superficial **y la profundidad real de cada página**, que es lo que permite al
-/// informe decir «202.392 páginas a más de 4 clics, la más profunda a 48» en una línea en vez
-/// de doscientas mil. Un CTE recursivo no puede dar la profundidad mínima: con `(id, d)` en la
-/// columna de recursión el `UNION` deduplica pares y el recorrido explota por caminos.
+/// It replaces the two recursive CTEs `DeepPage` used to run (`shallow` capped at 4 levels
+/// plus the full closure [`REACH_CTE`]): a single traversal yields at once the reachable set,
+/// the shallow set **and each page's actual depth**, which is what lets the report say
+/// "202,392 pages more than 4 clicks away, the deepest at 48" in one line instead of two
+/// hundred thousand. A recursive CTE cannot yield the minimum depth: with `(id, d)` in the
+/// recursion column the `UNION` deduplicates pairs and the traversal blows up along paths.
 ///
-/// Medido sobre el rastreo real de 487.621 URLs y 26,6 millones de enlaces (2026-08-03, mismo
-/// resultado: 202.392 profundas): los dos CTE anteriores 29,1 s; este recorrido 23,6 s. El
-/// coste es O(enlaces) igual que el cierre, porque cada nodo entra en la frontera una vez.
+/// Measured on the real crawl of 487,621 URLs and 26.6 million links (2026-08-03, same
+/// result: 202,392 deep pages): the two previous CTEs, 29.1 s; this traversal, 23.6 s. The
+/// cost is O(links) just like the closure, because each node enters the frontier once.
 ///
-/// Dos detalles que no son decorativos:
+/// Two details that are not decorative:
 ///
-/// - `CROSS JOIN` fuerza el orden de reunión frontera→enlaces. Con `JOIN` a secas, SQLite
-///   eligió recorrer `links` entero por nivel: 49 niveles × 26,6 M de filas, más de cinco
-///   minutos sin terminar.
-/// - `INDEXED BY` conserva la lección medida del CTE anterior: sin él SQLite construye un
-///   índice automático sobre `links` entero en RAM (el pico subía de 85 a 242 MB). Las tablas
-///   temporales de este recorrido miden lo que lo alcanzado (dos enteros por URL), el mismo
-///   orden que ya materializaba el `UNION` del cierre.
+/// - `CROSS JOIN` forces the frontier→links join order. With a plain `JOIN`, SQLite chose to
+///   scan the whole of `links` per level: 49 levels × 26.6 M rows, more than five minutes
+///   without finishing.
+/// - `INDEXED BY` keeps the measured lesson of the previous CTE: without it SQLite builds an
+///   automatic index over the whole of `links` in RAM (the peak went from 85 to 242 MB). The
+///   temp tables of this traversal are sized by what is reached (two integers per URL), the
+///   same order of magnitude the closure's `UNION` already materialized.
 fn click_depth_bfs(conn: &Connection, seed_ids: &[i64]) -> rusqlite::Result<()> {
     conn.execute_batch(
         "DROP TABLE IF EXISTS temp.deep_bfs_depth;
@@ -847,8 +850,8 @@ fn click_depth_bfs(conn: &Connection, seed_ids: &[i64]) -> rusqlite::Result<()> 
     );
     conn.execute(&raices, [])?;
     if !seed_ids.is_empty() {
-        // Los ids se interpolan y no se ligan como parámetros porque son `i64` que acaban de
-        // salir de la propia base: no hay entrada del usuario que escapar.
+        // The ids are interpolated rather than bound as parameters because they are `i64`s
+        // fresh out of the database itself: there is no user input to escape.
         let lista = seed_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
         conn.execute(
             &format!(
@@ -869,9 +872,9 @@ fn click_depth_bfs(conn: &Connection, seed_ids: &[i64]) -> rusqlite::Result<()> 
            AND l.to_url_id NOT IN (SELECT id FROM deep_bfs_depth)",
     )?;
     let mut level: i64 = 0;
-    // El bucle termina siempre: cada vuelta añade al menos un nodo nuevo a `deep_bfs_depth`
-    // (si no añade ninguno, corta), y los nodos son finitos. Los ciclos no repiten porque lo
-    // visitado queda fuera por el `NOT IN`.
+    // The loop always terminates: each pass adds at least one new node to `deep_bfs_depth`
+    // (if it adds none, it breaks), and nodes are finite. Cycles do not repeat because what
+    // has been visited is kept out by the `NOT IN`.
     loop {
         level += 1;
         if expand.execute([])? == 0 {
@@ -892,34 +895,34 @@ fn click_depth_bfs(conn: &Connection, seed_ids: &[i64]) -> rusqlite::Result<()> 
     Ok(())
 }
 
-/// Página que solo se alcanza a más de [`MAX_CLICK_DEPTH`] clics de la portada.
+/// Page only reachable more than [`MAX_CLICK_DEPTH`] clicks away from the home page.
 ///
-/// La profundidad se calcula aquí con un recorrido en anchura sobre `links`
-/// ([`click_depth_bfs`]), y **no se lee de `urls.depth`**. El motivo es que `urls.depth` mide
-/// los saltos que dio el rastreo, no los clics que da un visitante, y las dos cosas se separan
-/// en cuanto el rastreo no empieza por la portada: en modo `filesystem` todos los ficheros del
-/// directorio son semillas y `depth` vale 0 en todas las filas, así que una regla basada en esa
-/// columna no avisaría nunca y el fixture no podría demostrarla. El recorrido, en cambio, da la
-/// misma respuesta en los tres modos.
+/// Depth is computed here with a breadth-first traversal over `links`
+/// ([`click_depth_bfs`]), and is **not read from `urls.depth`**. The reason is that
+/// `urls.depth` measures the hops the crawl took, not the clicks a visitor makes, and the two
+/// part ways as soon as the crawl does not start at the home page: in `filesystem` mode every
+/// file in the directory is a seed and `depth` is 0 in every row, so a rule based on that
+/// column would never warn and the fixture could not prove it. The traversal, instead, gives
+/// the same answer in all three modes.
 ///
-/// Solo se cuentan enlaces `<a>`: una página a la que únicamente apunta un `<link rel=next>` o
-/// un `<script>` no se alcanza pulsando. La única excepción son los destinos `hreflang` de la
-/// portada, que siembran el recorrido como raíces de idioma: ver [`hreflang_seed_ids`].
+/// Only `<a>` links count: a page pointed at solely by a `<link rel=next>` or a `<script>` is
+/// not reached by clicking. The one exception is the home page's `hreflang` targets, which
+/// seed the traversal as language roots: see [`hreflang_seed_ids`].
 ///
-/// «No aparece en los cuatro primeros niveles» tiene dos causas posibles y solo una es de esta
-/// regla: la página puede estar *más lejos* (profunda) o puede ser *inalcanzable* (desconectada,
-/// y eso es `INDEX-SECTION-DISCONNECTED`). El recorrido las separa solo: lo inalcanzable no
-/// tiene profundidad. Descubierto en un rastreo real donde 1.987 páginas «a más de cuatro
-/// clics» estaban en realidad a infinitos, y el consejo de la regla —añade atajos de
-/// paginación— no arreglaba nada.
+/// "Absent from the first four levels" has two possible causes and only one belongs to this
+/// rule: the page may be *further away* (deep) or it may be *unreachable* (disconnected, and
+/// that is `INDEX-SECTION-DISCONNECTED`). The traversal separates them on its own: what is
+/// unreachable has no depth. Discovered on a real crawl where 1,987 pages "more than four
+/// clicks away" were in fact infinitely far, and the rule's advice —add pagination shortcuts—
+/// fixed nothing.
 ///
-/// El `detail_json` de cada hallazgo lleva la **profundidad real** (`click_depth`). Es lo que
-/// convierte doscientas mil filas idénticas en datos: el informe puede decir la forma del
-/// problema —cuántas, hasta dónde— en una línea, el XLSX se puede ordenar por profundidad, y
-/// `report --rule` puede listar lo más hundido primero. La decisión anterior («el número exacto
-/// no cambia lo que hay que hacer») era cierta página a página y falsa en agregado: 202.392
-/// hallazgos verdaderos sin forma no se leen. Coste medido en [`click_depth_bfs`]: menor que el
-/// de los dos CTE a los que sustituye.
+/// Each finding's `detail_json` carries the **actual depth** (`click_depth`). It is what
+/// turns two hundred thousand identical rows into data: the report can state the shape of the
+/// problem —how many, how far— in one line, the XLSX can be sorted by depth, and
+/// `report --rule` can list the most sunken first. The previous decision ("the exact number
+/// does not change what needs doing") was true page by page and false in aggregate: 202,392
+/// true findings with no shape do not get read. Cost measured in [`click_depth_bfs`]: lower
+/// than that of the two CTEs it replaces.
 pub struct DeepPage;
 
 impl SiteRule for DeepPage {
@@ -928,18 +931,19 @@ impl SiteRule for DeepPage {
     }
 
     fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
-        // En modo `list` se audita un conjunto suelto de URLs y no se siguen enlaces: no hay
-        // portada desde la que contar clics, y medirlos daría un hallazgo por cada fila.
+        // In `list` mode a loose set of URLs is audited and links are not followed: there is
+        // no home page to count clicks from, and measuring them would flag every single row.
         if crawl_mode(conn)?.as_deref() == Some("list") {
             return Ok(Vec::new());
         }
 
         click_depth_bfs(conn, &hreflang_seed_ids(conn)?)?;
-        // Sin portada rastreada el recorrido queda vacío y no se marca nada: no hay desde
-        // dónde contar. Es el `EXISTS (SELECT 1 FROM home)` de antes, ahora implícito.
+        // With no crawled home page the traversal comes out empty and nothing is flagged:
+        // there is nowhere to count from. It is the old `EXISTS (SELECT 1 FROM home)`, now
+        // implicit.
         let mut stmt = conn.prepare(
-            // `CROSS JOIN` desde lo alcanzado: son dos búsquedas por clave primaria por página
-            // alcanzada, en vez de dejar que el planificador recorra `urls` entera.
+            // `CROSS JOIN` from what was reached: two primary-key lookups per reached page,
+            // instead of letting the planner scan the whole of `urls`.
             "SELECT u.url_hash, c.d
              FROM temp.deep_bfs_depth c
              CROSS JOIN urls u ON u.id = c.id
@@ -947,9 +951,9 @@ impl SiteRule for DeepPage {
              WHERE c.d > ?1
                AND u.is_internal = 1
                AND p.is_indexable = 1
-               -- Sin enlaces entrantes no es una página profunda, es una huérfana, y tiene su
-               -- propia regla. Además protege de marcar el sitio entero cuando el rastreo no
-               -- alcanzó la portada.
+               -- With no inbound links it is not a deep page, it is an orphan, and that has
+               -- its own rule. It also protects against flagging the whole site when the
+               -- crawl did not reach the home page.
                AND COALESCE(p.internal_links_in, 0) > 0",
         )?;
         let rows = stmt.query_map([MAX_CLICK_DEPTH], |r| {
@@ -971,33 +975,33 @@ impl SiteRule for DeepPage {
     }
 }
 
-/// La forma del problema de profundidad de un rastreo ya evaluado, leída de los `detail_json`
-/// que dejó [`DeepPage`].
+/// The shape of an already evaluated crawl's depth problem, read from the `detail_json`s
+/// [`DeepPage`] left behind.
 ///
-/// Existe para que el informe pueda decir **una vez** lo que las filas dicen doscientas mil:
-/// «202.392 páginas a más de 4 clics (profundidad típica 5–8, máxima 48)». Vive en este crate y
-/// no en la CLI por la misma razón que `is_template_group`: la app de macOS y la de Windows
-/// tienen que resumir exactamente igual que la CLI o el mismo fichero contaría cosas distintas
-/// según dónde se abra.
+/// It exists so the report can say **once** what the rows say two hundred thousand times:
+/// "202,392 pages more than 4 clicks away (typical depth 5–8, deepest 48)". It lives in this
+/// crate and not in the CLI for the same reason as `is_template_group`: the macOS and Windows
+/// apps have to summarize exactly like the CLI does, or the same file would tell different
+/// stories depending on where it is opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeepPageShape {
-    /// Páginas con hallazgo de profundidad (una fila por página).
+    /// Pages with a depth finding (one row per page).
     pub pages: i64,
-    /// El umbral que superaron, tal como quedó escrito en el fichero.
+    /// The threshold they exceeded, as it was written into the file.
     pub max_click_depth: i64,
-    /// Banda típica: el rango intercuartílico (P25–P75) de las profundidades.
+    /// Typical band: the interquartile range (P25–P75) of the depths.
     pub typical_min: i64,
     pub typical_max: i64,
-    /// La página más hundida del sitio.
+    /// The most sunken page of the site.
     pub deepest: i64,
 }
 
-/// Lee la forma del problema de profundidad de las filas de `INDEX-DEEP-PAGE`.
+/// Reads the shape of the depth problem from the `INDEX-DEEP-PAGE` rows.
 ///
-/// Devuelve `None` si no hay hallazgos o si el fichero es anterior al `click_depth` en el
-/// detalle (entonces solo hay recuento, y el informe cae a la reformulación genérica por
-/// porcentaje). Agrupa por profundidad en SQL —202.392 filas se reducen a ~45 grupos— y saca
-/// los cuartiles del histograma en memoria.
+/// Returns `None` if there are no findings or if the file predates the `click_depth` in the
+/// detail (then there is only a count, and the report falls back to the generic percentage
+/// rephrasing). It groups by depth in SQL —202,392 rows collapse into ~45 groups— and takes
+/// the quartiles from the histogram in memory.
 pub fn deep_page_shape(conn: &Connection) -> rusqlite::Result<Option<DeepPageShape>> {
     let mut stmt = conn.prepare(
         "SELECT CAST(json_extract(detail_json, '$.click_depth') AS INTEGER) AS d,
@@ -1024,8 +1028,8 @@ pub fn deep_page_shape(conn: &Connection) -> rusqlite::Result<Option<DeepPageSha
         .max()
         .unwrap_or(MAX_CLICK_DEPTH);
 
-    // Cuartiles sobre el histograma acumulado: la profundidad en la que cae la página que
-    // ocupa el 25% y el 75% del recuento.
+    // Quartiles over the cumulative histogram: the depth where the page sitting at 25% and at
+    // 75% of the count falls.
     let cuartil = |objetivo: i64| -> i64 {
         let mut acumulado = 0;
         for (d, _, n) in &histograma {
@@ -1045,22 +1049,21 @@ pub fn deep_page_shape(conn: &Connection) -> rusqlite::Result<Option<DeepPageSha
     }))
 }
 
-/// Grupo de páginas enlazadas entre sí pero inalcanzable desde la portada siguiendo `<a>`.
+/// Group of pages linked to each other but unreachable from the home page following `<a>`.
 ///
-/// **Un hallazgo de sitio, no uno por página.** La causa es una —no hay ningún enlace rastreable
-/// que entre en la sección— y en el caso real que motivó la regla eran 1.987 páginas: como filas
-/// individuales habrían enterrado el informe entero, y todas dirían lo mismo.
+/// **One site finding, not one per page.** The cause is one —no crawlable link enters the
+/// section— and in the real case that motivated the rule it was 1,987 pages: as individual
+/// rows they would have buried the whole report, and every one would say the same thing.
 ///
-/// Se exige `internal_links_in > 0`: una página suelta sin ningún enlace entrante ya tiene su
-/// regla (`INDEX-NO-INTERNAL-LINKS-IN`). Lo que caracteriza a la sección desconectada es lo
-/// contrario: sus páginas *sí* se enlazan, pero solo entre ellas.
+/// `internal_links_in > 0` is required: a loose page with no inbound links at all already has
+/// its rule (`INDEX-NO-INTERNAL-LINKS-IN`). What characterizes the disconnected section is
+/// the opposite: its pages *are* linked, but only among themselves.
 ///
-/// Comparte con [`DeepPage`] las semillas `hreflang` de la portada: una sección de idioma
-/// declarada por `hreflang` no está desconectada, está enlazada por el único mecanismo que un
-/// sitio multilingüe con selector JavaScript puede ofrecer al rastreador, y Google la descubre
-/// por ahí. Cada regla ejecuta su propio recorrido; el cierre está medido en [`REACH_CTE`] y
-/// duplicarlo cuesta décimas de segundo en la pasada final, no un estado compartido entre
-/// reglas.
+/// It shares the home page's `hreflang` seeds with [`DeepPage`]: a language section declared
+/// via `hreflang` is not disconnected, it is linked by the only mechanism a multilingual site
+/// with a JavaScript selector can offer the crawler, and Google discovers it that way. Each
+/// rule runs its own traversal; the closure is measured in [`REACH_CTE`] and duplicating it
+/// costs tenths of a second in the final pass, not shared state between rules.
 pub struct SectionDisconnected;
 
 impl SiteRule for SectionDisconnected {
@@ -1069,8 +1072,8 @@ impl SiteRule for SectionDisconnected {
     }
 
     fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
-        // Mismo motivo que en `DeepPage`: en modo `list` no se siguen enlaces y todo parecería
-        // desconectado.
+        // Same reason as in `DeepPage`: in `list` mode links are not followed and everything
+        // would look disconnected.
         if crawl_mode(conn)?.as_deref() == Some("list") {
             return Ok(Vec::new());
         }
@@ -1099,8 +1102,9 @@ impl SiteRule for SectionDisconnected {
             std::collections::BTreeMap::new();
         for fila in filas {
             let (url, path) = fila?;
-            // El primer segmento de la ruta agrupa la sección: `/en/mundial/grupos` cuenta para
-            // `/en/`. Es lo que permite al informe decir «la sección /en/» sin listar las 1.987.
+            // The first path segment groups the section: `/en/mundial/grupos` counts towards
+            // `/en/`. It is what lets the report say "the /en/ section" without listing all
+            // 1,987 pages.
             let ruta = path.unwrap_or_default();
             let primer_segmento = ruta
                 .split('/')
@@ -1114,7 +1118,7 @@ impl SiteRule for SectionDisconnected {
             return Ok(Vec::new());
         }
 
-        // Los prefijos más poblados primero; con tres el diagnóstico ya está contado.
+        // Most populated prefixes first; with three the diagnosis is already told.
         let mut prefijos: Vec<(String, i64)> = por_prefijo.into_iter().collect();
         prefijos.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let secciones: Vec<serde_json::Value> = prefijos
@@ -1138,19 +1142,24 @@ impl SiteRule for SectionDisconnected {
     }
 }
 
-/// Página indexable a la que ninguna otra del sitio enlaza.
+/// Indexable page that no other page of the site links to.
 ///
-/// Se lee de `pages.internal_links_in`, la columna que la pasada final rellena y que la UI ya
-/// muestra en `v_indexable_pages`. Recalcularla aquí con otro criterio haría que la tabla y el
-/// hallazgo dijeran cosas distintas de la misma página.
+/// It reads `pages.internal_links_in`, the column the final pass fills in and the UI already
+/// shows in `v_indexable_pages`. Recomputing it here with a different criterion would make the
+/// table and the finding say different things about the same page.
 ///
-/// La portada queda fuera: es el punto de entrada y nadie la enlaza. Es la misma exclusión que
-/// la migración 003 tuvo que añadir a `v_orphans`.
+/// The home page stays out: it is the entry point and nobody links to it. It is the same
+/// exclusion migration 003 had to add to `v_orphans`.
 ///
-/// Solapa con [`OrphanPage`] en las páginas que además están en el sitemap. Se ha preferido el
-/// solape a la alternativa —descontar aquí las que ya reporta la otra regla— porque
-/// `INDEX-ORPHAN-PAGE` no está registrada todavía y descontarlas dejaría a esas páginas sin
-/// ningún hallazgo, que es el peor de los dos errores.
+/// It overlaps with [`OrphanPage`] on the pages that are also in the sitemap, and the overlap
+/// is deliberate. The two say different things: this one is "nothing on the site links here",
+/// the other is "you declared it in the sitemap and nothing links here". The second is the
+/// worse defect and deserves its own finding; suppressing this one where they meet would hide
+/// the plain fact behind the qualified one.
+///
+/// The original reason on record was different —that `INDEX-ORPHAN-PAGE` was not registered, so
+/// subtracting would leave those pages with no finding at all— and it stopped being true on
+/// 2026-07-30. The overlap was re-examined then and kept on its own merits.
 pub struct NoInternalLinksIn;
 
 impl SiteRule for NoInternalLinksIn {
@@ -1171,20 +1180,20 @@ impl SiteRule for NoInternalLinksIn {
     }
 }
 
-// ---------------------------------------------------------------- Registro
+// ---------------------------------------------------------------- Registry
 
-// ---------------------------------------------------------------- robots.txt y sitemaps
+// ---------------------------------------------------------------- robots.txt and sitemaps
 //
-// Las tres reglas de aquí abajo leen las tablas `robots_txt` y `sitemaps`, que existen desde la
-// migración 004. Antes de ella el motor descargaba los dos ficheros, los usaba y los tiraba: no
-// quedaba constancia de si el robots.txt existía ni de si un sitemap tenía el XML roto, así que
-// estas reglas no se podían escribir.
+// The three rules below read the `robots_txt` and `sitemaps` tables, which exist since
+// migration 004. Before it the engine downloaded both files, used them and threw them away:
+// no trace remained of whether the robots.txt existed or of whether a sitemap had broken XML,
+// so these rules could not be written.
 
-/// El sitio no sirve `/robots.txt`.
+/// The site does not serve `/robots.txt`.
 ///
-/// Solo en modo `http`. En una auditoría de un `dist/` el `robots.txt` lo sirve casi siempre el
-/// alojamiento —Cloudflare, nginx, el proveedor de estáticos— y no el generador, así que su
-/// ausencia en el directorio no dice nada sobre el sitio publicado.
+/// `http` mode only. In an audit of a `dist/` the `robots.txt` is almost always served by the
+/// hosting —Cloudflare, nginx, the static-files provider— and not by the generator, so its
+/// absence from the directory says nothing about the published site.
 pub struct RobotsTxtMissing;
 
 impl SiteRule for RobotsTxtMissing {
@@ -1207,11 +1216,11 @@ impl SiteRule for RobotsTxtMissing {
             .query_row("SELECT status_code FROM robots_txt WHERE host = ?1", [&host], |r| r.get(0))
             .optional()?;
 
-        // Sin fila no se puede afirmar nada: significa que no se llegó a pedir.
+        // With no row nothing can be asserted: it means it was never requested.
         let Some(estado) = estado else {
             return Ok(Vec::new());
         };
-        // Un fallo de red tampoco es una ausencia: solo un 4xx lo es.
+        // A network failure is not an absence either: only a 4xx is.
         let Some(codigo) = estado else {
             return Ok(Vec::new());
         };
@@ -1227,7 +1236,7 @@ impl SiteRule for RobotsTxtMissing {
     }
 }
 
-/// El `robots.txt` prohíbe rastrear la raíz del sitio.
+/// The `robots.txt` forbids crawling the site root.
 pub struct RobotsTxtBlocksAll;
 
 impl SiteRule for RobotsTxtBlocksAll {
@@ -1243,8 +1252,8 @@ impl SiteRule for RobotsTxtBlocksAll {
         let mut out = Vec::new();
         for fila in filas {
             let (host, contenido) = fila?;
-            // El contenido se recorta: en el detalle cabe lo que explica el hallazgo, no un
-            // fichero entero que puede tener cientos de líneas de reglas de terceros.
+            // The content is trimmed: the detail holds what explains the finding, not a whole
+            // file that may carry hundreds of lines of third-party rules.
             let muestra: Option<String> = contenido.map(|c| {
                 c.lines().take(20).collect::<Vec<_>>().join("\n")
             });
@@ -1258,7 +1267,7 @@ impl SiteRule for RobotsTxtBlocksAll {
     }
 }
 
-/// Un sitemap no responde, no se puede leer o se pasa de los límites del protocolo.
+/// A sitemap does not respond, cannot be read, or exceeds the protocol limits.
 pub struct SitemapError;
 
 impl SiteRule for SitemapError {
@@ -1267,9 +1276,10 @@ impl SiteRule for SitemapError {
     }
 
     fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
-        // Un sitemap convencional que no existe **no es un error**: se prueban `/sitemap.xml` y
-        // `/sitemap_index.xml` a ciegas, y que uno de los dos dé 404 es lo normal. Sí lo es que
-        // falle uno anunciado en `robots.txt` o declarado por un índice: a ese le apunta alguien.
+        // A well-known sitemap that does not exist is **not an error**: `/sitemap.xml` and
+        // `/sitemap_index.xml` are probed blindly, and one of the two returning 404 is
+        // normal. One announced in `robots.txt` or declared by an index failing is: someone
+        // points at that one.
         let mut stmt = conn.prepare(
             "SELECT url, status_code, is_valid, parse_error, url_count, bytes, discovered_from
              FROM sitemaps
@@ -1327,9 +1337,9 @@ pub(crate) fn page_rules() -> Vec<Box<dyn PageRule>> {
 }
 
 pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
-    // Las cuatro que dependen de `urls.in_sitemap` se registraron el 2026-07-30, cuando el modo
-    // `filesystem` pasó a descubrir sitemaps: hasta entonces `in_sitemap` valía 0 en toda
-    // auditoría de un `dist/` y ninguna podía producir un hallazgo.
+    // The four that depend on `urls.in_sitemap` were registered on 2026-07-30, when
+    // `filesystem` mode started discovering sitemaps: until then `in_sitemap` was 0 in every
+    // audit of a `dist/` and none of them could produce a finding.
     vec![
         Box::new(DeepPage),
         Box::new(SectionDisconnected),
@@ -1350,28 +1360,29 @@ mod tests {
     use super::*;
     use crate::LinkView;
 
-    /// Una página sana de la que partir. Cada test rompe solo lo que le interesa.
+    /// A healthy page to start from. Each test breaks only what it cares about.
     fn ctx<'a>() -> PageContext<'a> {
         PageContext::indexable_html("https://ejemplo.es/a")
     }
 
-    // --- Lectura de las directivas robots ---
+    // --- Reading the robots directives ---
 
     #[test]
-    fn reconoce_noindex_en_una_lista_de_directivas() {
+    fn recognizes_noindex_within_a_directive_list() {
         assert!(declares_noindex(Some("noindex")));
         assert!(declares_noindex(Some("noindex, follow")));
-        assert!(declares_noindex(Some("follow, NOINDEX")), "sin distinguir caja");
-        assert!(declares_noindex(Some("googlebot: noindex")), "con prefijo de bot");
-        assert!(declares_noindex(Some("none")), "none equivale a noindex, nofollow");
+        assert!(declares_noindex(Some("follow, NOINDEX")), "case-insensitive");
+        assert!(declares_noindex(Some("googlebot: noindex")), "with a bot prefix");
+        assert!(declares_noindex(Some("none")), "none is equivalent to noindex, nofollow");
     }
 
     #[test]
-    fn no_confunde_otras_directivas_con_noindex() {
-        // La misma trampa que cubre el core: buscar la subcadena "noindex" a secas falla aquí.
+    fn does_not_mistake_other_directives_for_noindex() {
+        // The same trap the core covers: searching for the bare substring "noindex" fails
+        // here.
         assert!(!declares_noindex(Some("index, follow")));
         assert!(!declares_noindex(Some("max-image-preview:large, max-snippet:-1")));
-        assert!(!declares_noindex(Some("nofollow")), "nofollow no impide indexar");
+        assert!(!declares_noindex(Some("nofollow")), "nofollow does not prevent indexing");
         assert!(!declares_noindex(Some("")));
         assert!(!declares_noindex(None));
     }
@@ -1379,48 +1390,50 @@ mod tests {
     // --- INDEX-NOINDEX ---
 
     #[test]
-    fn no_avisa_de_noindex_en_una_pagina_sin_directivas() {
+    fn does_not_flag_noindex_on_a_page_with_no_directives() {
         assert!(Noindex.evaluate(&ctx()).is_empty());
     }
 
     #[test]
-    fn avisa_del_noindex_de_la_meta_robots() {
+    fn flags_the_noindex_from_the_meta_robots_tag() {
         let mut c = ctx();
         c.meta_robots = Some("noindex, follow");
-        // Una página con noindex nunca es indexable: si la regla filtrara por `is_indexable`
-        // no dispararía jamás.
+        // A page with a noindex is never indexable: if the rule filtered by `is_indexable` it
+        // would never fire.
         c.is_indexable = false;
         let issues = Noindex.evaluate(&c);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].rule_id, "INDEX-NOINDEX");
-        // Media, no crítica: en un sitio real el 55% de las páginas llevaban el noindex
-        // deliberado del plugin SEO en /tag/, paginaciones y /author/, y un informe cuya mitad
-        // es «crítico» deja de leerse. Lo crítico de verdad se conserva por otra vía: la
-        // portada (test siguiente) y la contradicción con el sitemap (su propia regla).
+        // Medium, not critical: on a real site 55% of the pages carried the SEO plugin's
+        // deliberate noindex on /tag/, paginations and /author/, and a report where half the
+        // rows are "critical" stops being read. What is genuinely critical is kept through
+        // other routes: the home page (next test) and the contradiction with the sitemap (its
+        // own rule).
         assert_eq!(issues[0].severity, Severity::Medium);
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("meta_robots"), "el detalle dice de dónde sale: {detalle}");
+        assert!(detalle.contains("meta_robots"), "the detail says where it comes from: {detalle}");
     }
 
     #[test]
-    fn el_noindex_en_la_portada_si_es_critico() {
-        // Un noindex en la raíz del host no tiene lectura benigna: es el sitio pidiendo
-        // desaparecer de Google, el accidente clásico del entorno de pruebas en producción.
+    fn a_noindex_on_the_home_page_is_critical() {
+        // A noindex on the host root has no benign reading: it is the site asking to
+        // disappear from Google, the classic accident of the staging environment shipped to
+        // production.
         for portada in ["https://ejemplo.es/", "https://ejemplo.es", "https://ejemplo.es/?utm=x"]
         {
             let mut c = PageContext::indexable_html(portada);
             c.meta_robots = Some("noindex");
             c.is_indexable = false;
             let issues = Noindex.evaluate(&c);
-            assert_eq!(issues.len(), 1, "con url = {portada}");
-            assert_eq!(issues[0].severity, Severity::Critical, "con url = {portada}");
+            assert_eq!(issues.len(), 1, "with url = {portada}");
+            assert_eq!(issues[0].severity, Severity::Critical, "with url = {portada}");
             let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
             assert!(detalle.contains("\"home_page\":true"), "{detalle}");
         }
     }
 
     #[test]
-    fn una_ruta_interior_no_se_confunde_con_la_portada() {
+    fn an_inner_path_is_not_mistaken_for_the_home_page() {
         assert!(is_host_root("https://ejemplo.es/"));
         assert!(is_host_root("https://ejemplo.es"));
         assert!(!is_host_root("https://ejemplo.es/tag/rust/"));
@@ -1428,7 +1441,7 @@ mod tests {
     }
 
     #[test]
-    fn avisa_del_noindex_de_la_cabecera_x_robots_tag() {
+    fn flags_the_noindex_from_the_x_robots_tag_header() {
         let mut c = ctx();
         c.x_robots_tag = Some("noindex");
         c.is_indexable = false;
@@ -1439,7 +1452,7 @@ mod tests {
     }
 
     #[test]
-    fn un_solo_hallazgo_aunque_las_dos_fuentes_lo_declaren() {
+    fn a_single_finding_even_when_both_sources_declare_it() {
         let mut c = ctx();
         c.meta_robots = Some("noindex");
         c.x_robots_tag = Some("noindex");
@@ -1448,21 +1461,23 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_de_noindex_sobre_un_codigo_de_error() {
-        // La causa raíz de que un 404 no esté en el índice es el 404, y tiene su regla HTTP.
+    fn does_not_flag_noindex_on_an_error_status() {
+        // The root cause of a 404 being out of the index is the 404, and it has its HTTP
+        // rule.
         for status in [301, 404, 410, 500] {
             let mut c = ctx();
             c.status = status;
             c.meta_robots = Some("noindex");
             c.is_indexable = false;
-            assert!(Noindex.evaluate(&c).is_empty(), "no debería avisar con un {status}");
+            assert!(Noindex.evaluate(&c).is_empty(), "should not warn on a {status}");
         }
     }
 
     #[test]
-    fn el_noindex_de_un_pdf_tambien_cuenta() {
-        // `X-Robots-Tag` es la única forma de excluir un PDF, y excluirlo tiene el mismo efecto
-        // que en una página: no estará en el índice. Por eso la regla no exige HTML.
+    fn a_noindex_on_a_pdf_counts_too() {
+        // `X-Robots-Tag` is the only way to exclude a PDF, and excluding it has the same
+        // effect as on a page: it will not be in the index. That is why the rule does not
+        // require HTML.
         let mut c = ctx();
         c.is_html = false;
         c.is_indexable = false;
@@ -1485,10 +1500,11 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_de_los_enlaces_que_inyecta_el_cdn() {
-        // Regresión de un falso positivo real: Cloudflare reescribe las direcciones de correo
-        // como `/cdn-cgi/l/email-protection#…` con `rel=nofollow`. La regla avisaba en 39 de 40
-        // páginas de un sitio por algo que el dueño del sitio no ha puesto ni puede quitar.
+    fn does_not_flag_links_injected_by_the_cdn() {
+        // Regression of a real false positive: Cloudflare rewrites email addresses as
+        // `/cdn-cgi/l/email-protection#…` with `rel=nofollow`. The rule was warning on 39 out
+        // of 40 pages of a site about something the site owner did not write and cannot
+        // remove.
         let mut cdn = enlace("/cdn-cgi/l/email-protection#a1b2c3", true, true);
         cdn.is_infrastructure = true;
         let links = [cdn];
@@ -1496,12 +1512,12 @@ mod tests {
         c.links = &links;
         assert!(
             NofollowInternal.evaluate(&c).is_empty(),
-            "un enlace de infraestructura del CDN no es un enlace del sitio"
+            "a CDN infrastructure link is not a site link"
         );
     }
 
     #[test]
-    fn no_avisa_cuando_los_enlaces_internos_son_normales() {
+    fn does_not_flag_ordinary_internal_links() {
         let mut c = ctx();
         let links = [enlace("https://ejemplo.es/b", true, false)];
         c.links = &links;
@@ -1509,8 +1525,8 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_de_un_nofollow_hacia_fuera() {
-        // Un nofollow a un dominio ajeno es una decisión legítima y muy común.
+    fn does_not_flag_a_nofollow_pointing_outward() {
+        // A nofollow to a foreign domain is a legitimate and very common decision.
         let mut c = ctx();
         let links = [enlace("https://otro.com/x", false, true)];
         c.links = &links;
@@ -1518,7 +1534,7 @@ mod tests {
     }
 
     #[test]
-    fn avisa_de_un_enlace_interno_con_nofollow() {
+    fn flags_an_internal_link_with_nofollow() {
         let mut c = ctx();
         let links = [enlace("https://ejemplo.es/b", true, true)];
         c.links = &links;
@@ -1531,9 +1547,9 @@ mod tests {
     }
 
     #[test]
-    fn varios_enlaces_con_nofollow_dan_un_solo_hallazgo_con_la_cuenta() {
-        // Un menú con nofollow se repite en todas las páginas: un hallazgo por enlace llenaría
-        // `issues` de filas que dicen lo mismo.
+    fn several_nofollow_links_produce_one_finding_with_the_count() {
+        // A nofollow menu repeats on every page of the site: one finding per link would fill
+        // `issues` with rows that say the same thing.
         let mut c = ctx();
         let links = [
             enlace("https://ejemplo.es/b", true, true),
@@ -1544,11 +1560,11 @@ mod tests {
         let issues = NofollowInternal.evaluate(&c);
         assert_eq!(issues.len(), 1);
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"links\":2"), "el destino repetido no cuenta dos veces: {detalle}");
+        assert!(detalle.contains("\"links\":2"), "the repeated target does not count twice: {detalle}");
     }
 
     #[test]
-    fn el_detalle_no_crece_sin_limite() {
+    fn the_detail_does_not_grow_without_bound() {
         let mut c = ctx();
         let hrefs: Vec<String> = (0..40).map(|i| format!("https://ejemplo.es/p{i}")).collect();
         let links: Vec<LinkView<'_>> =
@@ -1557,14 +1573,14 @@ mod tests {
         let issues = NofollowInternal.evaluate(&c);
         assert_eq!(issues.len(), 1);
         let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"links\":40"), "la cuenta es completa: {detalle}");
+        assert!(detalle.contains("\"links\":40"), "the count is complete: {detalle}");
         assert_eq!(detalle.matches("https://ejemplo.es/p").count(), MAX_EJEMPLOS);
     }
 
     #[test]
-    fn dos_paginas_con_el_mismo_bloque_de_enlaces_comparten_grupo() {
-        // El bloque de «webs amigas» del pie es el mismo conjunto de enlaces en las 18.089
-        // páginas de un rastreo real: la clave identifica la causa, no la página.
+    fn two_pages_with_the_same_link_block_share_a_group() {
+        // The "friendly sites" block in the footer is the same set of links across the 18,089
+        // pages of a real crawl: the key identifies the cause, not the page.
         let links = [enlace("https://ejemplo.es/amigos", true, true)];
         let mut a = ctx();
         a.links = &links;
@@ -1573,11 +1589,11 @@ mod tests {
         let ka = NofollowInternal.evaluate(&a)[0].group_key.clone();
         let kb = NofollowInternal.evaluate(&b)[0].group_key.clone();
         assert!(ka.as_deref().is_some_and(|k| k.starts_with("nofollow:")), "{ka:?}");
-        assert_eq!(ka, kb, "la misma causa en dos páginas es un solo grupo");
+        assert_eq!(ka, kb, "the same cause on two pages is a single group");
     }
 
     #[test]
-    fn otro_destino_u_otra_ancla_es_otra_causa() {
+    fn a_different_target_or_anchor_is_a_different_cause() {
         let base = [enlace("https://ejemplo.es/amigos", true, true)];
         let otro_destino = [enlace("https://ejemplo.es/patrocinado", true, true)];
         let mut con_ancla = enlace("https://ejemplo.es/amigos", true, true);
@@ -1592,14 +1608,14 @@ mod tests {
                 NofollowInternal.evaluate(&c)[0].group_key.clone()
             })
             .collect();
-        assert_ne!(claves[0], claves[1], "otro destino no es la misma plantilla");
-        assert_ne!(claves[0], claves[2], "el mismo destino con otra ancla es otro enlace que tocar");
+        assert_ne!(claves[0], claves[1], "another target is not the same template");
+        assert_ne!(claves[0], claves[2], "the same target with another anchor is another link to fix");
     }
 
     #[test]
-    fn el_orden_de_los_enlaces_no_cambia_el_grupo() {
-        // El hash se calcula sobre el conjunto ordenado: si el DOM baraja dos bloques, la causa
-        // sigue siendo la misma.
+    fn link_order_does_not_change_the_group() {
+        // The hash is computed over the sorted set: if the DOM shuffles two blocks, the cause
+        // is still the same.
         let ab = [
             enlace("https://ejemplo.es/a", true, true),
             enlace("https://ejemplo.es/b", true, true),
@@ -1619,7 +1635,7 @@ mod tests {
     }
 
     #[test]
-    fn un_recurso_con_nofollow_no_es_un_enlace_interno() {
+    fn a_nofollow_resource_is_not_an_internal_link() {
         let mut c = ctx();
         let mut recurso = enlace("https://ejemplo.es/a.css", true, true);
         recurso.is_resource = true;
@@ -1629,7 +1645,7 @@ mod tests {
     }
 
     #[test]
-    fn no_avisa_de_nofollow_sobre_algo_que_no_es_html() {
+    fn does_not_flag_nofollow_on_something_that_is_not_html() {
         let mut c = ctx();
         c.is_html = false;
         let links = [enlace("https://ejemplo.es/b", true, true)];
@@ -1638,10 +1654,10 @@ mod tests {
     }
 
     #[test]
-    fn el_nofollow_de_la_plantilla_de_error_no_se_audita() {
-        // Regresión de un rastreo real: cada 404 del sitio repetía el nofollow del pie del tema
-        // como hallazgo de la URL rota —26 filas en un sitio—, cuando lo único accionable es el
-        // 404, que ya tiene su regla HTTP.
+    fn the_error_template_nofollow_is_not_audited() {
+        // Regression from a real crawl: every 404 on the site repeated the theme footer's
+        // nofollow as a finding of the broken URL —26 rows on one site— when the only
+        // actionable thing is the 404, which already has its HTTP rule.
         for status in [301, 404, 410, 500] {
             let mut c = ctx();
             c.status = status;
@@ -1649,39 +1665,25 @@ mod tests {
             c.links = &links;
             assert!(
                 NofollowInternal.evaluate(&c).is_empty(),
-                "no debería auditar el HTML de un {status}"
+                "should not audit the HTML of a {status}"
             );
         }
     }
 
     // --- INDEX-ROBOTS-BLOCKED ---
     //
-    // Es una `SiteRule` desde el 2026-07-30: el motor excluye la URL antes de descargarla, así
-    // que no existe un `PageContext` que evaluar. Los tests van contra el almacén, y el de verdad
-    // es el fixture, que se rastrea de extremo a extremo con su `robots.txt`.
+    // It has been a `SiteRule` since 2026-07-30: the engine excludes the URL before
+    // downloading it, so there is no `PageContext` to evaluate. The tests go against the
+    // store, and the real one is the fixture, which is crawled end to end with its
+    // `robots.txt`.
 
-    // --- Reglas de conjunto ---
+    // --- Site-wide rules ---
 
-    /// Un fichero de rastreo vacío con el **esquema real**.
-    ///
-    /// Las migraciones se leen del core en tiempo de compilación en vez de reescribir a mano un
-    /// esquema parecido: una columna mal escrita en una copia haría pasar el test y fallar el
-    /// rastreo. Es solo para tests; el crate sigue sin depender del core.
-    ///
-    /// **Al añadir una migración al core hay que añadirla también aquí.** El coste de olvidarlo
-    /// es que estos tests midan un esquema viejo, no que dejen de compilar.
+    /// An empty crawl file with the **real schema**: every published migration, from the
+    /// shared helper in `test_schema.rs`, whose guard test keeps it in sync with the
+    /// `migrations/` directory. This module once carried its own list and it stopped at 005.
     fn db() -> Connection {
-        let conn = Connection::open_in_memory().expect("abrir en memoria");
-        for sql in [
-            include_str!("../../crawlforge-core/migrations/001_initial.sql"),
-            include_str!("../../crawlforge-core/migrations/002_truncated.sql"),
-            include_str!("../../crawlforge-core/migrations/003_orphans_exclude_seed.sql"),
-            include_str!("../../crawlforge-core/migrations/004_robots_y_sitemaps.sql"),
-            include_str!("../../crawlforge-core/migrations/005_orphans_solo_paginas.sql"),
-        ] {
-            conn.execute_batch(sql).expect("aplicar la migración");
-        }
-        conn
+        crate::test_schema::full_schema()
     }
 
     fn con_meta(conn: &Connection, mode: &str, base_url: &str, sitemaps: bool) {
@@ -1696,11 +1698,11 @@ mod tests {
                 format!("{{\"discover_sitemaps\":{sitemaps}}}")
             ],
         )
-        .expect("insertar crawl_meta");
+        .expect("insert crawl_meta");
     }
 
-    /// Inserta una URL rastreada con éxito y su página. Devuelve su `id`, que coincide con su
-    /// `url_hash` para que los tests puedan cruzarlos a ojo.
+    /// Inserts a successfully crawled URL and its page. Returns its `id`, which matches its
+    /// `url_hash` so tests can cross-reference them by eye.
     fn con_pagina(conn: &Connection, id: i64, url: &str, indexable: bool, in_sitemap: bool) -> i64 {
         conn.execute(
             "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
@@ -1708,19 +1710,19 @@ mod tests {
              VALUES (?1, ?2, ?1, 'https', 'ejemplo.es', '/', 1, ?3, 'done', 200)",
             rusqlite::params![id, url, in_sitemap as i64],
         )
-        .expect("insertar url");
+        .expect("insert url");
         conn.execute(
             "INSERT INTO pages (url_id, is_indexable, indexability_reason, internal_links_in)
              VALUES (?1, ?2, ?3, 0)",
             rusqlite::params![id, indexable as i64, (!indexable).then_some("noindex")],
         )
-        .expect("insertar page");
+        .expect("insert page");
         id
     }
 
-    /// Inserta una URL excluida por `robots.txt`, como la deja el motor al no descargarla.
-    /// El `path` va aparte porque el filtro de infraestructura de `RobotsBlocked` lee esa
-    /// columna, no la URL.
+    /// Inserts a URL excluded by `robots.txt`, as the engine leaves it without downloading
+    /// it. The `path` goes separately because the infrastructure filter in `RobotsBlocked`
+    /// reads that column, not the URL.
     fn con_url_bloqueada_en(conn: &Connection, id: i64, url: &str, path: &str) -> i64 {
         conn.execute(
             "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
@@ -1728,7 +1730,7 @@ mod tests {
              VALUES (?1, ?2, ?1, 'https', 'ejemplo.es', ?3, 1, 0, 'excluded', 'robots')",
             rusqlite::params![id, url, path],
         )
-        .expect("insertar url bloqueada");
+        .expect("insert blocked url");
         id
     }
 
@@ -1737,23 +1739,24 @@ mod tests {
     }
 
     #[test]
-    fn avisa_de_una_url_bloqueada_a_la_que_el_sitio_enlaza() {
+    fn flags_a_blocked_url_the_site_links_to() {
         let conn = db();
         let portada = con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
         let bloqueada = con_url_bloqueada(&conn, 2, "https://ejemplo.es/privado/");
         con_enlace(&conn, portada, bloqueada);
 
-        let hallazgos = RobotsBlocked.evaluate(&conn).expect("evaluar");
+        let hallazgos = RobotsBlocked.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
-        assert_eq!(hallazgos[0].0, Some(bloqueada), "el hallazgo va en la URL bloqueada");
+        assert_eq!(hallazgos[0].0, Some(bloqueada), "the finding goes on the blocked URL");
     }
 
     #[test]
-    fn la_infraestructura_del_cdn_bloqueada_por_robots_no_es_un_hallazgo() {
-        // Regresión del mismo falso positivo que ya se quitó de INDEX-NOFOLLOW-INTERNAL, esta
-        // vez en su versión de sitio: Cloudflare inyecta los enlaces a /cdn-cgi/ y los prohíbe
-        // él mismo en el robots.txt que gestiona. Eran los tres únicos `critical` de un rastreo
-        // real y el usuario no puede arreglar ninguno.
+    fn cdn_infrastructure_blocked_by_robots_is_not_a_finding() {
+        // Regression of the same false positive already removed from
+        // INDEX-NOFOLLOW-INTERNAL, this time in its site-level version: Cloudflare injects
+        // the links to /cdn-cgi/ and forbids them itself in the robots.txt it manages. They
+        // were the only three `critical` findings of a real crawl and the user cannot fix any
+        // of them.
         let conn = db();
         let portada = con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
         let cdn = con_url_bloqueada_en(
@@ -1765,24 +1768,24 @@ mod tests {
         con_enlace(&conn, portada, cdn);
 
         assert!(
-            RobotsBlocked.evaluate(&conn).expect("evaluar").is_empty(),
-            "la infraestructura del CDN no es contenido del sitio"
+            RobotsBlocked.evaluate(&conn).expect("evaluate").is_empty(),
+            "CDN infrastructure is not site content"
         );
     }
 
     #[test]
-    fn no_avisa_de_una_url_bloqueada_que_nadie_enlaza() {
-        // Sin enlaces entrantes no hay nada que arreglar: el sitio no está gastando enlazado
-        // interno en ella, y el `Disallow` está haciendo justo su trabajo.
+    fn does_not_flag_a_blocked_url_nobody_links_to() {
+        // With no inbound links there is nothing to fix: the site is not spending internal
+        // linking on it, and the `Disallow` is doing exactly its job.
         let conn = db();
         con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
         con_url_bloqueada(&conn, 2, "https://ejemplo.es/privado/");
 
-        assert!(RobotsBlocked.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(RobotsBlocked.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn avisa_cuando_el_robots_bloquea_el_sitio_entero() {
+    fn flags_a_robots_txt_that_blocks_the_whole_site() {
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         conn.execute(
@@ -1790,15 +1793,15 @@ mod tests {
              VALUES ('ejemplo.es', 200, 'User-agent: *\nDisallow: /', 1, 0)",
             [],
         )
-        .expect("insertar robots");
+        .expect("insert robots");
 
-        let hallazgos = RobotsTxtBlocksAll.evaluate(&conn).expect("evaluar");
+        let hallazgos = RobotsTxtBlocksAll.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
-        assert_eq!(hallazgos[0].0, None, "es un hallazgo del sitio, no de una URL");
+        assert_eq!(hallazgos[0].0, None, "it is a site finding, not a URL finding");
     }
 
     #[test]
-    fn no_avisa_cuando_el_robots_solo_bloquea_una_zona() {
+    fn does_not_flag_a_robots_txt_that_only_blocks_one_area() {
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         conn.execute(
@@ -1806,13 +1809,13 @@ mod tests {
              VALUES ('ejemplo.es', 200, 'User-agent: *\nDisallow: /admin/', 0, 0)",
             [],
         )
-        .expect("insertar robots");
+        .expect("insert robots");
 
-        assert!(RobotsTxtBlocksAll.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(RobotsTxtBlocksAll.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn avisa_de_un_robots_ausente_solo_en_modo_http() {
+    fn flags_a_missing_robots_txt_only_in_http_mode() {
         for (modo, esperados) in [("http", 1), ("filesystem", 0)] {
             let conn = db();
             con_meta(&conn, modo, "https://ejemplo.es/", true);
@@ -1822,17 +1825,18 @@ mod tests {
                  VALUES ('ejemplo.es', 404, 0, 0)",
                 [],
             )
-            .expect("insertar robots");
+            .expect("insert robots");
 
-            let hallazgos = RobotsTxtMissing.evaluate(&conn).expect("evaluar");
-            assert_eq!(hallazgos.len(), esperados, "modo {modo}");
+            let hallazgos = RobotsTxtMissing.evaluate(&conn).expect("evaluate");
+            assert_eq!(hallazgos.len(), esperados, "mode {modo}");
         }
     }
 
     #[test]
-    fn un_fallo_de_red_no_es_un_robots_ausente() {
-        // `status_code` nulo significa que no hubo respuesta. No poder comprobarlo no es lo
-        // mismo que comprobar que no existe, y afirmar lo segundo sería inventar.
+    fn a_network_failure_is_not_a_missing_robots_txt() {
+        // A null `status_code` means there was no response. Not being able to check it is not
+        // the same as checking it does not exist, and asserting the latter would be making
+        // things up.
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
@@ -1841,13 +1845,13 @@ mod tests {
              VALUES ('ejemplo.es', NULL, 0, 0)",
             [],
         )
-        .expect("insertar robots");
+        .expect("insert robots");
 
-        assert!(RobotsTxtMissing.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(RobotsTxtMissing.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn avisa_de_un_sitemap_con_el_xml_roto() {
+    fn flags_a_sitemap_with_broken_xml() {
         let conn = db();
         conn.execute(
             "INSERT INTO sitemaps (url, status_code, is_index, is_valid, parse_error, url_count,
@@ -1856,16 +1860,16 @@ mod tests {
                      'well_known')",
             [],
         )
-        .expect("insertar sitemap");
+        .expect("insert sitemap");
 
-        let hallazgos = SitemapError.evaluate(&conn).expect("evaluar");
+        let hallazgos = SitemapError.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
     }
 
     #[test]
-    fn un_sitemap_convencional_que_no_existe_no_es_un_error() {
-        // Se prueban `/sitemap.xml` y `/sitemap_index.xml` a ciegas: que uno de los dos dé 404
-        // es lo normal en todos los sitios del mundo y no es un hallazgo.
+    fn a_well_known_sitemap_that_does_not_exist_is_not_an_error() {
+        // `/sitemap.xml` and `/sitemap_index.xml` are probed blindly: one of the two
+        // returning 404 is normal on every site in the world and is not a finding.
         let conn = db();
         conn.execute(
             "INSERT INTO sitemaps (url, status_code, is_index, is_valid, url_count, bytes,
@@ -1873,14 +1877,14 @@ mod tests {
              VALUES ('https://ejemplo.es/sitemap_index.xml', 404, 0, 0, 0, 0, 'well_known')",
             [],
         )
-        .expect("insertar sitemap");
+        .expect("insert sitemap");
 
-        assert!(SitemapError.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(SitemapError.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn un_sitemap_anunciado_que_no_responde_si_es_un_error() {
-        // A este le apunta el `robots.txt`: alguien lo declaró, así que debería estar.
+    fn an_announced_sitemap_that_does_not_respond_is_an_error() {
+        // The `robots.txt` points at this one: someone declared it, so it should be there.
         let conn = db();
         conn.execute(
             "INSERT INTO sitemaps (url, status_code, is_index, is_valid, url_count, bytes,
@@ -1888,14 +1892,14 @@ mod tests {
              VALUES ('https://ejemplo.es/sitemap-posts.xml', 404, 0, 0, 0, 0, 'robots')",
             [],
         )
-        .expect("insertar sitemap");
+        .expect("insert sitemap");
 
-        let hallazgos = SitemapError.evaluate(&conn).expect("evaluar");
+        let hallazgos = SitemapError.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
     }
 
     #[test]
-    fn avisa_de_un_sitemap_que_se_pasa_de_los_limites_del_protocolo() {
+    fn flags_a_sitemap_that_exceeds_the_protocol_limits() {
         let conn = db();
         conn.execute(
             "INSERT INTO sitemaps (url, status_code, is_index, is_valid, url_count, bytes,
@@ -1903,14 +1907,14 @@ mod tests {
              VALUES ('https://ejemplo.es/sitemap.xml', 200, 0, 1, ?1, 1000, 'well_known')",
             [SITEMAP_MAX_URLS + 1],
         )
-        .expect("insertar sitemap");
+        .expect("insert sitemap");
 
-        let hallazgos = SitemapError.evaluate(&conn).expect("evaluar");
+        let hallazgos = SitemapError.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
     }
 
     #[test]
-    fn un_sitemap_correcto_no_produce_hallazgo() {
+    fn a_correct_sitemap_produces_no_finding() {
         let conn = db();
         conn.execute(
             "INSERT INTO sitemaps (url, status_code, is_index, is_valid, url_count, bytes,
@@ -1918,9 +1922,9 @@ mod tests {
              VALUES ('https://ejemplo.es/sitemap.xml', 200, 0, 1, 120, 4000, 'well_known')",
             [],
         )
-        .expect("insertar sitemap");
+        .expect("insert sitemap");
 
-        assert!(SitemapError.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(SitemapError.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     fn con_enlace(conn: &Connection, from: i64, to: i64) {
@@ -1929,11 +1933,11 @@ mod tests {
              VALUES (?1, ?2, 0, 'a')",
             rusqlite::params![from, to],
         )
-        .expect("insertar link");
+        .expect("insert link");
     }
 
-    /// La misma sentencia que ejecuta `engine::finalize`. Se replica para que los tests midan la
-    /// columna que las reglas leen de verdad, y no una que el test haya rellenado a mano.
+    /// The same statement `engine::finalize` runs. Replicated so the tests measure the column
+    /// the rules actually read, and not one the test filled in by hand.
     fn recalcular_enlaces_entrantes(conn: &Connection) {
         conn.execute(
             "UPDATE pages SET internal_links_in = (
@@ -1942,10 +1946,10 @@ mod tests {
              )",
             [],
         )
-        .expect("recalcular");
+        .expect("recompute");
     }
 
-    /// Cadena portada → p1 → … → pN. Devuelve los ids en orden.
+    /// Chain home → p1 → … → pN. Returns the ids in order.
     fn cadena(conn: &Connection, largo: i64) -> Vec<i64> {
         con_meta(conn, "http", "https://ejemplo.es/", true);
         let mut ids = vec![con_pagina(conn, 1, "https://ejemplo.es/", true, false)];
@@ -1965,75 +1969,76 @@ mod tests {
     // --- INDEX-DEEP-PAGE ---
 
     #[test]
-    fn no_avisa_de_profundidad_hasta_el_cuarto_clic() {
+    fn does_not_flag_depth_up_to_the_fourth_click() {
         let conn = db();
         cadena(&conn, MAX_CLICK_DEPTH);
-        let hallazgos = DeepPage.evaluate(&conn).expect("evaluar");
-        assert!(hashes(&hallazgos).is_empty(), "cuatro clics están permitidos");
+        let hallazgos = DeepPage.evaluate(&conn).expect("evaluate");
+        assert!(hashes(&hallazgos).is_empty(), "four clicks are allowed");
     }
 
     #[test]
-    fn avisa_a_partir_del_quinto_clic_y_solo_de_los_que_pasan() {
+    fn flags_from_the_fifth_click_and_only_the_pages_beyond_it() {
         let conn = db();
         let ids = cadena(&conn, MAX_CLICK_DEPTH + 2);
-        let hallazgos = DeepPage.evaluate(&conn).expect("evaluar");
-        // La cadena es portada(0) → p1(1) → … → p6(6): avisan p5 y p6.
+        let hallazgos = DeepPage.evaluate(&conn).expect("evaluate");
+        // The chain is home(0) → p1(1) → … → p6(6): p5 and p6 are flagged.
         assert_eq!(hashes(&hallazgos), vec![ids[5], ids[6]]);
         assert_eq!(hallazgos[0].1.rule_id, "INDEX-DEEP-PAGE");
         assert_eq!(hallazgos[0].1.severity, Severity::Medium);
     }
 
     #[test]
-    fn la_profundidad_no_se_lee_de_urls_depth() {
-        // Regresión de criterio: en modo `filesystem` todas las URLs son semillas y `depth`
-        // vale 0 en todas, así que una regla basada en esa columna no avisaría nunca. La
-        // profundidad tiene que salir del grafo de enlaces.
+    fn depth_is_not_read_from_urls_depth() {
+        // Criterion regression: in `filesystem` mode every URL is a seed and `depth` is 0 in
+        // all of them, so a rule based on that column would never warn. Depth has to come out
+        // of the link graph.
         let conn = db();
         let ids = cadena(&conn, MAX_CLICK_DEPTH + 1);
-        conn.execute("UPDATE urls SET depth = 0", []).expect("aplanar la profundidad");
-        assert_eq!(hashes(&DeepPage.evaluate(&conn).expect("evaluar")), vec![ids[5]]);
+        conn.execute("UPDATE urls SET depth = 0", []).expect("flatten the depth");
+        assert_eq!(hashes(&DeepPage.evaluate(&conn).expect("evaluate")), vec![ids[5]]);
     }
 
     #[test]
-    fn un_atajo_desde_la_portada_deja_de_ser_profunda() {
+    fn a_shortcut_from_the_home_page_makes_it_no_longer_deep() {
         let conn = db();
         let ids = cadena(&conn, MAX_CLICK_DEPTH + 1);
         con_enlace(&conn, ids[0], ids[5]);
         recalcular_enlaces_entrantes(&conn);
         assert!(
-            hashes(&DeepPage.evaluate(&conn).expect("evaluar")).is_empty(),
-            "con un enlace desde la portada está a un clic"
+            hashes(&DeepPage.evaluate(&conn).expect("evaluate")).is_empty(),
+            "with a link from the homepage it is one click away"
         );
     }
 
     #[test]
-    fn una_pagina_sin_enlaces_entrantes_no_se_reporta_como_profunda() {
-        // Es una huérfana, y tiene su propia regla. Reportar las dos cosas de la misma URL
-        // obliga al usuario a decidir cuál de los dos hallazgos leer.
+    fn a_page_with_no_inbound_links_is_not_reported_as_deep() {
+        // It is an orphan, and it has its own rule. Reporting both things about the same URL
+        // forces the user to decide which of the two findings to read.
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
         con_pagina(&conn, 2, "https://ejemplo.es/suelta", true, false);
         recalcular_enlaces_entrantes(&conn);
-        assert!(hashes(&DeepPage.evaluate(&conn).expect("evaluar")).is_empty());
+        assert!(hashes(&DeepPage.evaluate(&conn).expect("evaluate")).is_empty());
     }
 
     #[test]
-    fn sin_portada_en_el_rastreo_no_se_marca_el_sitio_entero() {
-        // Si `base_url` no está entre las URLs rastreadas, el recorrido arranca vacío y todo
-        // el sitio parecería inalcanzable. Callar es lo correcto: no hay desde dónde contar.
+    fn without_the_home_page_in_the_crawl_the_whole_site_is_not_flagged() {
+        // If `base_url` is not among the crawled URLs, the traversal starts empty and the
+        // whole site would look unreachable. Staying silent is right: there is nowhere to
+        // count from.
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         let a = con_pagina(&conn, 1, "https://ejemplo.es/a", true, false);
         let b = con_pagina(&conn, 2, "https://ejemplo.es/b", true, false);
         con_enlace(&conn, a, b);
         recalcular_enlaces_entrantes(&conn);
-        assert!(hashes(&DeepPage.evaluate(&conn).expect("evaluar")).is_empty());
+        assert!(hashes(&DeepPage.evaluate(&conn).expect("evaluate")).is_empty());
     }
 
     #[test]
-    fn la_portada_sin_barra_final_se_reconoce_igual() {
-        // `base_url` guarda lo que escribió el usuario; la URL normalizada siempre lleva barra.
+    fn the_home_page_without_a_trailing_slash_is_recognized_all_the_same() {
+        // `base_url` stores what the user typed; the normalized URL always carries the slash.
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es", true);
         let mut previa = con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
@@ -2043,29 +2048,29 @@ mod tests {
             previa = id;
         }
         recalcular_enlaces_entrantes(&conn);
-        assert_eq!(hashes(&DeepPage.evaluate(&conn).expect("evaluar")).len(), 1);
+        assert_eq!(hashes(&DeepPage.evaluate(&conn).expect("evaluate")).len(), 1);
     }
 
     #[test]
-    fn una_pagina_profunda_no_indexable_no_interesa() {
+    fn a_deep_non_indexable_page_is_of_no_interest() {
         let conn = db();
         cadena(&conn, MAX_CLICK_DEPTH + 1);
         conn.execute("UPDATE pages SET is_indexable = 0 WHERE url_id = 6", [])
-            .expect("marcar noindex");
-        assert!(hashes(&DeepPage.evaluate(&conn).expect("evaluar")).is_empty());
+            .expect("mark noindex");
+        assert!(hashes(&DeepPage.evaluate(&conn).expect("evaluate")).is_empty());
     }
 
     #[test]
-    fn en_modo_lista_no_se_mide_la_profundidad_de_clic() {
+    fn click_depth_is_not_measured_in_list_mode() {
         let conn = db();
         cadena(&conn, MAX_CLICK_DEPTH + 1);
-        conn.execute("UPDATE crawl_meta SET mode = 'list'", []).expect("cambiar de modo");
-        assert!(hashes(&DeepPage.evaluate(&conn).expect("evaluar")).is_empty());
+        conn.execute("UPDATE crawl_meta SET mode = 'list'", []).expect("switch mode");
+        assert!(hashes(&DeepPage.evaluate(&conn).expect("evaluate")).is_empty());
     }
 
     #[test]
-    fn un_enlace_que_no_se_pulsa_no_acorta_la_distancia() {
-        // Un `<link rel=next>` o un `<script src>` de la portada no es un clic.
+    fn a_link_that_cannot_be_clicked_does_not_shorten_the_distance() {
+        // A `<link rel=next>` or a `<script src>` on the home page is not a click.
         let conn = db();
         let ids = cadena(&conn, MAX_CLICK_DEPTH + 1);
         conn.execute(
@@ -2073,29 +2078,29 @@ mod tests {
              VALUES (?1, ?2, 0, 'link')",
             rusqlite::params![ids[0], ids[5]],
         )
-        .expect("insertar link");
+        .expect("insert link");
         recalcular_enlaces_entrantes(&conn);
-        assert_eq!(hashes(&DeepPage.evaluate(&conn).expect("evaluar")), vec![ids[5]]);
+        assert_eq!(hashes(&DeepPage.evaluate(&conn).expect("evaluate")), vec![ids[5]]);
     }
 
     #[test]
-    fn el_detalle_lleva_la_profundidad_real_de_cada_pagina() {
-        // Es lo que permite al informe decir la forma del problema en una línea —«202.392
-        // páginas a más de 4 clics, la más profunda a 48»— en vez de doscientas mil filas
-        // idénticas, y al XLSX ordenarse por profundidad.
+    fn the_detail_carries_each_pages_actual_depth() {
+        // It is what lets the report state the shape of the problem in one line —"202,392
+        // pages more than 4 clicks away, the deepest at 48"— instead of two hundred thousand
+        // identical rows, and lets the XLSX sort by depth.
         let conn = db();
         cadena(&conn, MAX_CLICK_DEPTH + 2);
-        let hallazgos = DeepPage.evaluate(&conn).expect("evaluar");
+        let hallazgos = DeepPage.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 2);
         let detalles: Vec<&str> =
             hallazgos.iter().filter_map(|(_, i)| i.detail_json.as_deref()).collect();
         assert!(detalles[0].contains("\"click_depth\":5"), "{detalles:?}");
         assert!(detalles[1].contains("\"click_depth\":6"), "{detalles:?}");
-        // El umbral acompaña al dato, para que el export se explique solo.
+        // The threshold travels with the datum, so the export explains itself.
         assert!(detalles[0].contains("\"max_click_depth\":4"), "{detalles:?}");
     }
 
-    /// Escribe en `issues` los hallazgos como lo hace el motor, para probar la lectura.
+    /// Writes the findings into `issues` the way the engine does, to test the read side.
     fn escribir_hallazgos(conn: &Connection, hallazgos: &[(Option<i64>, Issue)]) {
         for (hash, issue) in hallazgos {
             conn.execute(
@@ -2109,19 +2114,19 @@ mod tests {
                     issue.detail_json
                 ],
             )
-            .expect("insertar hallazgo");
+            .expect("insert finding");
         }
     }
 
     #[test]
-    fn la_forma_del_problema_se_lee_de_los_hallazgos_escritos() {
+    fn the_shape_of_the_problem_is_read_from_the_written_findings() {
         let conn = db();
         cadena(&conn, MAX_CLICK_DEPTH + 4);
-        let hallazgos = DeepPage.evaluate(&conn).expect("evaluar");
+        let hallazgos = DeepPage.evaluate(&conn).expect("evaluate");
         escribir_hallazgos(&conn, &hallazgos);
 
-        let forma = deep_page_shape(&conn).expect("leer").expect("hay hallazgos");
-        // La cadena deja páginas a 5, 6, 7 y 8 clics.
+        let forma = deep_page_shape(&conn).expect("read").expect("there are findings");
+        // The chain leaves pages at 5, 6, 7 and 8 clicks.
         assert_eq!(forma.pages, 4);
         assert_eq!(forma.deepest, 8);
         assert_eq!(forma.max_click_depth, MAX_CLICK_DEPTH);
@@ -2130,10 +2135,10 @@ mod tests {
     }
 
     #[test]
-    fn un_fichero_antiguo_sin_profundidad_no_tiene_forma_que_leer() {
-        // Los rastreos anteriores a este cambio guardan `{"max_click_depth":4}` a secas: la
-        // lectura devuelve None y el informe cae a la reformulación genérica por porcentaje,
-        // en vez de inventar profundidades.
+    fn an_old_file_without_depths_has_no_shape_to_read() {
+        // Crawls from before this change store a bare `{"max_click_depth":4}`: the read
+        // returns None and the report falls back to the generic percentage rephrasing,
+        // instead of inventing depths.
         let conn = db();
         cadena(&conn, MAX_CLICK_DEPTH + 1);
         conn.execute(
@@ -2142,35 +2147,35 @@ mod tests {
                      '{\"max_click_depth\":4}')",
             [],
         )
-        .expect("hallazgo al estilo antiguo");
-        assert_eq!(deep_page_shape(&conn).expect("leer"), None);
+        .expect("old-style finding");
+        assert_eq!(deep_page_shape(&conn).expect("read"), None);
     }
 
     #[test]
-    fn sin_hallazgos_de_profundidad_no_hay_forma() {
+    fn without_depth_findings_there_is_no_shape() {
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
-        assert_eq!(deep_page_shape(&conn).expect("leer"), None);
+        assert_eq!(deep_page_shape(&conn).expect("read"), None);
     }
 
-    // --- Secciones desconectadas y semillas hreflang ---
+    // --- Disconnected sections and hreflang seeds ---
     //
-    // El caso real: un sitio bilingüe cuyo único puente de /es a /en era el
-    // `<link rel="alternate" hreflang>` de la cabecera —el selector visible era JavaScript—.
-    // El recorrido que solo sigue `<a>` daba las 1.987 páginas inglesas por «profundas».
+    // The real case: a bilingual site whose only bridge from /es to /en was the
+    // `<link rel="alternate" hreflang>` in the head —the visible selector was JavaScript—.
+    // The traversal that only follows `<a>` reported the 1,987 English pages as "deep".
 
-    /// Declara el `hreflang_json` de una página ya insertada, como lo escribe el motor.
+    /// Declares the `hreflang_json` of an already inserted page, as the engine writes it.
     fn con_hreflang(conn: &Connection, id: i64, json: &str) {
         conn.execute(
             "UPDATE pages SET hreflang_json = ?2 WHERE url_id = ?1",
             rusqlite::params![id, json],
         )
-        .expect("declarar hreflang");
+        .expect("declare hreflang");
     }
 
-    /// Portada más una pareja /en ↔ /en/a que solo se enlaza entre sí. Devuelve los ids
-    /// `[portada, en, en_a]`.
+    /// Home page plus an /en ↔ /en/a pair that only links to itself. Returns the ids
+    /// `[home, en, en_a]`.
     fn con_seccion_aislada(conn: &Connection) -> Vec<i64> {
         con_meta(conn, "http", "https://ejemplo.es/", true);
         let portada = con_pagina(conn, 1, "https://ejemplo.es/", true, false);
@@ -2183,36 +2188,37 @@ mod tests {
     }
 
     #[test]
-    fn una_seccion_inalcanzable_no_se_reporta_como_profunda() {
-        // Inalcanzable no es profundo: son dos diagnósticos distintos, y el de profundidad
-        // —«añade atajos de paginación»— no arregla una sección sin puente rastreable.
+    fn an_unreachable_section_is_not_reported_as_deep() {
+        // Unreachable is not deep: they are two different diagnoses, and the depth one —"add
+        // pagination shortcuts"— does not fix a section with no crawlable bridge.
         let conn = db();
         con_seccion_aislada(&conn);
         assert!(
-            hashes(&DeepPage.evaluate(&conn).expect("evaluar")).is_empty(),
-            "las páginas sin camino desde la portada no son «demasiados clics»"
+            hashes(&DeepPage.evaluate(&conn).expect("evaluate")).is_empty(),
+            "pages with no path from the homepage are not 'too many clicks'"
         );
     }
 
     #[test]
-    fn una_seccion_enlazada_solo_entre_si_es_un_unico_hallazgo_de_sitio() {
+    fn a_section_linked_only_to_itself_is_a_single_site_finding() {
         let conn = db();
         con_seccion_aislada(&conn);
-        let hallazgos = SectionDisconnected.evaluate(&conn).expect("evaluar");
-        assert_eq!(hallazgos.len(), 1, "una causa, un hallazgo: no uno por página");
-        assert_eq!(hallazgos[0].0, None, "es un hallazgo del sitio, no de una URL");
+        let hallazgos = SectionDisconnected.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1, "one cause, one finding: not one per page");
+        assert_eq!(hallazgos[0].0, None, "it is a site finding, not a URL finding");
         assert_eq!(hallazgos[0].1.rule_id, "INDEX-SECTION-DISCONNECTED");
         assert_eq!(hallazgos[0].1.severity, Severity::High);
         let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
-        assert!(detalle.contains("\"pages\":2"), "las dos páginas contadas: {detalle}");
-        assert!(detalle.contains("https://ejemplo.es/en"), "con ejemplos: {detalle}");
+        assert!(detalle.contains("\"pages\":2"), "both pages counted: {detalle}");
+        assert!(detalle.contains("https://ejemplo.es/en"), "with examples: {detalle}");
     }
 
     #[test]
-    fn la_seccion_declarada_por_hreflang_desde_la_portada_no_esta_desconectada() {
-        // El hreflang de la portada es el mecanismo legítimo con el que un sitio multilingüe
-        // declara sus raíces de idioma, y Google descubre la sección por ahí. Se prueba además
-        // la barra final: el hreflang dice `/en` y la URL normalizada podría llevarla.
+    fn a_section_declared_by_hreflang_from_the_home_page_is_not_disconnected() {
+        // The home page's hreflang is the legitimate mechanism a multilingual site uses to
+        // declare its language roots, and Google discovers the section through it. The
+        // trailing slash is exercised too: the hreflang says `/en` and the normalized URL
+        // could carry it.
         let conn = db();
         con_seccion_aislada(&conn);
         con_hreflang(
@@ -2221,21 +2227,21 @@ mod tests {
             r#"[["es","https://ejemplo.es/"],["en","https://ejemplo.es/en"]]"#,
         );
         assert!(
-            SectionDisconnected.evaluate(&conn).expect("evaluar").is_empty(),
-            "una raíz de idioma declarada por hreflang no es una sección desconectada"
+            SectionDisconnected.evaluate(&conn).expect("evaluate").is_empty(),
+            "a language root declared via hreflang is not a disconnected section"
         );
     }
 
     #[test]
-    fn la_profundidad_de_una_seccion_de_idioma_se_mide_desde_su_portada() {
-        // Con la semilla hreflang, /en es una raíz más: lo que quede a más de cuatro clics de
-        // ella sí es profundo, exactamente igual que en el idioma principal.
+    fn a_language_sections_depth_is_measured_from_its_own_home_page() {
+        // With the hreflang seed, /en is one more root: whatever sits more than four clicks
+        // away from it is deep, exactly as in the main language.
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
         con_hreflang(&conn, 1, r#"[["en","https://ejemplo.es/en"]]"#);
         let mut previa = con_pagina(&conn, 2, "https://ejemplo.es/en", true, false);
-        // /en necesita un enlace entrante para ser candidata; se lo da su primera página.
+        // /en needs an inbound link to be a candidate; its first page provides it.
         let mut ids = vec![previa];
         for n in 1..=(MAX_CLICK_DEPTH + 1) {
             let id = con_pagina(&conn, n + 2, &format!("https://ejemplo.es/en/p{n}"), true, false);
@@ -2246,44 +2252,45 @@ mod tests {
         con_enlace(&conn, previa, ids[0]);
         recalcular_enlaces_entrantes(&conn);
 
-        let hallazgos = hashes(&DeepPage.evaluate(&conn).expect("evaluar"));
+        let hallazgos = hashes(&DeepPage.evaluate(&conn).expect("evaluate"));
         assert_eq!(
             hallazgos,
             vec![ids[(MAX_CLICK_DEPTH + 1) as usize]],
-            "solo la última página de la cadena inglesa queda a más de cuatro clics"
+            "only the last page of the English chain is more than four clicks away"
         );
         assert!(
-            SectionDisconnected.evaluate(&conn).expect("evaluar").is_empty(),
-            "la sección entera es alcanzable vía la semilla hreflang"
+            SectionDisconnected.evaluate(&conn).expect("evaluate").is_empty(),
+            "the whole section is reachable via the hreflang seed"
         );
     }
 
     #[test]
-    fn una_pagina_sin_enlaces_entrantes_no_es_una_seccion_desconectada() {
-        // De la página suelta ya avisa INDEX-NO-INTERNAL-LINKS-IN. Lo que define a la sección
-        // desconectada es lo contrario: sus páginas sí se enlazan, pero solo entre ellas.
+    fn a_page_with_no_inbound_links_is_not_a_disconnected_section() {
+        // INDEX-NO-INTERNAL-LINKS-IN already warns about the loose page. What defines the
+        // disconnected section is the opposite: its pages are linked, but only among
+        // themselves.
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
         con_pagina(&conn, 2, "https://ejemplo.es/suelta", true, false);
         recalcular_enlaces_entrantes(&conn);
-        assert!(SectionDisconnected.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(SectionDisconnected.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn en_modo_lista_no_se_busca_seccion_desconectada() {
-        // En modo `list` no se siguen enlaces: todo pareceria desconectado y el hallazgo seria
-        // un artefacto del modo, no del sitio.
+    fn disconnected_sections_are_not_sought_in_list_mode() {
+        // In `list` mode links are not followed: everything would look disconnected and the
+        // finding would be an artifact of the mode, not of the site.
         let conn = db();
         con_seccion_aislada(&conn);
-        conn.execute("UPDATE crawl_meta SET mode = 'list'", []).expect("cambiar de modo");
-        assert!(SectionDisconnected.evaluate(&conn).expect("evaluar").is_empty());
+        conn.execute("UPDATE crawl_meta SET mode = 'list'", []).expect("switch mode");
+        assert!(SectionDisconnected.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     // --- INDEX-NO-INTERNAL-LINKS-IN ---
 
     #[test]
-    fn avisa_de_la_pagina_a_la_que_nadie_enlaza() {
+    fn flags_the_page_nobody_links_to() {
         let conn = db();
         con_meta(&conn, "filesystem", "https://ejemplo.es/", false);
         let portada = con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
@@ -2292,42 +2299,43 @@ mod tests {
         con_enlace(&conn, portada, enlazada);
         recalcular_enlaces_entrantes(&conn);
 
-        let hallazgos = NoInternalLinksIn.evaluate(&conn).expect("evaluar");
-        assert_eq!(hashes(&hallazgos), vec![aislada], "la portada y la enlazada no cuentan");
+        let hallazgos = NoInternalLinksIn.evaluate(&conn).expect("evaluate");
+        assert_eq!(hashes(&hallazgos), vec![aislada], "the homepage and the linked page do not count");
         assert_eq!(hallazgos[0].1.severity, Severity::High);
     }
 
     #[test]
-    fn la_portada_nunca_se_reporta_sin_enlaces_entrantes() {
-        // Es el punto de entrada: nadie la enlaza por definición. La migración 003 tuvo que
-        // arreglar exactamente este falso positivo en `v_orphans`.
+    fn the_home_page_is_never_reported_as_having_no_inbound_links() {
+        // It is the entry point: nobody links to it by definition. Migration 003 had to fix
+        // exactly this false positive in `v_orphans`.
         for base in ["https://ejemplo.es/", "https://ejemplo.es"] {
             let conn = db();
             con_meta(&conn, "http", base, true);
             con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
             recalcular_enlaces_entrantes(&conn);
             assert!(
-                hashes(&NoInternalLinksIn.evaluate(&conn).expect("evaluar")).is_empty(),
-                "con base_url = {base}"
+                hashes(&NoInternalLinksIn.evaluate(&conn).expect("evaluate")).is_empty(),
+                "with base_url = {base}"
             );
         }
     }
 
     #[test]
-    fn una_pagina_no_indexable_sin_enlaces_entrantes_no_es_un_hallazgo() {
+    fn a_non_indexable_page_with_no_inbound_links_is_not_a_finding() {
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
         con_pagina(&conn, 2, "https://ejemplo.es/gracias", false, false);
         recalcular_enlaces_entrantes(&conn);
-        assert!(hashes(&NoInternalLinksIn.evaluate(&conn).expect("evaluar")).is_empty());
+        assert!(hashes(&NoInternalLinksIn.evaluate(&conn).expect("evaluate")).is_empty());
     }
 
-    // --- Reglas escritas y sin registrar. El test es lo que demuestra que su SQL es válido
-    // --- contra el esquema real, ya que no pueden tener fixture.
+    // --- The rules whose datum arrived late: the four that read `urls.in_sitemap` and the
+    // --- three that read the `robots_txt` and `sitemaps` tables. These tests are what proved
+    // --- their SQL valid against the real schema while no fixture could reach them.
 
     #[test]
-    fn avisa_de_una_url_del_sitemap_bloqueada_por_robots() {
+    fn flags_a_sitemap_url_blocked_by_robots() {
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         conn.execute(
@@ -2339,21 +2347,21 @@ mod tests {
                      'done', NULL)",
             [],
         )
-        .expect("insertar urls");
-        assert_eq!(hashes(&BlockedInSitemap.evaluate(&conn).expect("evaluar")), vec![1]);
+        .expect("insert urls");
+        assert_eq!(hashes(&BlockedInSitemap.evaluate(&conn).expect("evaluate")), vec![1]);
     }
 
     #[test]
-    fn avisa_de_una_url_del_sitemap_con_noindex() {
+    fn flags_a_sitemap_url_with_noindex() {
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         con_pagina(&conn, 1, "https://ejemplo.es/gracias", false, true);
         con_pagina(&conn, 2, "https://ejemplo.es/normal", true, true);
-        assert_eq!(hashes(&NoindexInSitemap.evaluate(&conn).expect("evaluar")), vec![1]);
+        assert_eq!(hashes(&NoindexInSitemap.evaluate(&conn).expect("evaluate")), vec![1]);
     }
 
     #[test]
-    fn avisa_de_la_pagina_huerfana_declarada_en_el_sitemap() {
+    fn flags_the_orphan_page_declared_in_the_sitemap() {
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         let portada = con_pagina(&conn, 1, "https://ejemplo.es/", true, true);
@@ -2361,57 +2369,59 @@ mod tests {
         con_pagina(&conn, 3, "https://ejemplo.es/huerfana", true, true);
         con_enlace(&conn, portada, enlazada);
         recalcular_enlaces_entrantes(&conn);
-        assert_eq!(hashes(&OrphanPage.evaluate(&conn).expect("evaluar")), vec![3]);
+        assert_eq!(hashes(&OrphanPage.evaluate(&conn).expect("evaluate")), vec![3]);
     }
 
     #[test]
-    fn avisa_de_que_no_hay_sitemap_y_lo_hace_a_nivel_de_sitio() {
+    fn flags_the_missing_sitemap_at_site_level() {
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
-        let hallazgos = SitemapMissing.evaluate(&conn).expect("evaluar");
+        let hallazgos = SitemapMissing.evaluate(&conn).expect("evaluate");
         assert_eq!(hallazgos.len(), 1);
-        assert_eq!(hallazgos[0].0, None, "es un hallazgo del sitio, no de una URL");
+        assert_eq!(hallazgos[0].0, None, "it is a site finding, not a URL finding");
     }
 
     #[test]
-    fn no_avisa_de_falta_de_sitemap_si_se_encontro_uno() {
+    fn does_not_flag_a_missing_sitemap_when_one_was_found() {
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", true);
         con_pagina(&conn, 1, "https://ejemplo.es/", true, true);
-        assert!(SitemapMissing.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(SitemapMissing.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]
-    fn no_avisa_de_falta_de_sitemap_si_nadie_lo_busco() {
-        // Ni cuando el usuario lo desactivó, ni en los modos que no lo consultan: no encontrar
-        // algo que no se ha buscado no es un hallazgo.
+    fn does_not_flag_a_missing_sitemap_when_none_was_sought() {
+        // Neither when the user turned it off, nor in the modes that do not consult it: not
+        // finding something that was never looked for is not a finding.
         let conn = db();
         con_meta(&conn, "http", "https://ejemplo.es/", false);
         con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
-        assert!(SitemapMissing.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(SitemapMissing.evaluate(&conn).expect("evaluate").is_empty());
 
         let conn = db();
         con_meta(&conn, "filesystem", "https://ejemplo.es/", true);
         con_pagina(&conn, 1, "https://ejemplo.es/", true, false);
-        assert!(SitemapMissing.evaluate(&conn).expect("evaluar").is_empty());
+        assert!(SitemapMissing.evaluate(&conn).expect("evaluate").is_empty());
     }
 
-    // --- Registro ---
+    // --- Registry ---
 
     #[test]
-    fn las_reglas_registradas_son_las_que_tienen_fixture() {
-        // El banco de fixtures exige que toda regla del catálogo dispare la suya al rastrearla,
-        // o esté declarada como excepción con su motivo. Las que no cumplen ninguna de las dos
-        // cosas se quedan fuera del registro a propósito, y este test impide que alguien las
-        // añada sin darse cuenta de que rompe el banco.
+    fn the_registered_rules_are_the_ones_with_a_fixture() {
+        // The fixture bank demands that every catalogue rule fire its own fixture when it is
+        // crawled, or be declared an exception with its reason. Those that meet neither stay
+        // out of the registry on purpose, and this test keeps anyone from adding them without
+        // realizing they break the bank.
         //
-        // Las cuatro de sitemap entraron el 2026-07-30, cuando el modo `filesystem` pasó a leer
-        // el sitemap del `dist/`: hasta entonces `urls.in_sitemap` valía 0 y ninguna podía
-        // producir un hallazgo. `INDEX-SITEMAP-MISSING` es la excepción declarada del grupo —solo
-        // aplica en modo `http`—; las otras tres disparan con su fixture.
+        // The four sitemap rules entered on 2026-07-30, when `filesystem` mode started
+        // reading the `dist/`'s sitemap: until then `urls.in_sitemap` was 0 and none of them
+        // could produce a finding. `INDEX-SITEMAP-MISSING` is the group's declared exception
+        // —it only applies in `http` mode—; the other three fire with their fixture.
         //
-        // Sigue fuera `INDEX-ROBOTS-BLOCKED`: ver la cabecera del módulo.
+        // `INDEX-ROBOTS-BLOCKED` went in once the catalogue corrected its scope to `site`: it
+        // was catalogued `page` and could never be one, because a URL forbidden by `robots.txt`
+        // is never downloaded and so has no `PageContext`. See the module header.
         let paginas: Vec<&str> = page_rules().iter().map(|r| r.id()).collect();
         let conjunto: Vec<&str> = site_rules().iter().map(|r| r.id()).collect();
         assert_eq!(paginas, vec!["INDEX-NOINDEX", "INDEX-NOFOLLOW-INTERNAL"]);
@@ -2430,7 +2440,7 @@ mod tests {
                 "INDEX-SITEMAP-ERROR",
                 "INDEX-ROBOTS-BLOCKED",
             ],
-            "las trece reglas de §2 están registradas: ninguna queda fuera desde la migración 004"
+            "the thirteen rules of §2 are registered: none is left out since migration 004"
         );
     }
 }

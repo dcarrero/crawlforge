@@ -265,12 +265,23 @@ impl ProgressEmitter {
     }
 }
 
-/// Por qué terminó un rastreo antes de agotar la cola.
+/// Por qué el conjunto rastreado no es el sitio entero.
+///
+/// Tres motivos son cortes de verdad —un límite que el rastreo alcanzó— y el cuarto es
+/// estructural: [`Self::ListMode`] no significa «se cortó», significa que un rastreo en modo
+/// lista solo ve las URLs que se le dieron, así que ninguna página tiene a sus enlazadores y
+/// el grafo de enlaces está incompleto **por definición**. Comparten tipo y columna
+/// (`crawl_meta.truncated`) porque comparten la única consecuencia que importa al motor: las
+/// reglas de `REQUIERE_GRAFO_COMPLETO` no pueden afirmar lo que afirman, y `diff` no puede
+/// afirmar ausencias. Quien lo enseñe al usuario debe distinguirlos: decir «tu rastreo se
+/// cortó» de una lista que se auditó entera sería mentir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TruncationReason {
     MaxUrls,
     MaxDepth,
     MaxDuration,
+    /// Modo lista: el grafo está incompleto por construcción, no por un corte.
+    ListMode,
 }
 
 impl TruncationReason {
@@ -279,6 +290,7 @@ impl TruncationReason {
             Self::MaxUrls => "max_urls",
             Self::MaxDepth => "max_depth",
             Self::MaxDuration => "max_duration",
+            Self::ListMode => "list_mode",
         }
     }
 }
@@ -586,7 +598,7 @@ async fn run_with<F: Fetcher + 'static>(
     let filter = crate::pattern::UrlFilter::from_limits(&job.limits)?;
 
     // El tope del nivel gana sobre el que pida el trabajo, y no se puede subir desde ahí: en el
-    // nivel gratuito, `--max-urls 50000` da 1.000. Ver `docs/07-MONETIZACION.md §3`.
+    // nivel gratuito, `--max-urls 50000` da 1.000.
     let max_urls =
         crate::entitlement::Limits::for_tier(job.tier).effective_max_urls(job.limits.max_urls);
 
@@ -655,7 +667,17 @@ async fn run_with<F: Fetcher + 'static>(
         None => (Frontier::new(), std::collections::HashSet::new(), 0),
     };
     let mut metrics = CrawlMetrics::default();
-    let mut truncated = None;
+    // En modo lista solo se descargan las URLs de la lista, así que ninguna página tiene a
+    // sus enlazadores: el grafo de enlaces está incompleto **por definición**, no por un
+    // corte. Se marca aquí, en el core y desde el arranque, porque la consecuencia es la
+    // misma que la de un corte: las reglas de `REQUIERE_GRAFO_COMPLETO` no pueden afirmar lo
+    // que afirman (con sitemaps encendidos reportaban la lista entera como huérfana), y
+    // `diff` no puede afirmar que una URL desapareció. Dejarlo en manos de quien construye
+    // el trabajo —la CLI apagaba los sitemaps y eso tapaba el caso— era casualidad, no
+    // diseño. Un corte real (`max_urls`, `max_duration`) lo sobrescribe: «te faltan URLs de
+    // tu propia lista» es más información, y ambos encienden `truncated`.
+    let is_list = matches!(job.mode, CrawlMode::List { .. });
+    let mut truncated = is_list.then_some(TruncationReason::ListMode);
     let mut interrupted = false;
     let mut emitter = ProgressEmitter::new(progress);
 
@@ -801,6 +823,21 @@ async fn run_with<F: Fetcher + 'static>(
                     }
                     let hash = n.hash();
                     in_sitemap.insert(hash);
+                    // En modo lista el sitemap no amplía el rastreo: declarar una URL no es
+                    // pedir que se audite. Se registra —el cruce lista ↔ sitemap es
+                    // información, y el flag `in_sitemap` de las URLs de la lista sale del
+                    // `insert` de arriba— pero no se encola. Y queda `skipped`, no `pending`:
+                    // `pending` es exactamente lo que relee una reanudación, y releerlo
+                    // rastrearía más allá de la lista.
+                    if is_list {
+                        if frontier.mark_seen(hash) {
+                            metrics.urls_discovered += 1;
+                            let mut row = pending_row(&n, hash, 0, interno, true);
+                            row.crawl_state = CrawlState::Skipped;
+                            sitemap_rows.push(row);
+                        }
+                        continue;
+                    }
                     // Las URLs del sitemap obedecen los mismos patrones que los enlaces: si
                     // el usuario excluyó `/tag/`, que el sitio lo declare en su sitemap no lo
                     // reactiva. La exclusión queda registrada con `in_sitemap = true`.
@@ -1091,15 +1128,20 @@ async fn run_with<F: Fetcher + 'static>(
                     );
                     metrics.issues_found += result.issues.len() as u64;
 
-                    // Enlaces descubiertos: se encolan si procede.
+                    // Enlaces descubiertos: se registran todos; se encolan según el modo.
                     //
-                    // En modo `list` no se encola ninguno: se audita exactamente el conjunto que
-                    // pidió el usuario. Los enlaces se siguen registrando —hacen falta para
-                    // comprobar su estado y para las reglas de enlazado— pero no amplían el
-                    // rastreo. Es también lo que hace Screaming Frog en su modo lista, así que
-                    // es la única forma de que una comparación entre ambos sea justa.
-                    let follow_links = !matches!(job.mode, CrawlMode::List { .. });
-                    if let Some(parsed) = page.as_ref().filter(|_| follow_links) {
+                    // En modo `list` no se encola ninguno: se audita exactamente el conjunto
+                    // que pidió el usuario, que es también lo que hace Screaming Frog en su
+                    // modo lista y la única forma de que una comparación entre ambos sea
+                    // justa. Pero los enlaces de una página son una propiedad de esa página,
+                    // así que **sí se registran**: el destino recibe su fila de `urls` —sin
+                    // ella, la fila de `links` se descarta en silencio contra el índice
+                    // hash→id del escritor— con `crawl_state = 'skipped'`, y no se pide. Y a
+                    // las externas se les comprueba el estado exactamente igual que en modo
+                    // `http`: pedir una URL ajena para saber si resuelve no es rastrear más
+                    // allá de la lista.
+                    let follow_links = !is_list;
+                    if let Some(parsed) = page.as_ref() {
                         let depth = item.depth + 1;
                         // La resolución ya está hecha: `resolved_links` es paralelo a
                         // `parsed.links` y trae la forma publicada, con el `canonicalize` del
@@ -1143,6 +1185,26 @@ async fn run_with<F: Fetcher + 'static>(
                                         metrics.externals_unchecked += 1;
                                     }
                                 }
+                                continue;
+                            }
+                            // Modo lista: el destino interno se registra y no se pide.
+                            // Descargarlo sería rastrear más allá de la lista, que es justo
+                            // lo que este modo promete no hacer. `skipped`, no `pending`:
+                            // `pending` es lo que relee una reanudación. Y sin pasar por los
+                            // patrones ni por `nofollow`: esos deciden qué se rastrea, y en
+                            // este modo la lista ya lo decidió.
+                            if !follow_links {
+                                frontier.mark_seen(link_hash);
+                                metrics.urls_discovered += 1;
+                                let mut row = pending_row(
+                                    n,
+                                    link_hash,
+                                    depth,
+                                    internal,
+                                    in_sitemap.contains(&link_hash),
+                                );
+                                row.crawl_state = CrawlState::Skipped;
+                                writer.send(CrawlResult { url: Some(row), ..Default::default() }).await?;
                                 continue;
                             }
                             // Los patrones del usuario van antes que `nofollow` y que la
@@ -1209,7 +1271,8 @@ async fn run_with<F: Fetcher + 'static>(
                         }
                     }
 
-                    // El destino de una redirección también se rastrea.
+                    // El destino de una redirección también se rastrea — o, en modo lista,
+                    // se registra sin pedirse, como cualquier otro destino.
                     //
                     // Un 3xx no trae HTML, así que no pasa por el bloque de enlaces de arriba y
                     // su destino no se pedía nunca: si ninguna otra página lo enlazaba, no
@@ -1220,7 +1283,7 @@ async fn run_with<F: Fetcher + 'static>(
                     //
                     // La profundidad no aumenta: una redirección no es un clic más para el
                     // visitante, es el mismo clic que acaba en otro sitio.
-                    if follow_links {
+                    {
                         if let Some(location) = doc.location.as_deref() {
                             if let Ok(mut n) =
                                 normalize::normalize_relative(&doc.url, location, &policy)
@@ -1231,10 +1294,27 @@ async fn run_with<F: Fetcher + 'static>(
                                 let destino_hash = n.hash();
                                 let interno = normalize::is_internal(&n.normalized, &seed_host);
                                 let seguir = interno || job.limits.follow_external;
-                                // El destino de una redirección obedece los mismos patrones
-                                // que un enlace: si el usuario lo excluyó, se registra y no
-                                // se pide.
-                                if seguir && !filter.allows(n.normalized.as_str()) {
+                                // En modo lista, el mismo trato que un enlace: la fila del
+                                // destino se registra —sin ella `redirect_to` queda sin
+                                // resolver y las reglas de cadena no tienen grafo— y no se
+                                // pide.
+                                if !follow_links {
+                                    if seguir && frontier.mark_seen(destino_hash) {
+                                        metrics.urls_discovered += 1;
+                                        let mut row = pending_row(
+                                            &n,
+                                            destino_hash,
+                                            item.depth,
+                                            interno,
+                                            in_sitemap.contains(&destino_hash),
+                                        );
+                                        row.crawl_state = CrawlState::Skipped;
+                                        writer.send(CrawlResult {
+                                            url: Some(row),
+                                            ..Default::default()
+                                        }).await?;
+                                    }
+                                } else if seguir && !filter.allows(n.normalized.as_str()) {
                                     if frontier.mark_seen(destino_hash) {
                                         metrics.urls_excluded += 1;
                                         let mut row = pending_row(
@@ -1570,7 +1650,7 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
     //
     // 1. El objetivo declarado tiene que ser coherente con los metadatos del propio fichero.
     // 2. `tier` e `ignore_robots` salen del `EntitlementSource` en vivo, nunca del fichero:
-    //    el `tier` embebido burlaría los límites del nivel (`docs/07-MONETIZACION.md §3`) y
+    //    el `tier` embebido burlaría los límites del nivel y
     //    un `ignore_robots` guardado es un permiso que nadie ha vuelto a conceder en esta
     //    sesión — reanudar no tiene flag para pedirlo, así que el valor vivo es el defecto.
     validate_resume_scope(&job, &base_url, &meta_mode, source_path.as_deref(), store_path)?;
@@ -3047,7 +3127,7 @@ fn build_result<F: Fetcher>(
 /// Las reglas de página que corresponden al nivel del trabajo.
 ///
 /// El filtrado está aquí, en el core, y no en la UI: si estuviera en Swift o en C#, la CLI y
-/// cualquier build modificado lo esquivarían. Ver `docs/07-MONETIZACION.md §3`.
+/// cualquier build modificado lo esquivarían.
 fn page_rules_for(job: &CrawlJob) -> Vec<Box<dyn PageRule>> {
     crawlforge_rules::page_rules_for_tier(job.tier)
 }
@@ -3428,6 +3508,7 @@ mod tests {
         assert_eq!(TruncationReason::MaxUrls.as_str(), "max_urls");
         assert_eq!(TruncationReason::MaxDepth.as_str(), "max_depth");
         assert_eq!(TruncationReason::MaxDuration.as_str(), "max_duration");
+        assert_eq!(TruncationReason::ListMode.as_str(), "list_mode");
     }
 
     #[test]

@@ -14,7 +14,7 @@
 
 use anyhow::Result;
 use crawlforge_cli::i18n::{self, msg};
-use crawlforge_core::engine::{CrawlMetrics, CrawlOutcome};
+use crawlforge_core::engine::{CrawlMetrics, CrawlOutcome, TruncationReason};
 use crawlforge_rules::Lang;
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
@@ -74,11 +74,21 @@ pub fn print_brief_resumed(outcome: &CrawlOutcome) {
 }
 
 fn print_truncation(outcome: &CrawlOutcome, lang: Lang) {
-    if let Some(reason) = outcome.truncated {
-        println!();
-        // El motivo (`max_urls`, `max_duration`) es un identificador de configuración y no se
-        // traduce: es literalmente el nombre del límite que lo causó.
-        println!("  {}", msg::crawl_truncated(lang, reason.as_str()));
+    match outcome.truncated {
+        // `ListMode` no es un corte: el rastreo auditó su lista entera. Decir «truncado»
+        // aquí sería mentir; lo que hay que decir es que las reglas de grafo completo no
+        // se evalúan sobre un conjunto que no es el sitio.
+        Some(TruncationReason::ListMode) => {
+            println!();
+            println!("  {}", msg::crawl_list_mode_note(lang));
+        }
+        Some(reason) => {
+            println!();
+            // El motivo (`max_urls`, `max_duration`) es un identificador de configuración y
+            // no se traduce: es literalmente el nombre del límite que lo causó.
+            println!("  {}", msg::crawl_truncated(lang, reason.as_str()));
+        }
+        None => {}
     }
     // Alcanzar `max_external` **no** es un truncado del rastreo (no toca `crawl_meta.truncated`
     // ni apaga ninguna regla), pero sí deja enlaces sin comprobar y hay que decir cuántos.
@@ -926,16 +936,16 @@ mod tests {
     /// Un fichero con solo la tabla `urls`: es lo único que consulta el criterio.
     fn store_with_errored_seed(dir: &std::path::Path, kind: &str) -> std::path::PathBuf {
         let path = dir.join("caso.sqlite");
-        let conn = Connection::open(&path).expect("crear el fichero");
+        let conn = Connection::open(&path).expect("create the file");
         conn.execute_batch(
             "CREATE TABLE urls (url TEXT, error_kind TEXT, crawl_state TEXT, depth INTEGER);",
         )
-        .expect("crear la tabla");
+        .expect("create the table");
         conn.execute(
             "INSERT INTO urls VALUES ('http://127.0.0.1:9/', ?1, 'error', 0)",
             [kind],
         )
-        .expect("insertar la semilla");
+        .expect("insert the seed");
         path
     }
 
@@ -945,28 +955,28 @@ mod tests {
         // reporta, no un fallo del programa.
         let tmp = std::env::temp_dir();
         let ok = empty_crawl_error_lang(&tmp.join("no-se-abre.sqlite"), &metrics(120, 30, 0), Lang::En)
-            .expect("no debe fallar");
-        assert!(ok.is_none(), "con URLs respondidas nunca hay error de rastreo vacío");
+            .expect("must not fail");
+        assert!(ok.is_none(), "with answered URLs there is never an empty-crawl error");
     }
 
     #[test]
     fn una_semilla_que_no_responde_es_un_error_con_causa() {
         let dir = std::env::temp_dir().join(format!("cf-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("crear el directorio");
+        std::fs::create_dir_all(&dir).expect("create the directory");
         let store = store_with_errored_seed(&dir, "connection");
 
         let msg = empty_crawl_error_lang(&store, &metrics(0, 1, 0), Lang::En)
-            .expect("la consulta debe funcionar")
-            .expect("sin respuestas debe haber mensaje de error");
-        assert!(msg.contains("http://127.0.0.1:9/"), "debe nombrar la URL: {msg}");
-        assert!(msg.contains("connection refused"), "la causa en palabras: {msg}");
+            .expect("the query must work")
+            .expect("with no responses there must be an error message");
+        assert!(msg.contains("http://127.0.0.1:9/"), "it must name the URL: {msg}");
+        assert!(msg.contains("connection refused"), "the cause in words: {msg}");
 
         // Y en español la misma causa, en español.
         let es = empty_crawl_error_lang(&store, &metrics(0, 1, 0), Lang::Es)
-            .expect("la consulta debe funcionar")
-            .expect("mensaje en español");
+            .expect("the query must work")
+            .expect("message in Spanish");
         assert!(es.contains("conexión rechazada"), "{es}");
-        assert!(es.contains("http://127.0.0.1:9/"), "la URL no se traduce: {es}");
+        assert!(es.contains("http://127.0.0.1:9/"), "the URL is not translated: {es}");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -991,19 +1001,19 @@ mod tests {
         let path = std::env::temp_dir()
             .join(format!("crawlforge-excl-{}-{nombre}.sqlite", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let conn = Connection::open(&path).expect("crear");
+        let conn = Connection::open(&path).expect("create");
         conn.execute_batch(
             "CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT, crawl_state TEXT,
                                 exclusion_reason TEXT);",
         )
-        .expect("esquema mínimo");
+        .expect("minimal schema");
         for i in 0..n {
             conn.execute(
                 "INSERT INTO urls (url, crawl_state, exclusion_reason)
                  VALUES (?1, 'excluded', ?2)",
                 rusqlite::params![format!("https://ejemplo.es/{i}"), motivo],
             )
-            .expect("insertar");
+            .expect("insert");
         }
         path
     }
@@ -1012,13 +1022,13 @@ mod tests {
     fn todo_bloqueado_por_robots_tambien_es_un_rastreo_vacio() {
         let path = store_con_exclusiones("robots", "robots", 40);
         let msg = empty_crawl_error_lang(&path, &metrics(0, 0, 40), Lang::En)
-            .expect("consultar")
-            .expect("debe avisar");
+            .expect("query")
+            .expect("must warn");
         assert!(msg.contains("robots.txt"), "{msg}");
 
         let es = empty_crawl_error_lang(&path, &metrics(0, 0, 40), Lang::Es)
-            .expect("consultar")
-            .expect("debe avisar");
+            .expect("query")
+            .expect("must warn");
         assert!(es.contains("robots.txt") && es.contains("--ignore-robots"), "{es}");
         let _ = std::fs::remove_file(&path);
     }
@@ -1030,10 +1040,10 @@ mod tests {
         // mirar donde no es: el motivo está en el almacén y se consulta.
         let path = store_con_exclusiones("patron", "pattern", 40);
         let msg = empty_crawl_error_lang(&path, &metrics(0, 0, 40), Lang::Es)
-            .expect("consultar")
-            .expect("debe avisar");
+            .expect("query")
+            .expect("must warn");
         assert!(msg.contains("patrones"), "{msg}");
-        assert!(!msg.contains("robots.txt"), "no debe culpar al robots.txt: {msg}");
+        assert!(!msg.contains("robots.txt"), "must not blame robots.txt: {msg}");
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1042,12 +1052,12 @@ mod tests {
     /// Un fichero con la tabla `urls` mínima que consulta [`response_breakdown`].
     fn store_with_states(dir: &std::path::Path) -> std::path::PathBuf {
         let path = dir.join("estados.sqlite");
-        let conn = Connection::open(&path).expect("crear el fichero");
+        let conn = Connection::open(&path).expect("create the file");
         conn.execute_batch(
             "CREATE TABLE urls (url TEXT, status_code INTEGER, crawl_state TEXT,
                                 error_kind TEXT, is_internal INTEGER);",
         )
-        .expect("crear la tabla");
+        .expect("create the table");
         let filas: &[(&str, Option<i64>, &str)] = &[
             ("https://e.es/", Some(200), "done"),
             ("https://e.es/a", Some(200), "done"),
@@ -1065,7 +1075,7 @@ mod tests {
                  VALUES (?1, ?2, ?3, 1)",
                 rusqlite::params![url, status, state],
             )
-            .expect("insertar url");
+            .expect("insert url");
         }
         path
     }
@@ -1074,15 +1084,15 @@ mod tests {
     fn lo_nunca_pedido_no_se_cuenta_como_fallo() {
         let dir = std::env::temp_dir().join(format!("cf-breakdown-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("crear el directorio");
+        std::fs::create_dir_all(&dir).expect("create the directory");
         let store = store_with_states(&dir);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let b = response_breakdown(&conn).expect("desglosar");
+        let b = response_breakdown(&conn).expect("break down");
 
         assert_eq!(b.groups, vec![("2xx".to_string(), 2), ("4xx".to_string(), 1)]);
-        assert_eq!(b.no_response, 1, "solo la petición que de verdad falló");
-        assert_eq!(b.never_requested, 3, "las pending van aparte, no como fallos");
+        assert_eq!(b.no_response, 1, "only the request that actually failed");
+        assert_eq!(b.never_requested, 3, "pending rows go apart, not as failures");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1091,17 +1101,17 @@ mod tests {
     fn un_rastreo_completo_no_ensena_el_cajon_de_no_solicitadas() {
         let dir = std::env::temp_dir().join(format!("cf-breakdown-full-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("crear el directorio");
+        std::fs::create_dir_all(&dir).expect("create the directory");
         let path = dir.join("completo.sqlite");
-        let conn = Connection::open(&path).expect("crear");
+        let conn = Connection::open(&path).expect("create");
         conn.execute_batch(
             "CREATE TABLE urls (url TEXT, status_code INTEGER, crawl_state TEXT,
                                 error_kind TEXT, is_internal INTEGER);
              INSERT INTO urls VALUES ('https://e.es/', 200, 'done', NULL, 1);",
         )
-        .expect("crear la tabla");
+        .expect("create the table");
 
-        let b = response_breakdown(&conn).expect("desglosar");
+        let b = response_breakdown(&conn).expect("break down");
         assert_eq!(b.never_requested, 0);
         assert_eq!(b.no_response, 0);
 
@@ -1115,9 +1125,7 @@ mod tests {
     /// regla con solo 2 páginas agrupadas — que NO es una plantilla.
     fn store_con_plantilla(dir: &std::path::Path) -> std::path::PathBuf {
         let path = dir.join("plantilla.sqlite");
-        let conn = Connection::open(&path).expect("crear el fichero");
-        conn.execute_batch(include_str!("../../crawlforge-core/migrations/001_initial.sql"))
-            .expect("migrar");
+        let conn = crate::test_schema::crawl_file(&path);
         for i in 0..40 {
             conn.execute(
                 "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal,
@@ -1136,7 +1144,7 @@ mod tests {
                          '{\"links\":1,\"sample\":[\"/logo.svg\"]}')",
                 [i + 1],
             )
-            .expect("issue plantilla");
+            .expect("template issue");
         }
         for i in 35..38 {
             conn.execute(
@@ -1144,7 +1152,7 @@ mod tests {
                  VALUES (?1, 'ASSET-IMG-EMPTY-ALT-LINK', 'high', 'asset')",
                 [i + 1],
             )
-            .expect("issue suelto");
+            .expect("loose issue");
         }
         for i in 0..2 {
             conn.execute(
@@ -1152,7 +1160,7 @@ mod tests {
                  VALUES (?1, 'CONTENT-HEADING-SKIP', 'low', 'content', 'heading-skip:1>4:x')",
                 [i + 1],
             )
-            .expect("issue pequeño");
+            .expect("small issue");
         }
         path
     }
@@ -1160,7 +1168,7 @@ mod tests {
     fn dir_de_prueba(nombre: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("cf-plantilla-{}-{nombre}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("crear el directorio");
+        std::fs::create_dir_all(&dir).expect("create the directory");
         dir
     }
 
@@ -1168,15 +1176,15 @@ mod tests {
     fn el_ruido_de_plantilla_se_colapsa_en_el_resumen() {
         let dir = dir_de_prueba("resumen");
         let store = store_con_plantilla(&dir);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let lineas = findings_lines(&conn, &store, Lang::En, 40).expect("resumen");
+        let lineas = findings_lines(&conn, &store, Lang::En, 40).expect("summary");
         let texto = lineas.join("\n");
 
         // El titular: un problema, no 38 filas. Y las 3 páginas fuera del grupo no se ocultan.
         assert!(texto.contains("1 template issue (35 pages)"), "{texto}");
         assert!(texto.contains("+ 3 more findings"), "{texto}");
-        assert!(!texto.contains("      38"), "el recuento crudo ya no es el titular: {texto}");
+        assert!(!texto.contains("      38"), "the raw count is no longer the headline: {texto}");
         // Con dos URLs de ejemplo para reconocer la plantilla sin abrir nada más.
         assert!(texto.contains("e.g. https://e.es/p00"), "{texto}");
         // Y el comando que da la lista completa, listo para copiar.
@@ -1192,7 +1200,7 @@ mod tests {
         let dir = dir_de_prueba("solapados");
         let store = store_con_plantilla(&dir);
         {
-            let conn = Connection::open(&store).expect("abrir");
+            let conn = Connection::open(&store).expect("open");
             for grupo in ["img-no-alt:bbbb", "img-no-alt:cccc"] {
                 for i in 0..35 {
                     conn.execute(
@@ -1200,15 +1208,15 @@ mod tests {
                          VALUES (?1, 'ASSET-IMG-NO-ALT', 'high', 'asset', ?2)",
                         rusqlite::params![i + 1, grupo],
                     )
-                    .expect("issue solapado");
+                    .expect("overlapping issue");
                 }
             }
         }
-        let conn = Connection::open(&store).expect("abrir");
-        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("resumen").join("\n");
+        let conn = Connection::open(&store).expect("open");
+        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("summary").join("\n");
         assert!(
             texto.contains("2 template issues (35 pages)"),
-            "35 páginas con dos causas son 35 páginas, no 70: {texto}"
+            "35 pages with two causes are 35 pages, not 70: {texto}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1217,16 +1225,16 @@ mod tests {
     fn dos_paginas_con_la_misma_clave_no_son_una_plantilla() {
         let dir = dir_de_prueba("pequeno");
         let store = store_con_plantilla(&dir);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let lineas = findings_lines(&conn, &store, Lang::En, 40).expect("resumen");
+        let lineas = findings_lines(&conn, &store, Lang::En, 40).expect("summary");
         let texto = lineas.join("\n");
 
         // CONTENT-HEADING-SKIP tiene 2 páginas con la misma clave: recuento normal, sin colapso.
         let linea = lineas
             .iter()
             .find(|l| l.contains("CONTENT-HEADING-SKIP"))
-            .expect("la regla pequeña está");
+            .expect("the small rule is there");
         assert!(!linea.contains("template"), "{texto}");
         assert!(linea.trim_end().ends_with('2'), "{linea:?}");
 
@@ -1237,9 +1245,9 @@ mod tests {
     fn el_colapso_tambien_habla_espanol() {
         let dir = dir_de_prueba("espanol");
         let store = store_con_plantilla(&dir);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let texto = findings_lines(&conn, &store, Lang::Es, 40).expect("resumen").join("\n");
+        let texto = findings_lines(&conn, &store, Lang::Es, 40).expect("summary").join("\n");
         assert!(texto.contains("1 problema de plantilla (35 páginas)"), "{texto}");
         assert!(texto.contains("+ 3 hallazgos más"), "{texto}");
         assert!(texto.contains("p. ej."), "{texto}");
@@ -1257,9 +1265,7 @@ mod tests {
     /// Un rastreo de 40 páginas donde una regla sin `group_key` afecta a 30: dominante.
     fn store_dominante(dir: &std::path::Path) -> std::path::PathBuf {
         let path = dir.join("dominante.sqlite");
-        let conn = Connection::open(&path).expect("crear el fichero");
-        conn.execute_batch(include_str!("../../crawlforge-core/migrations/001_initial.sql"))
-            .expect("migrar");
+        let conn = crate::test_schema::crawl_file(&path);
         for i in 0..40 {
             conn.execute(
                 "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal,
@@ -1277,7 +1283,7 @@ mod tests {
                  VALUES (?1, 'META-TITLE-TOO-LONG', 'medium', 'meta')",
                 [i + 1],
             )
-            .expect("issue dominante");
+            .expect("dominant issue");
         }
         path
     }
@@ -1285,7 +1291,7 @@ mod tests {
     /// Añade a un fichero 30 hallazgos de profundidad con `click_depth` real: diez a 5 clics,
     /// diez a 6, cinco a 7 y cinco a 12.
     fn con_hallazgos_de_profundidad(store: &std::path::Path) {
-        let conn = Connection::open(store).expect("abrir");
+        let conn = Connection::open(store).expect("open");
         for i in 0..30 {
             let depth = match i {
                 0..=9 => 5,
@@ -1301,7 +1307,7 @@ mod tests {
                     format!("{{\"click_depth\":{depth},\"max_click_depth\":4}}")
                 ],
             )
-            .expect("issue de profundidad");
+            .expect("depth issue");
         }
     }
 
@@ -1309,15 +1315,15 @@ mod tests {
     fn una_regla_dominante_dice_su_cuota_del_sitio_sin_perder_el_recuento() {
         let dir = dir_de_prueba("dominante");
         let store = store_dominante(&dir);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("resumen").join("\n");
+        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("summary").join("\n");
         // El recuento se conserva —nada se oculta— y la cuota lo reformula como propiedad
         // del sitio: 30 títulos largos en 40 páginas no son 30 tareas, son la plantilla.
         assert!(texto.contains("30"), "{texto}");
         assert!(texto.contains("(75% of the site)"), "{texto}");
 
-        let es = findings_lines(&conn, &store, Lang::Es, 40).expect("resumen").join("\n");
+        let es = findings_lines(&conn, &store, Lang::Es, 40).expect("summary").join("\n");
         assert!(es.contains("(75% del sitio)"), "{es}");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1330,17 +1336,17 @@ mod tests {
         let dir = dir_de_prueba("deep-forma");
         let store = store_dominante(&dir);
         con_hallazgos_de_profundidad(&store);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("resumen").join("\n");
+        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("summary").join("\n");
         assert!(
             texto.contains("30 pages deeper than 4 clicks — 75% of the site \
                             (typical depth 5–7, deepest 12)"),
             "{texto}"
         );
-        assert!(!texto.contains("INDEX-DEEP-PAGE            "), "el recuento crudo ya no es el titular: {texto}");
+        assert!(!texto.contains("INDEX-DEEP-PAGE            "), "the raw count is no longer the headline: {texto}");
 
-        let es = findings_lines(&conn, &store, Lang::Es, 40).expect("resumen").join("\n");
+        let es = findings_lines(&conn, &store, Lang::Es, 40).expect("summary").join("\n");
         assert!(
             es.contains("30 páginas a más de 4 clics — 75% del sitio \
                          (profundidad típica 5–7, máxima 12)"),
@@ -1358,7 +1364,7 @@ mod tests {
         let dir = dir_de_prueba("deep-antiguo");
         let store = store_dominante(&dir);
         {
-            let conn = Connection::open(&store).expect("abrir");
+            let conn = Connection::open(&store).expect("open");
             for i in 0..30 {
                 conn.execute(
                     "INSERT INTO issues (url_id, rule_id, severity, category, detail_json)
@@ -1366,17 +1372,17 @@ mod tests {
                              '{\"max_click_depth\":4}')",
                     [i + 1],
                 )
-                .expect("issue antiguo");
+                .expect("old issue");
             }
         }
-        let conn = Connection::open(&store).expect("abrir");
-        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("resumen").join("\n");
+        let conn = Connection::open(&store).expect("open");
+        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("summary").join("\n");
         let linea = texto
             .lines()
             .find(|l| l.contains("INDEX-DEEP-PAGE"))
-            .expect("la regla está");
+            .expect("the rule is there");
         assert!(linea.contains("(75% of the site)"), "{linea}");
-        assert!(!linea.contains("deepest"), "sin datos no se inventa la forma: {linea}");
+        assert!(!linea.contains("deepest"), "without data the shape is not made up: {linea}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1389,23 +1395,23 @@ mod tests {
         let dir = dir_de_prueba("critica-dominante");
         let store = store_dominante(&dir);
         {
-            let conn = Connection::open(&store).expect("abrir");
+            let conn = Connection::open(&store).expect("open");
             for i in 0..36 {
                 conn.execute(
                     "INSERT INTO issues (url_id, rule_id, severity, category)
                      VALUES (?1, 'HTTP-404-INTERNAL', 'critical', 'http')",
                     [i + 1],
                 )
-                .expect("issue crítico");
+                .expect("critical issue");
             }
         }
-        let conn = Connection::open(&store).expect("abrir");
-        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("resumen").join("\n");
+        let conn = Connection::open(&store).expect("open");
+        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("summary").join("\n");
         let linea = texto
             .lines()
             .find(|l| l.contains("HTTP-404-INTERNAL"))
-            .expect("la regla está");
-        assert!(linea.contains("36"), "el recuento no desaparece: {linea}");
+            .expect("the rule is there");
+        assert!(linea.contains("36"), "the count does not disappear: {linea}");
         assert!(linea.contains("(90% of the site)"), "{linea}");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1417,12 +1423,12 @@ mod tests {
         // estaba. 12 páginas profundas en un sitio de 200 son 12 líneas útiles.
         let dir = dir_de_prueba("pequeno-sin-cuota");
         let store = store_con_plantilla(&dir);
-        let conn = Connection::open(&store).expect("abrir");
-        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("resumen").join("\n");
+        let conn = Connection::open(&store).expect("open");
+        let texto = findings_lines(&conn, &store, Lang::En, 40).expect("summary").join("\n");
         let linea = texto
             .lines()
             .find(|l| l.contains("CONTENT-HEADING-SKIP"))
-            .expect("la regla pequeña está");
+            .expect("the small rule is there");
         assert!(!linea.contains('%'), "{linea}");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1435,15 +1441,15 @@ mod tests {
         let dir = dir_de_prueba("deep-lista");
         let store = store_dominante(&dir);
         con_hallazgos_de_profundidad(&store);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let texto = rule_urls_text(&conn, "INDEX-DEEP-PAGE", Lang::En).expect("lista");
+        let texto = rule_urls_text(&conn, "INDEX-DEEP-PAGE", Lang::En).expect("list");
         assert!(texto.contains("30 affected URLs"), "{texto}");
         let urls: Vec<&str> = texto.lines().filter(|l| l.contains("https://")).collect();
-        assert_eq!(urls.len(), 30, "todas las URLs salen, sin corte: {texto}");
+        assert_eq!(urls.len(), 30, "all URLs are listed, no cutoff: {texto}");
         assert!(
             urls[0].trim_start().starts_with("12  "),
-            "la más hundida primero, con sus clics delante: {:?}",
+            "the deepest first, with its clicks up front: {:?}",
             urls[0]
         );
         assert!(urls[29].trim_start().starts_with("5  "), "{:?}", urls[29]);
@@ -1456,11 +1462,11 @@ mod tests {
         // La revisión de UX §5.1: el informe corta en tres y no decía dónde estaban las demás.
         let dir = dir_de_prueba("lista");
         let store = store_con_plantilla(&dir);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let texto = rule_urls_text(&conn, "ASSET-IMG-EMPTY-ALT-LINK", Lang::En).expect("lista");
+        let texto = rule_urls_text(&conn, "ASSET-IMG-EMPTY-ALT-LINK", Lang::En).expect("list");
         for i in 0..38 {
-            assert!(texto.contains(&format!("https://e.es/p{i:02}")), "falta p{i:02}:\n{texto}");
+            assert!(texto.contains(&format!("https://e.es/p{i:02}")), "missing p{i:02}:\n{texto}");
         }
         assert!(texto.contains("38 affected URLs"), "{texto}");
         // El grupo de plantilla se presenta como tal, con su causa, y el resto aparte.
@@ -1476,9 +1482,9 @@ mod tests {
     fn la_lista_acepta_el_id_en_minusculas_y_habla_espanol() {
         let dir = dir_de_prueba("minusculas");
         let store = store_con_plantilla(&dir);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let texto = rule_urls_text(&conn, "asset-img-empty-alt-link", Lang::Es).expect("lista");
+        let texto = rule_urls_text(&conn, "asset-img-empty-alt-link", Lang::Es).expect("list");
         assert!(texto.contains("38 URLs afectadas"), "{texto}");
         assert!(texto.contains("Grupo de plantilla — 35 páginas"), "{texto}");
 
@@ -1489,9 +1495,9 @@ mod tests {
     fn una_regla_inexistente_es_un_error_que_dice_donde_esta_el_catalogo() {
         let dir = dir_de_prueba("inexistente");
         let store = store_con_plantilla(&dir);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let err = rule_urls_text(&conn, "NO-EXISTE", Lang::En).expect_err("no es una regla");
+        let err = rule_urls_text(&conn, "NO-EXISTE", Lang::En).expect_err("not a rule");
         assert!(err.to_string().contains("crawlforge rules"), "{err}");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1501,9 +1507,9 @@ mod tests {
     fn una_regla_sin_hallazgos_no_es_un_error() {
         let dir = dir_de_prueba("sin-hallazgos");
         let store = store_con_plantilla(&dir);
-        let conn = Connection::open(&store).expect("abrir");
+        let conn = Connection::open(&store).expect("open");
 
-        let texto = rule_urls_text(&conn, "HTTP-404-INTERNAL", Lang::En).expect("regla del catálogo");
+        let texto = rule_urls_text(&conn, "HTTP-404-INTERNAL", Lang::En).expect("a catalog rule");
         assert!(texto.contains("No findings for HTTP-404-INTERNAL"), "{texto}");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1521,9 +1527,9 @@ mod tests {
             "https://localhost/",
             canonicals.into_iter(),
         )
-        .expect("debe avisar");
+        .expect("must warn");
         assert!(aviso.contains("https://fixture.local/"), "{aviso}");
-        assert!(aviso.contains("--base https://fixture.local/"), "propone el arreglo: {aviso}");
+        assert!(aviso.contains("--base https://fixture.local/"), "proposes the fix: {aviso}");
         assert!(aviso.contains("3 of 3"), "{aviso}");
     }
 
@@ -1536,9 +1542,9 @@ mod tests {
             "https://localhost/",
             canonicals.into_iter(),
         )
-        .expect("debe avisar");
+        .expect("must warn");
         assert!(aviso.contains("2 de 2"), "{aviso}");
-        assert!(aviso.contains("--base https://fixture.local/"), "el comando no se traduce: {aviso}");
+        assert!(aviso.contains("--base https://fixture.local/"), "the command is not translated: {aviso}");
     }
 
     #[test]

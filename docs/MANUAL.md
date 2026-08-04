@@ -1,36 +1,38 @@
-# Manual de CrawlForge (CLI)
+# CrawlForge Manual (CLI)
 
-> La herramienta es hoy línea de comandos. Una interfaz gráfica está prevista y no existe todavía.
+> Versión en español: [`es/MANUAL.md`](es/MANUAL.md)
+
+> The tool is command-line only today. A graphical interface is planned and does not exist yet.
 >
-> Esto no repite el `--help`, que ya está completo y en inglés. Esto es **qué comando usar en
-> cada situación real**, con los sitios de verdad.
+> This does not repeat `--help`, which is already complete and in English. This is **which
+> command to use in each real situation**, with real sites.
 
 ---
 
-## 0. Antes de empezar
+## 0. Before you start
 
-El binario ya está instalado y en el `PATH`:
+The binary is already installed and on the `PATH`:
 
 ```bash
 crawlforge --version
 ```
 
-Si no responde, se reinstala desde el repositorio:
+If it does not respond, reinstall from the repository:
 
 ```bash
 cd ~/Desarrollos/proyectos/proyectos-mini/crawlforge
 cargo build --release -p crawlforge-cli && cp target/release/crawlforge ~/.cargo/bin/
 ```
 
-**La salida de la herramienta está en inglés.** Es el idioma de origen; el español existe donde
-hay texto de verdad que traducir —el catálogo de reglas y los informes— y se pide con `--lang es`:
+**The tool's output is in English.** That is the source language; Spanish exists where there is
+real text to translate — the rule catalog and the reports — and you ask for it with `--lang es`:
 
 ```bash
 crawlforge rules  --lang es
 crawlforge report crawl.sqlite --lang es
 ```
 
-Para no repetirlo en cada comando, en tu `~/.zshrc`:
+To avoid repeating it on every command, in your `~/.zshrc`:
 
 ```bash
 export CRAWLFORGE_LANG=es
@@ -38,281 +40,285 @@ export CRAWLFORGE_LANG=es
 
 ---
 
-## 1. El flujo de un día normal
+## 1. The flow of a normal day
 
-Cuatro comandos. Si solo lees una sección del manual, que sea esta.
+Four commands. If you only read one section of this manual, make it this one.
 
 ```bash
-# 1. Rastrear
+# 1. Crawl
 crawlforge crawl https://tusitio.com/
 
-# 2. Ver qué ha salido, aquí mismo
+# 2. See what came out, right here
 crawlforge report crawl-tusitio-com.sqlite --lang es
 
-# 3. Llevárselo a alguien que no usa terminal
+# 3. Take it to someone who doesn't use a terminal
 crawlforge export crawl-tusitio-com.sqlite --format xlsx --out auditoria.xlsx
 
-# 4. Un informe para pegar en un ticket o mandar por correo
+# 4. A report to paste into a ticket or send by email
 crawlforge report crawl-tusitio-com.sqlite --format html --out informe.html --lang es
 ```
 
-Cada comando termina diciéndote cuál es el siguiente, con la orden lista para copiar. No hace
-falta memorizar nada.
+Every command ends by telling you which one comes next, ready to copy. There is nothing to
+memorize.
 
-### Los ficheros que aparecen
+### The files that show up
 
-| Fichero | Qué es |
+| File | What it is |
 |---|---|
-| `crawl-<sitio>.sqlite` | **El rastreo.** Todo está aquí: URLs, enlaces, imágenes, hallazgos, cabeceras. Es un SQLite normal; se puede abrir con cualquier visor. |
-| `crawl-<sitio>.prev.sqlite` | El rastreo **anterior**, apartado automáticamente al repetir. Es lo que `diff` necesita. No lo borres. |
+| `crawl-<site>.sqlite` | **The crawl.** Everything is here: URLs, links, images, findings, headers. It is a plain SQLite file; any viewer can open it. |
+| `crawl-<site>.prev.sqlite` | The **previous** crawl, set aside automatically when you crawl again. It is what `diff` needs. Don't delete it. |
 
-Un rastreo se puede volver a mirar meses después sin volver a rastrear: `report`, `export` y
-`diff` trabajan sobre el fichero, no sobre la red.
+A crawl can be revisited months later without crawling again: `report`, `export` and `diff` work
+on the file, not on the network.
 
 ---
 
-## 2. Recetas
+## 2. Recipes
 
-### Rastrear un sitio entero
+### Crawl a whole site
 
 ```bash
 crawlforge crawl https://cliente.com/
 ```
 
-Descubre los sitemaps, respeta `robots.txt` y para cuando agota el sitio. Va con 5 peticiones
-simultáneas, que es prudente para un WordPress. En un sitio propio y bien dimensionado:
+It discovers the sitemaps, respects `robots.txt` and stops when it exhausts the site. It runs 5
+concurrent requests, which is prudent for a WordPress. On your own, well-provisioned site:
 
 ```bash
 crawlforge crawl https://tusitio.com/ --concurrency 10
 ```
 
-**No subas la concurrencia en sitios de terceros ni en hosting compartido.** Un servidor con
-limitación por IP empieza a devolver 503 tras varios rastreos seguidos, y a partir de ahí las
-mediciones no valen nada: lo que estás midiendo es su defensa, no tu sitio.
+**Do not raise the concurrency on third-party sites or shared hosting.** A server with per-IP
+limits starts returning 503 after a few crawls in a row, and from then on the measurements are
+worthless: what you are measuring is its defenses, not your site.
 
-### Solo una parte del sitio
+### Only part of the site
 
 ```bash
-# Solo el blog
+# Only the blog
 crawlforge crawl https://cliente.com/ --include "/blog/"
 
-# Todo menos el área de administración y las URLs de respuesta a comentarios
+# Everything except the admin area and the comment-reply URLs
 crawlforge crawl https://cliente.com/ --exclude "/wp-admin/" --exclude "\?replytocom="
 ```
 
-Son expresiones regulares sin anclar: una cadena normal funciona como «contiene». **`--exclude`
-gana sobre `--include`**, y lo excluido queda registrado como excluido en el informe: no
-desaparece sin dejar rastro.
+These are unanchored regular expressions: a plain string works as "contains". **`--exclude` wins
+over `--include`**, and whatever is excluded is recorded as excluded in the report: it does not
+vanish without a trace.
 
-### Una prueba rápida, sin rastrear las 176.000 URLs
+### A quick test, without crawling all 176,000 URLs
 
 ```bash
 crawlforge crawl https://tumedio.com/ --max-urls 500
 ```
 
-Ojo con esto: **un rastreo truncado no puede juzgar el grafo de enlaces.** La herramienta lo sabe
-y silencia las reglas que dependen de tenerlo completo —páginas huérfanas, profundidad excesiva—
-en lugar de inventarse el veredicto. Si el informe no las menciona, no es que estén bien; es que
-no se han podido evaluar.
+Careful with this one: **a truncated crawl cannot judge the link graph.** The tool knows it and
+silences the rules that depend on having it complete — orphan pages, excessive depth — instead
+of making up a verdict. If the report does not mention them, it is not that they are fine; it is
+that they could not be evaluated.
 
-### Auditar antes de desplegar
+### Audit before deploying
 
-Sobre la carpeta compilada, sin subir nada a ningún sitio:
+Over the built folder, without uploading anything anywhere:
 
 ```bash
 crawlforge audit ./dist --base https://tusitio.com/
 ```
 
-`--base` es obligatorio y por un motivo: los `canonical` absolutos del sitio se comparan contra
-esa URL. Con una falsa, la auditoría de indexabilidad no significa nada, y la herramienta avisa
-si el 80% de los canonicals contradicen lo que le has dicho.
+`--base` is mandatory for a reason: the site's absolute `canonical`s are compared against that
+URL. With a fake one, the indexability audit means nothing, and the tool warns you if 80% of the
+canonicals contradict what you told it.
 
-Es el modo más rápido de todos —no hay red— y es el que se usa en CI.
+It is the fastest mode of all — there is no network — and it is the one used in CI.
 
-### Comparar dos rastreos: ¿el despliegue ha empeorado algo?
+### Compare two crawls: did the deploy make anything worse?
 
 ```bash
 crawlforge diff crawl-sitio.prev.sqlite crawl-sitio.sqlite --lang es
 ```
 
-Esto es lo que Screaming Frog no te da. Un rastreo es una foto; el diff te dice si lo de ayer
-sigue igual. Como puerta de CI, que falle si aparece algo grave:
+This is what Screaming Frog does not give you. A crawl is a snapshot; the diff tells you whether
+yesterday's still holds. As a CI gate, make it fail if something serious shows up:
 
 ```bash
 crawlforge diff antes.sqlite despues.sqlite --fail-on high
 ```
 
-Sale con código distinto de cero si aparece un hallazgo nuevo de severidad `high` o peor. Un
-`--fail-on INDEX-NOINDEX` vigila una regla concreta.
+It exits non-zero if a new finding of severity `high` or worse appears. A
+`--fail-on INDEX-NOINDEX` watches one specific rule.
 
-### Un sitio protegido con contraseña (staging)
-
-```bash
-CRAWLFORGE_AUTH='usuario:contraseña' crawlforge crawl https://pre.cliente.es/
-```
-
-También se acepta en la URL como atajo, aunque así queda en el historial del shell:
+### A password-protected site (staging)
 
 ```bash
-crawlforge crawl https://usuario:contraseña@pre.cliente.es/
+CRAWLFORGE_AUTH='user:password' crawlforge crawl https://pre.cliente.es/
 ```
 
-En los dos casos, **la credencial no se guarda en el fichero de rastreo** y no viaja a ningún host
-que no sea el de la semilla, ni siquiera si el sitio enlaza a otro dominio. Por eso `resume`
-también necesita la variable: el fichero no la lleva dentro a propósito.
+It is also accepted in the URL as a shortcut, though that way it stays in your shell history:
 
-Se aplica también al `robots.txt` y a los sitemaps — si no, un staging protegido devolvería 401 al
-pedirlos y el rastreo se comportaría de forma rara sin decir por qué.
+```bash
+crawlforge crawl https://user:password@pre.cliente.es/
+```
 
-### Una lista exacta de URLs
+In both cases, **the credential is not stored in the crawl file** and never travels to any host
+other than the seed's, not even if the site links to another domain. That is why `resume` also
+needs the variable: the file deliberately does not carry it.
+
+It also applies to `robots.txt` and the sitemaps — otherwise a protected staging would return
+401 when they are fetched and the crawl would behave strangely without saying why.
+
+### An exact list of URLs
 
 ```bash
 crawlforge list urls.txt
 ```
 
-Un fichero con una URL por línea. Sirve para revisar un conjunto concreto —las 40 landings de una
-campaña— y es también el modo que hace justa una comparación con otra herramienta: las dos reciben
-exactamente el mismo conjunto.
+A file with one URL per line. Useful for reviewing a specific set — the 40 landing pages of a
+campaign — and it is also what makes a comparison with another tool fair: both receive exactly
+the same set.
 
-### Se ha cortado el rastreo
+### The crawl was interrupted
 
 ```bash
 crawlforge resume crawl-tumedio-com.sqlite
 ```
 
-Sigue exactamente donde se quedó, con la configuración guardada en el propio fichero. No repite lo
-ya rastreado. Un rastreo terminado no se puede reanudar: para eso se relanza.
+It continues exactly where it left off, with the configuration stored in the file itself. It
+does not repeat what was already crawled. A finished crawl cannot be resumed: for that you crawl
+again.
 
-### Rastreos que se repiten: guarda la configuración
+### Recurring crawls: save the configuration
 
 ```bash
-cp docs/crawl-config.example.yaml cliente.yaml   # y edítalo
+cp docs/crawl-config.example.yaml cliente.yaml   # then edit it
 crawlforge crawl https://cliente.com/ --config cliente.yaml
 ```
 
-El fichero describe **el sitio**, la línea de comandos describe **la ejecución**: los flags ganan
-sobre el YAML. Un campo mal escrito es un error, no una opción ignorada en silencio.
+The file describes **the site**, the command line describes **the run**: flags win over the
+YAML. A misspelled field is an error, not an option silently ignored.
 
-### Ver qué comprueba la herramienta
+### See what the tool checks
 
 ```bash
-crawlforge rules --lang es                    # las 59, en tabla
-crawlforge rules INDEX-ORPHAN-PAGE            # la ficha de una regla concreta, por su ID
+crawlforge rules --lang es                    # all 59, as a table
+crawlforge rules INDEX-ORPHAN-PAGE            # one rule's card, by its ID
 crawlforge rules --lang es --category canonical
-crawlforge rules --lang es --detail           # con la explicación completa de cada una
+crawlforge rules --lang es --detail           # with each rule's full explanation
 ```
 
 ---
 
-## 3. Cómo se lee el resultado
+## 3. How to read the result
 
-### En el terminal
+### In the terminal
 
-`report` sin más da el resumen: cuántas URLs, cuántas indexables, y los hallazgos agrupados por
-severidad. Es para responder «¿cómo está esto?» en diez segundos.
+`report` on its own gives the summary: how many URLs, how many indexable, and the findings
+grouped by severity. It is for answering "how is this doing?" in ten seconds.
 
-### El XLSX
+### The XLSX
 
 ```bash
 crawlforge export crawl.sqlite --format xlsx --out auditoria.xlsx
 ```
 
-Trece hojas, cada una con la cabecera congelada y el autofiltro puesto. Los códigos de estado son
-números de verdad, así que un filtro «mayor que 399» funciona como esperas. Las celdas de estado
-vacías son las URLs externas, que se registran pero no se piden.
+Thirteen sheets, each with the header frozen and the autofilter on. Status codes are real
+numbers, so a "greater than 399" filter works the way you expect. An empty status cell is a URL
+that was recorded but never requested — an internal link beyond the crawl's reach, or an external
+one when the check is off.
 
-Está comprobado que abre limpio en Microsoft Excel 16, sin aviso de reparación.
+It is verified to open clean in Microsoft Excel 16, with no repair warning.
 
-### El SQLite, si quieres ir más allá
+### The SQLite, if you want to go further
 
-Es la ventaja de que el formato no sea propietario. Cualquier pregunta que el informe no responda,
-la responde SQL.
+This is the advantage of a format that is not proprietary. Any question the report does not
+answer, SQL does.
 
-Las tres tablas que se usan el 90% de las veces:
+The three tables you will use 90% of the time:
 
-| Tabla | Qué guarda | Clave |
+| Table | What it holds | Key |
 |---|---|---|
-| `urls` | Toda URL vista: `url`, `status_code`, `depth`, `content_type`, `response_time_ms` | `id` |
-| `pages` | Lo extraído del HTML: `title`, `h1`, `word_count`, `canonical`, `is_indexable` | `url_id` → `urls.id` |
-| `issues` | Un hallazgo por fila: `rule_id`, `severity` | `url_id` → `urls.id` |
+| `urls` | Every URL seen: `url`, `status_code`, `depth`, `content_type`, `response_time_ms` | `id` |
+| `pages` | What was extracted from the HTML: `title`, `h1`, `word_count`, `canonical`, `is_indexable` | `url_id` → `urls.id` |
+| `issues` | One finding per row: `rule_id`, `severity` | `url_id` → `urls.id` |
 
 ```bash
-# Las URLs que fallan
+# The URLs that fail
 sqlite3 crawl-cliente-com.sqlite \
   "SELECT url, status_code FROM urls WHERE status_code >= 400 ORDER BY status_code DESC LIMIT 20;"
 
-# Qué páginas dispararon una regla concreta
+# Which pages triggered a specific rule
 sqlite3 crawl-cliente-com.sqlite \
   "SELECT u.url FROM issues i JOIN urls u ON u.id = i.url_id
    WHERE i.rule_id = 'CONTENT-H1-MISSING' LIMIT 20;"
 
-# Las páginas más lentas
+# The slowest pages
 sqlite3 crawl-cliente-com.sqlite \
   "SELECT url, response_time_ms FROM urls ORDER BY response_time_ms DESC LIMIT 10;"
 ```
 
-Hay vistas ya preparadas para las preguntas habituales: `v_orphans`, `v_broken_links`,
-`v_indexable_pages` y `v_issue_summary`.
+There are ready-made views for the usual questions: `v_orphans`, `v_broken_links`,
+`v_indexable_pages` and `v_issue_summary`.
 
-Dos avisos que ahorran un rato: la columna es **`status_code`**, no `status`, y las URLs externas
-la tienen a `NULL` porque se registran pero no se piden.
+Two warnings that save you a while: the column is **`status_code`**, not `status`, and it is
+`NULL` for any URL that was recorded without being requested — an internal link the crawl never
+reached, or an external one when `--no-external-check` is in play.
 
 ---
 
-## 3.bis Cómo se lee un informe
+## 3.bis How to read a report
 
-El resumen es una línea por regla, ordenado por severidad. Tres cosas que conviene saber para
-interpretarlo:
+The summary is one line per rule, sorted by severity. Three things worth knowing to interpret
+it:
 
-### La cuota del sitio
+### The site share
 
 ```
 medium  META-TITLE-TOO-LONG  173,654  (80% of the site)
 ```
 
-Cuando una regla afecta al 40% o más de las páginas, la línea añade su cuota. **Es la diferencia
-entre una lista de páginas que arreglar una a una y un problema sistémico**: 2.193 imágenes rotas
-son 2.193 arreglos; 173.654 títulos largos al 80% del sitio son una plantilla o un patrón de
-publicación, y se arregla en un sitio.
+When a rule affects 40% or more of the pages, the line adds its share. **It is the difference
+between a list of pages to fix one by one and a systemic problem**: 2,193 broken images are
+2,193 fixes; 173,654 long titles across 80% of the site are a template or a publishing pattern,
+and you fix them in one place.
 
-### Los problemas de plantilla
+### Template issues
 
 ```
 high  ASSET-IMG-EMPTY-ALT-LINK  13 template issues (567 pages) + 90 more findings
       e.g. https://ejemplo.com/a · https://ejemplo.com/b
 ```
 
-Cuando el mismo defecto aparece por la misma causa en muchas páginas —el logo de la cabecera, un
-enlace del pie, el `<h4>` de la firma del autor— se cuenta como **un problema**, con ejemplos. Las
-filas siguen todas en el fichero: lo que cambia es el recuento del informe, no lo que se guarda.
+When the same defect appears for the same cause on many pages — the header logo, a footer link,
+the `<h4>` of the author signature — it counts as **one issue**, with examples. The rows all
+stay in the file: what changes is the report's count, not what is stored.
 
-### Ver todas las URLs de una regla
+### See every URL for a rule
 
-El resumen nunca enumera. Para la lista completa:
+The summary never enumerates. For the full list:
 
 ```bash
 crawlforge report crawl.sqlite --rule HTTP-404-INTERNAL
 ```
 
-Sale ordenada, con los grupos de plantilla primero y su causa al lado. Es el comando que sustituye
-al «… y 26 más» que no llevaba a ninguna parte.
+It comes out sorted, template groups first with their cause next to them. It is the command that
+replaces the "… and 26 more" that led nowhere.
 
-### La ficha de una URL: ¿quién enlaza aquí?
+### A URL's card: who links here?
 
-La pregunta que más se repite en una auditoría tiene su propio comando:
+The question that comes up most in an audit has its own command:
 
 ```bash
 crawlforge inspect crawl.sqlite 'https://cliente.com/pagina/'
 ```
 
-Vale también la ruta sola (`/pagina/`), el dominio sin esquema, y con o sin la barra final. Si te
-equivocas, el error sugiere las URLs más parecidas del fichero en vez de decir solo «no está».
+The path alone also works (`/pagina/`), so does the domain without the scheme, with or without
+the trailing slash. If you get it wrong, the error suggests the closest URLs in the file instead
+of just saying "not there".
 
-La ficha enseña el estado HTTP, lo extraído (título, meta description, H1, palabras, canonical,
-indexabilidad), los hallazgos de esa URL, su cadena de redirecciones si redirige, sus imágenes, y
-—la sección estrella— **quién enlaza a esa página**: deduplicado por página que enlaza, con su
-texto de ancla, si es `nofollow` y desde qué región (los enlaces de contenido primero, el ruido de
-`nav` y `footer` después). Salida real, recortada:
+The card shows the HTTP status, what was extracted (title, meta description, H1, word count,
+canonical, indexability), that URL's findings, its redirect chain if it redirects, its images,
+and — the star section — **who links to that page**: deduplicated by linking page, with its
+anchor text, whether it is `nofollow` and from which region (content links first, the `nav` and
+`footer` noise after). Real output, trimmed:
 
 ```
 $ crawlforge inspect un-diario-completo.sqlite '/un-titular-cualquiera'
@@ -328,13 +334,13 @@ $ crawlforge inspect un-diario-completo.sqlite '/un-titular-cualquiera'
      200  https://tumedio.com/quienes-somos/ "¿Quiénes somos?"
 ```
 
-Los salientes enseñan el **código de estado del destino** con los rotos primero: la ficha de una
-página es también su triaje de enlaces rotos. Y si la URL inspeccionada es una imagen, la ficha
-dice en qué páginas se usa — la dirección contraria a la sección de imágenes.
+Outlinks show the **destination's status code** with the broken ones first: a page's card is
+also its broken-link triage. And if the inspected URL is an image, the card says which pages use
+it — the opposite direction to the images section.
 
-Cada lista corta en 20 filas y el corte dice el comando exacto que la completa (`--limit all`;
-también acepta un número). `--lang es` la traduce, y `--format md` con `--out ficha.md` produce
-una ficha para pegar en un ticket:
+Each list cuts off at 20 rows and the cut tells you the exact command that completes it
+(`--limit all`; it also takes a number). `--lang es` translates it, and `--format md` with
+`--out ficha.md` produces a card ready to paste into a ticket:
 
 ```bash
 crawlforge inspect crawl.sqlite '/pagina/' --format md --out ficha.md
@@ -342,38 +348,38 @@ crawlforge inspect crawl.sqlite '/pagina/' --format md --out ficha.md
 
 ---
 
-## 3.ter Escenarios completos
+## 3.ter Complete scenarios
 
-### Auditoría de un cliente, de principio a fin
+### A client audit, start to finish
 
 ```bash
 crawlforge crawl https://cliente.com/
-crawlforge report crawl-cliente-com.sqlite --lang es          # ¿qué tiene?
-crawlforge report crawl-cliente-com.sqlite --rule CONTENT-H1-MISSING   # ¿dónde?
-crawlforge inspect crawl-cliente-com.sqlite '/esa-pagina/' --lang es   # ¿quién enlaza aquí?
+crawlforge report crawl-cliente-com.sqlite --lang es          # what does it have?
+crawlforge report crawl-cliente-com.sqlite --rule CONTENT-H1-MISSING   # where?
+crawlforge inspect crawl-cliente-com.sqlite '/esa-pagina/' --lang es   # who links here?
 crawlforge export crawl-cliente-com.sqlite --format xlsx --out cliente.xlsx
 crawlforge report crawl-cliente-com.sqlite --format html --out cliente.html --lang es
 ```
 
-El `.xlsx` es para trabajar; el `.html` es para enviar.
+The `.xlsx` is for working; the `.html` is for sending.
 
-### Vigilar un despliegue
+### Watch a deploy
 
 ```bash
-crawlforge crawl https://cliente.com/                         # antes de publicar
-# … se publica …
-crawlforge crawl https://cliente.com/                         # el anterior pasa a .prev.sqlite
+crawlforge crawl https://cliente.com/                         # before publishing
+# … the deploy happens …
+crawlforge crawl https://cliente.com/                         # the previous one becomes .prev.sqlite
 crawlforge diff crawl-cliente-com.prev.sqlite crawl-cliente-com.sqlite --lang es
 ```
 
-Y en un pipeline de CI, sobre la carpeta compilada y sin red:
+And in a CI pipeline, over the built folder and with no network:
 
 ```bash
 crawlforge audit ./dist --base https://cliente.com/ --out nuevo.sqlite
 crawlforge diff referencia.sqlite nuevo.sqlite --fail-on high || exit 1
 ```
 
-### Revisar una cartera de sitios
+### Review a portfolio of sites
 
 ```bash
 for s in blog1.com blog2.com blog3.com; do
@@ -382,7 +388,7 @@ done
 for f in *.sqlite; do echo "── $f"; crawlforge report "$f" --lang es | head -12; done
 ```
 
-### Un conjunto concreto de URLs
+### A specific set of URLs
 
 ```bash
 printf '%s\n' https://cliente.com/landing-a https://cliente.com/landing-b > urls.txt
@@ -391,51 +397,52 @@ crawlforge list urls.txt --lang es
 
 ---
 
-## 4. Lo que hoy **no** hace
+## 4. What it does **not** do today
 
-Dicho por delante, para que no pierdas tiempo buscándolo:
+Said upfront, so you do not waste time looking for it:
 
-- **No renderiza JavaScript.** Un sitio cuyo contenido se monta en el navegador se verá vacío.
-  Está previsto.
-- **No comprueba las URLs externas rotas.** Los enlaces salientes se registran, pero no se piden,
-  así que `HTTP-404-EXTERNAL` no dispara en un rastreo normal.
-- **No hay interfaz gráfica** todavía.
-- **No hay programación de rastreos** ni panel de cartera. Fases 6 y 7.
-- **`HTTP-TEMP-REDIRECT`** no existe todavía: necesita un histórico de rastreos que aún no existe.
+- **It does not render JavaScript.** A site whose content is assembled in the browser will look
+  empty. It is planned.
+- **It does not follow external sites.** Outbound links are checked for status —that is what makes
+  `HTTP-404-EXTERNAL` fire— but nothing of another domain is parsed or crawled. Following one whole
+  is `--follow-external`, and it is off by default for good reason.
+- **There is no graphical interface** yet.
+- **There is no crawl scheduling** and no portfolio panel. Phases 6 and 7.
+- **`HTTP-TEMP-REDIRECT`** does not exist yet: it needs a crawl history that does not exist yet.
 
-Del catálogo gratuito están implementadas 59 de 60 reglas.
+Of the free catalog, 59 of 60 rules are implemented.
 
 ---
 
-## 5. Cuando algo va mal
+## 5. When something goes wrong
 
-| Síntoma | Qué pasa |
+| Symptom | What is happening |
 |---|---|
-| El rastreo acaba con muchas menos URLs de las que esperas | El nivel gratuito corta a 1.000. El informe lo dice explícitamente. |
-| Un `report` menciona hallazgos «no evaluados» | El rastreo se truncó y las reglas que necesitan el grafo completo se han silenciado a propósito. |
-| El sitio devuelve 429 o 503 | Baja `--concurrency`. La herramienta respeta el `Crawl-delay` del `robots.txt`, pero un WAF puede ser más estricto que el robots. |
-| «no such file» al hacer `diff` | Falta el `.prev.sqlite`: solo aparece al **repetir** un rastreo sobre el mismo fichero de salida. |
+| The crawl ends with far fewer URLs than you expect | Something cut it: `--max-urls`, `--max-depth`, `--max-duration`, or the free tier's 1,000-URL cap if `CRAWLFORGE_TIER=free` is set. The report says the crawl was truncated and by which limit. |
+| A `report` mentions findings "not evaluated" | The crawl was truncated and the rules that need the full graph were silenced on purpose. |
+| The site returns 429 or 503 | Lower `--concurrency`. The tool respects the `Crawl-delay` in `robots.txt`, but a WAF can be stricter than robots. |
+| "no such file" when running `diff` | The `.prev.sqlite` is missing: it only appears when you **repeat** a crawl onto the same output file. |
 
-| El programa parece colgado tras rastrear | Está en la pasada final: enlaces entrantes y reglas de conjunto. Dice por qué regla va (`final pass · rule 7/29 · …`). En sitios grandes tarda minutos. |
-| Un rastreo antiguo no se puede reanudar | Solo se rechaza si el fichero es **más nuevo** que el programa, o si le falta cruzar una migración que cambia lo que el motor escribe. Se sigue abriendo con `report`, `export` y `diff`. |
-| Aparecen `.sqlite-wal` y `.sqlite-shm` al lado | El rastreo no cerró limpiamente. **No copies solo el `.sqlite`**: te faltarían datos. Vuelve a abrirlo con `crawlforge report` para que los consolide. |
+| The program seems hung after crawling | It is in the final pass: inlinks and set-wide rules. It says which rule it is on (`final pass · rule 7/29 · …`). On large sites this takes minutes. |
+| An old crawl cannot be resumed | It is only refused if the file is **newer** than the program, or if it still has to cross a migration that changes what the engine writes. It still opens with `report`, `export` and `diff`. |
+| `.sqlite-wal` and `.sqlite-shm` appear next to it | The crawl did not close cleanly. **Do not copy just the `.sqlite`**: you would be missing data. Open it again with `crawlforge report` so it consolidates them. |
 
-Los errores dicen qué fichero falta y qué comando lo genera. Si alguno no lo dice, es un fallo del
-producto y merece anotarse.
+Errors say which file is missing and which command generates it. If one does not, that is a
+product bug and worth writing down.
 
 ---
 
-## 6. Referencia rápida
+## 6. Quick reference
 
 ```bash
-crawlforge crawl  <URL>       # rastrear por HTTP
-crawlforge audit  <DIR> --base <URL>   # auditar una carpeta compilada
-crawlforge list   <FICHERO>   # una lista exacta de URLs
-crawlforge resume <FICHERO>   # continuar un rastreo cortado
-crawlforge report <FICHERO>   # resumen, o --format md|html
-crawlforge export <FICHERO> --format xlsx --out a.xlsx
-crawlforge diff   <ANTES> <DESPUES> [--fail-on high]
+crawlforge crawl  <URL>       # crawl over HTTP
+crawlforge audit  <DIR> --base <URL>   # audit a built folder
+crawlforge list   <FILE>      # an exact list of URLs
+crawlforge resume <FILE>      # continue an interrupted crawl
+crawlforge report <FILE>      # summary, or --format md|html
+crawlforge export <FILE> --format xlsx --out a.xlsx
+crawlforge diff   <BEFORE> <AFTER> [--fail-on high]
 crawlforge rules  [--category X] [--detail]
 ```
 
-Cualquiera de ellos con `--help` da la lista completa de opciones.
+Any of them with `--help` gives the full list of options.

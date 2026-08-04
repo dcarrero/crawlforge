@@ -1,29 +1,65 @@
-# 02 — Modelo de datos
+# 02 — Data model
 
-## 1. Principios
+> Versión en español: [`es/02-MODELO-DATOS.md`](es/02-MODELO-DATOS.md)
 
-1. **Un rastreo = un fichero SQLite.** Portable, comprimible, enviable a un cliente.
-2. El core escribe; la UI y la CLI leen. Ver `01-ARQUITECTURA.md §2`.
-3. Las URLs se almacenan una sola vez en `urls` y se referencian por `INTEGER` en todas partes.
-   Con 500k URLs de 80 caracteres, duplicarlas en `links` costaría gigabytes.
-4. Migraciones numeradas y hacia adelante. Un fichero de hace un año debe seguir abriéndose.
+## 1. Principles
 
-## 2. Configuración de la conexión
+1. **One crawl = one SQLite file.** Portable, compressible, sendable to a client.
+2. The core writes; the UI and the CLI read. See `01-ARQUITECTURA.md §2`.
+3. URLs are stored once in `urls` and referenced by `INTEGER` everywhere else. With 500k URLs of
+   80 characters, duplicating them in `links` would cost gigabytes.
+4. Numbered, forward-only migrations. A year-old file must still open.
+
+## 2. Connection configuration
+
+There are **two** sets, and the difference between them is deliberate. Both live in `store.rs`
+(`WRITER_PRAGMAS` and `READER_PRAGMAS`) so that Swift and C# do not have to work them out and end
+up diverging per platform.
+
+The writer:
 
 ```sql
 PRAGMA journal_mode = WAL;
-PRAGMA synchronous  = NORMAL;   -- suficiente: un rastreo se puede repetir
+PRAGMA busy_timeout = 5000;
+PRAGMA synchronous  = NORMAL;   -- enough: a crawl can be repeated
 PRAGMA foreign_keys = ON;
 PRAGMA temp_store   = MEMORY;
 PRAGMA cache_size   = -64000;   -- 64 MB
+PRAGMA mmap_size    = 0;        -- see below
+```
+
+The interface's read-only connection:
+
+```sql
+PRAGMA query_only   = 1;
+PRAGMA busy_timeout = 5000;
+PRAGMA temp_store   = MEMORY;
+PRAGMA cache_size   = -64000;
 PRAGMA mmap_size    = 268435456;
 ```
 
-Al finalizar el rastreo: `PRAGMA optimize;` y `VACUUM;` (puede reducir el fichero un 30-40%).
+**Memory mapping pays off for the reader and not for the writer.** The interface pages and sorts
+the same table constantly and does nothing but read; the engine writes in bulk from a single
+thread, where the mapping buys nothing and costs resident memory — the metric this product is
+argued on. This document used to prescribe a single set with the 256 MB mapping for everything,
+and following it would put mmap on the writer, which is exactly what the code avoids.
 
-## 3. Esquema
+`busy_timeout` is not optional either: a reader on the same file is the architecture (`CONVENTIONS.md
+§2.2`), not a corner case, and without the timeout any brush between locks was an immediate
+`database is locked` even when the reader was about to let go.
 
-### 3.1 Metadatos
+When the crawl finishes: `PRAGMA optimize;` and the WAL checkpoint that takes the file out of WAL
+mode, so that «one crawl = one portable file» survives copying the `.sqlite` on its own.
+
+**`VACUUM` was measured and rejected**, and this document used to recommend it. On a crawl of
+50,000 URLs and 6.15 million links it shrank the file by **2%** (380 MB → 372 MB) and pushed peak
+memory from 168 MB to 246 MB. The 30-40% figure shows up when there is fragmentation from deletes
+and updates; a crawl file is written once and incrementally, so there is almost none. Paying 78 MB
+of peak for 2% of disk is a bad trade. Whoever wants it has it in `store::compact`.
+
+## 3. Schema
+
+### 3.1 Metadata
 
 ```sql
 CREATE TABLE schema_version (
@@ -32,25 +68,32 @@ CREATE TABLE schema_version (
 );
 
 CREATE TABLE crawl_meta (
-    id              TEXT PRIMARY KEY,        -- uuid v7 (ordenable por tiempo)
+    id              TEXT PRIMARY KEY,        -- uuid v7 (time-sortable)
     project_id      TEXT NOT NULL,
     project_name    TEXT NOT NULL,
     base_url        TEXT NOT NULL,
     mode            TEXT NOT NULL,           -- 'http' | 'filesystem' | 'list'
-    source_path     TEXT,                    -- solo modo filesystem
+    source_path     TEXT,                    -- filesystem mode only
     started_at      TEXT NOT NULL,
     finished_at     TEXT,
     status          TEXT NOT NULL,           -- 'running'|'paused'|'done'|'cancelled'|'failed'
-    config_json     TEXT NOT NULL,           -- CrawlJob serializado íntegro
+    config_json     TEXT NOT NULL,           -- the full serialized CrawlJob
     core_version    TEXT NOT NULL,
     rules_version   TEXT NOT NULL,
     adapter         TEXT,                    -- 'wordpress' | 'astro' | NULL
-    tier_at_runtime TEXT NOT NULL            -- reglas aplicadas según nivel
+    tier_at_runtime TEXT NOT NULL,           -- rules applied according to tier
+    truncated       INTEGER NOT NULL DEFAULT 0,  -- migration 002
+    truncated_reason TEXT                    -- 'max_urls'|'max_depth'|'max_duration'|'list_mode'
 );
 ```
 
-`config_json` y `rules_version` son imprescindibles para que un diff entre dos rastreos sepa si la
-diferencia viene del sitio o de un cambio de configuración/reglas.
+`config_json` and `rules_version` are essential so that a diff between two crawls can tell whether
+the difference comes from the site or from a configuration/rules change.
+
+`truncated` says **the crawled set is not the whole site**, and it is load-bearing: the engine uses
+it to silence the rules in `crawlforge_rules::REQUIERE_GRAFO_COMPLETO`, and `diff` uses it to refuse
+to claim that a URL disappeared. `list_mode` is set on every crawl in list mode — not because
+anything was cut short, but because a list only ever sees the URLs it was given.
 
 ### 3.2 URLs
 
@@ -58,12 +101,12 @@ diferencia viene del sitio o de un cambio de configuración/reglas.
 CREATE TABLE urls (
     id                  INTEGER PRIMARY KEY,
     url                 TEXT    NOT NULL UNIQUE,
-    url_hash            INTEGER NOT NULL,      -- xxh3 de la URL normalizada
+    url_hash            INTEGER NOT NULL,      -- xxh3 of the normalized URL
     scheme              TEXT    NOT NULL,
     host                TEXT    NOT NULL,
     path                TEXT    NOT NULL,
     query               TEXT,
-    depth               INTEGER,               -- clics desde la raíz; NULL si no alcanzada
+    depth               INTEGER,               -- clicks from the root; NULL if not reached
     discovered_from     INTEGER REFERENCES urls(id),
     is_internal         INTEGER NOT NULL,      -- 0/1
     in_sitemap          INTEGER NOT NULL DEFAULT 0,
@@ -88,25 +131,25 @@ CREATE INDEX idx_urls_depth       ON urls(depth);
 CREATE INDEX idx_urls_internal    ON urls(is_internal, crawl_state);
 ```
 
-**Sobre `url_hash`:** la comparación de URLs es la operación más frecuente del rastreo (¿ya la
-visitamos?). Un `INTEGER` indexado es mucho más rápido que `TEXT UNIQUE`. Mantén ambos: el hash
-para el hot path, el texto único como garantía de integridad.
+**About `url_hash`:** comparing URLs is the most frequent operation of the crawl (have we visited
+it already?). An indexed `INTEGER` is much faster than `TEXT UNIQUE`. Keep both: the hash for the
+hot path, the unique text as an integrity guarantee.
 
-### 3.3 Páginas HTML
+### 3.3 HTML pages
 
 ```sql
 CREATE TABLE pages (
     url_id              INTEGER PRIMARY KEY REFERENCES urls(id),
     title               TEXT,
     title_len           INTEGER,
-    title_px            INTEGER,      -- ancho estimado en píxeles (Google corta por píxeles)
+    title_px            INTEGER,      -- estimated width in pixels (Google truncates by pixels)
     meta_description    TEXT,
     meta_desc_len       INTEGER,
     meta_desc_px        INTEGER,
-    h1                  TEXT,         -- primer h1
+    h1                  TEXT,         -- first h1
     h1_count            INTEGER,
     h2_count            INTEGER,
-    heading_json        TEXT,         -- jerarquía completa, para detectar saltos de nivel
+    heading_json        TEXT,         -- full hierarchy, to detect level skips
     canonical           TEXT,
     canonical_is_self   INTEGER,
     meta_robots         TEXT,
@@ -116,16 +159,16 @@ CREATE TABLE pages (
     lang                TEXT,
     hreflang_json       TEXT,
     word_count          INTEGER,
-    text_hash           INTEGER,      -- simhash del texto, para casi-duplicados
-    html_hash           INTEGER,      -- xxh3 exacto
-    content_ratio       REAL,         -- texto / html
+    text_hash           INTEGER,      -- simhash of the text, for near-duplicates
+    html_hash           INTEGER,      -- exact xxh3
+    content_ratio       REAL,         -- text / html
     viewport            TEXT,
     og_json             TEXT,
     twitter_json        TEXT,
-    schema_types        TEXT,         -- CSV de @type detectados en JSON-LD
+    schema_types        TEXT,         -- CSV of @type values detected in JSON-LD
     amp_url             TEXT,
     internal_links_out  INTEGER,
-    internal_links_in   INTEGER,      -- se rellena en la pasada final
+    internal_links_in   INTEGER,      -- filled in during the final pass
     crawl_depth_source  TEXT          -- 'link'|'sitemap'|'list'|'adapter'
 );
 
@@ -135,10 +178,11 @@ CREATE INDEX idx_pages_text_hash  ON pages(text_hash);
 CREATE INDEX idx_pages_links_in   ON pages(internal_links_in);
 ```
 
-**`title_px` y `meta_desc_px`:** Google trunca por ancho en píxeles, no por número de caracteres.
-Calcularlo con las métricas de Arial 20px/14px da un aviso mucho más útil que "más de 60 caracteres".
+**`title_px` and `meta_desc_px`:** Google truncates by pixel width, not by character count.
+Computing it with the Arial 20px/14px metrics gives a much more useful warning than "over 60
+characters".
 
-### 3.4 Enlaces
+### 3.4 Links
 
 ```sql
 CREATE TABLE links (
@@ -150,18 +194,18 @@ CREATE TABLE links (
     is_nofollow  INTEGER NOT NULL DEFAULT 0,
     element      TEXT NOT NULL,     -- 'a'|'link'|'img'|'script'|'iframe'|'form'
     region       TEXT,              -- 'nav'|'main'|'footer'|'aside'|'unknown'
-    position     INTEGER            -- orden de aparición en el documento
+    position     INTEGER            -- order of appearance in the document
 );
 
 CREATE INDEX idx_links_from ON links(from_url_id);
 CREATE INDEX idx_links_to   ON links(to_url_id);
 ```
 
-`region` se deduce del ancestro semántico más cercano (`<nav>`, `<main>`, `<footer>`). Permite
-distinguir enlaces de plantilla de enlaces de contenido, que es la diferencia que importa en
-enlazado interno.
+`region` is inferred from the nearest semantic ancestor (`<nav>`, `<main>`, `<footer>`). It lets
+you tell template links from content links, which is the difference that matters in internal
+linking.
 
-### 3.5 Recursos e imágenes
+### 3.5 Resources and images
 
 ```sql
 CREATE TABLE resources (
@@ -191,25 +235,25 @@ CREATE INDEX idx_images_page ON images(page_url_id);
 CREATE INDEX idx_images_alt  ON images(alt_present);
 ```
 
-`resources` es **una fila por URL de recurso**, no por par (página, recurso) — fíjate en que no
-tiene `page_url_id`, y es a propósito: en CSS y JS la arista página↔recurso aporta mucho menos
-que en imágenes (un `bundle.js` de 900 KB se carga en toda la plantilla, no en una entrada
-concreta), así que el fichero ya identifica el problema. Para las imágenes esa arista sí existe
-y vive en `images`. El `kind` se deduce del `content_type` de la respuesta, con la extensión de
-la URL como respaldo cuando el servidor no manda uno útil (`application/octet-stream` es
-frecuente en fuentes). La unicidad por `url_id` la garantiza el índice de la migración 008.
+`resources` is **one row per resource URL**, not per (page, resource) pair — note that it has no
+`page_url_id`, and that is on purpose: for CSS and JS the page↔resource edge carries much less
+information than for images (a 900 KB `bundle.js` is loaded by the whole template, not by one
+specific post), so the file already identifies the problem. For images that edge does exist and
+lives in `images`. The `kind` is inferred from the response's `content_type`, with the URL's
+extension as a fallback when the server does not send a useful one (`application/octet-stream` is
+common for fonts). Uniqueness per `url_id` is guaranteed by the index in migration 008.
 
-### 3.6 Hallazgos — la tabla que es el producto
+### 3.6 Findings — the table that is the product
 
 ```sql
 CREATE TABLE issues (
     id          INTEGER PRIMARY KEY,
-    url_id      INTEGER REFERENCES urls(id),   -- NULL = hallazgo de sitio
+    url_id      INTEGER REFERENCES urls(id),   -- NULL = site-level finding
     rule_id     TEXT    NOT NULL,              -- 'SEO-TITLE-MISSING'
     severity    TEXT    NOT NULL,              -- 'critical'|'high'|'medium'|'low'|'info'
     category    TEXT    NOT NULL,
-    detail_json TEXT,                          -- contexto específico de la regla
-    group_key   TEXT                           -- agrupa duplicados: hash del título repetido, etc.
+    detail_json TEXT,                          -- rule-specific context
+    group_key   TEXT                           -- groups duplicates: hash of the repeated title, etc.
 );
 
 CREATE INDEX idx_issues_rule     ON issues(rule_id);
@@ -218,33 +262,33 @@ CREATE INDEX idx_issues_severity ON issues(severity);
 CREATE INDEX idx_issues_group    ON issues(group_key) WHERE group_key IS NOT NULL;
 ```
 
-### 3.7 Búsqueda de texto completo
+### 3.7 Full-text search
 
 ```sql
 CREATE VIRTUAL TABLE pages_fts USING fts5(
     url, title, meta_description, body_text,
-    content = '',                -- contentless: no duplicamos el texto
+    content = '',                -- contentless: we do not duplicate the text
     tokenize = 'unicode61 remove_diacritics 2'
 );
 ```
 
-`remove_diacritics 2` es obligatorio para español: permite que "diseño" encuentre "diseno" y
-viceversa. **Solo se puebla en nivel Pro** (el texto de cuerpo multiplica el tamaño del fichero).
+`remove_diacritics 2` is mandatory for Spanish: it lets "diseño" match "diseno" and the other way
+around. **Only populated at the Pro tier** (body text multiplies the file size).
 
-### 3.8 Extracción personalizada (Pro)
+### 3.8 Custom extraction (Pro)
 
 ```sql
 CREATE TABLE extractions (
     id          INTEGER PRIMARY KEY,
     url_id      INTEGER NOT NULL REFERENCES urls(id),
-    name        TEXT    NOT NULL,   -- nombre del extractor definido por el usuario
+    name        TEXT    NOT NULL,   -- name of the user-defined extractor
     value       TEXT,
     occurrence  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_extractions ON extractions(name, url_id);
 ```
 
-### 3.9 Datos de adaptador
+### 3.9 Adapter data
 
 ```sql
 CREATE TABLE adapter_entities (
@@ -252,30 +296,30 @@ CREATE TABLE adapter_entities (
     adapter      TEXT NOT NULL,       -- 'wordpress'|'astro'
     entity_type  TEXT NOT NULL,       -- 'post'|'page'|'term'|'plugin'|'route'|'collection'
     external_id  TEXT,
-    url_id       INTEGER REFERENCES urls(id),   -- NULL si no se rastreó → huérfana
+    url_id       INTEGER REFERENCES urls(id),   -- NULL if it was not crawled → orphan
     data_json    TEXT NOT NULL
 );
 CREATE INDEX idx_adapter_entities ON adapter_entities(adapter, entity_type);
 ```
 
-Que `url_id` sea `NULL` es precisamente el hallazgo valioso: existe en WordPress pero no se alcanzó
-rastreando → **contenido huérfano**.
+`url_id` being `NULL` is precisely the valuable finding: it exists in WordPress but was never
+reached by crawling → **orphan content**.
 
-### 3.10 `robots.txt` y sitemaps (migración 004)
+### 3.10 `robots.txt` and sitemaps (migration 004)
 
-Lo que el rastreo consultó, no lo que descubrió. Se añadió el 2026-07-30: el motor descargaba los
-dos ficheros, los usaba y los tiraba, así que al terminar no quedaba constancia de si el
-`robots.txt` existía ni de si un sitemap tenía el XML roto. Eso bloqueaba tres reglas del catálogo,
-y una de ellas —`INDEX-ROBOTS-TXT-BLOCKS-ALL`— avisa del accidente más caro y más silencioso que
-hay: el `robots.txt` del entorno de pruebas, con `Disallow: /`, subido a producción.
+What the crawl consulted, not what it discovered. Added on 2026-07-30: the engine downloaded both
+files, used them and threw them away, so when the crawl ended there was no record of whether the
+`robots.txt` existed or whether a sitemap had broken XML. That blocked three catalog rules, and one
+of them —`INDEX-ROBOTS-TXT-BLOCKS-ALL`— warns about the most expensive and most silent accident
+there is: the staging environment's `robots.txt`, with `Disallow: /`, pushed to production.
 
 ```sql
 CREATE TABLE robots_txt (
     id            INTEGER PRIMARY KEY,
     host          TEXT    NOT NULL UNIQUE,
-    status_code   INTEGER,          -- NULL: no se llegó a pedir o no hubo respuesta
-    content       TEXT,             -- el fichero tal cual, para explicar el hallazgo y para el diff
-    blocks_all    INTEGER NOT NULL DEFAULT 0,   -- evaluado con el parser, no buscando texto
+    status_code   INTEGER,          -- NULL: never requested or no response
+    content       TEXT,             -- the file as-is, to explain the finding and for the diff
+    blocks_all    INTEGER NOT NULL DEFAULT 0,   -- evaluated with the parser, not by text search
     sitemap_count INTEGER NOT NULL DEFAULT 0,
     fetched_at    TEXT
 );
@@ -295,21 +339,21 @@ CREATE TABLE sitemaps (
 CREATE INDEX idx_sitemaps_valid ON sitemaps(is_valid);
 ```
 
-Dos detalles que no son evidentes:
+Two details that are not obvious:
 
-- **`blocks_all` se evalúa, no se busca.** Un `Disallow: /` puede estar bajo otro `User-agent` y no
-  aplicarnos; darlo por bueno sería el falso positivo más caro del catálogo, decirle a alguien que
-  su sitio está bloqueado cuando no lo está.
-- **`discovered_from` importa para decidir si algo es un error.** Que `/sitemap_index.xml` dé 404 es
-  lo normal: se prueba a ciegas. Que falle uno anunciado en `robots.txt` no lo es, porque alguien lo
-  declaró.
+- **`blocks_all` is evaluated, not searched for.** A `Disallow: /` may sit under another
+  `User-agent` and not apply to us; taking it at face value would be the most expensive false
+  positive in the catalog, telling someone their site is blocked when it is not.
+- **`discovered_from` matters when deciding whether something is an error.** `/sitemap_index.xml`
+  returning 404 is normal: it is probed blindly. One announced in `robots.txt` failing is not,
+  because someone declared it.
 
-Sirven además para comparar: con estas filas, un diff entre dos rastreos puede decir «el robots.txt
-cambió» y «el sitemap declara 4.000 URLs menos que la semana pasada».
+They also serve comparison: with these rows, a diff between two crawls can say "the robots.txt
+changed" and "the sitemap declares 4,000 fewer URLs than last week".
 
-## 4. Vistas para la UI
+## 4. Views for the UI
 
-Define las agregaciones como vistas para que Swift y C# no dupliquen SQL.
+Define the aggregations as views so Swift and C# do not duplicate SQL.
 
 ```sql
 CREATE VIEW v_issue_summary AS
@@ -329,40 +373,41 @@ JOIN urls uf ON uf.id = l.from_url_id
 JOIN urls ut ON ut.id = l.to_url_id
 WHERE ut.status_code >= 400;
 
--- Definición vigente: migraciones 003 y 005. La de aquí es la original, y le faltaban dos
--- condiciones; se conserva para que se lea qué costó cada una.
+-- Current definition: migrations 003 and 005. The one here is the original, and it was missing
+-- two conditions; it is kept so you can read what each one cost.
 --
---   003 — la portada cumple las tres condiciones siempre (está en el sitemap y nadie la enlaza,
---         porque es el punto de entrada), así que salía como huérfana en todos los rastreos.
---   005 — **el `JOIN pages`**. Sin él, «huérfana» no exigía ser una página: las imágenes del
---         sitemap de imágenes de WordPress son internas, están declaradas, y se usan con
---         `<img src>`, que va a `images` y no a `links`. En un medio de comunicación fueron 1.867
---         de 1.912 hallazgos. Exigir la fila de `pages` quita también las URLs que el sitemap
---         declara y el rastreo no llegó a visitar.
+--   003 — the front page always meets all three conditions (it is in the sitemap and nobody
+--         links to it, because it is the entry point), so it showed up as an orphan in every
+--         crawl.
+--   005 — **the `JOIN pages`**. Without it, "orphan" did not require being a page: the images in
+--         WordPress's image sitemap are internal, are declared, and are used with `<img src>`,
+--         which goes to `images` and not to `links`. On a news site that was 1,867 out of 1,912
+--         findings. Requiring the `pages` row also removes the URLs the sitemap declares but the
+--         crawl never got to visit.
 CREATE VIEW v_orphans AS
 SELECT u.id, u.url FROM urls u
 LEFT JOIN links l ON l.to_url_id = u.id
 WHERE u.is_internal = 1 AND u.in_sitemap = 1 AND l.id IS NULL;
 ```
 
-## 5. Diffs entre rastreos
+## 5. Diffs between crawls
 
-No hay formato propietario: se hace con `ATTACH`.
+No proprietary format: it is done with `ATTACH`.
 
 ```sql
 ATTACH DATABASE 'crawl_2026-07-01.sqlite' AS a;
 ATTACH DATABASE 'crawl_2026-07-08.sqlite' AS b;
 
--- URLs que aparecen nuevas
+-- URLs that are new
 SELECT b.url FROM b.urls b LEFT JOIN a.urls a ON a.url_hash = b.url_hash
 WHERE a.id IS NULL AND b.is_internal = 1;
 
--- Cambios de código de estado
+-- Status code changes
 SELECT b.url, a.status_code AS antes, b.status_code AS ahora
 FROM b.urls b JOIN a.urls a ON a.url_hash = b.url_hash
 WHERE a.status_code IS NOT b.status_code;
 
--- Páginas que perdieron indexabilidad
+-- Pages that lost indexability
 SELECT u.url, pa.indexability_reason AS antes, pb.indexability_reason AS ahora
 FROM b.pages pb
 JOIN b.urls u   ON u.id = pb.url_id
@@ -371,7 +416,7 @@ JOIN a.pages pa ON pa.url_id = ua.id
 WHERE pa.is_indexable = 1 AND pb.is_indexable = 0;
 ```
 
-`crawl_diff()` genera un tercer fichero SQLite con una única tabla `changes`:
+`crawl_diff()` generates a third SQLite file with a single `changes` table:
 
 ```sql
 CREATE TABLE changes (
@@ -388,13 +433,14 @@ CREATE TABLE changes (
 );
 ```
 
-**Requisito:** antes de diffear, comparar `config_json` y `rules_version` de ambos `crawl_meta`.
-Si difieren en algo que afecte al alcance, avisar en la UI — si no, se atribuirán al sitio cambios
-que en realidad son de configuración.
+**Requirement:** before diffing, compare `config_json` and `rules_version` of both `crawl_meta`
+rows. If they differ in anything that affects scope, warn in the UI — otherwise changes that are
+really configuration changes will be attributed to the site.
 
-## 6. Hub remoto (Pro, previsto)
+## 6. Remote hub (Pro, planned)
 
-Postgres o MariaDB. **Solo agregados.** Nunca el HTML crudo, ni cada cabecera, ni la tabla `links`.
+Postgres or MariaDB. **Aggregates only.** Never the raw HTML, nor every header, nor the `links`
+table.
 
 ```sql
 CREATE TABLE projects (
@@ -430,19 +476,19 @@ CREATE TABLE run_issues (
     rule_id     TEXT NOT NULL,
     severity    TEXT NOT NULL,
     count       INTEGER NOT NULL,
-    sample_urls JSONB,           -- máximo 20 URLs de muestra
+    sample_urls JSONB,           -- at most 20 sample URLs
     PRIMARY KEY (run_id, rule_id)
 );
 ```
 
-**Ventaja futura, que es la razón real de construirlo:** este esquema *es* el SaaS. El día que haya
-versión web, ya existen los datos, el esquema y el CLI escribiendo en él desde CI. La app de
-escritorio pasa a ser un cliente más.
+**Future advantage, which is the real reason to build it:** this schema *is* the SaaS. The day a
+web version exists, the data, the schema and the CLI writing into it from CI already exist. The
+desktop app becomes one more client.
 
-## 7. Analítica sin servidor: Parquet + DuckDB
+## 7. Serverless analytics: Parquet + DuckDB
 
-Alternativa al hub para quien no quiera montar una base de datos. Cada rastreo exporta a Parquet
-particionado, y DuckDB consulta sobre todos ellos sin ningún servidor:
+An alternative to the hub for whoever does not want to run a database. Each crawl exports to
+partitioned Parquet, and DuckDB queries across all of them with no server at all:
 
 ```
 crawls/
@@ -457,11 +503,11 @@ FROM read_parquet('crawls/**/*.parquet', hive_partitioning = true)
 GROUP BY 1, 2 ORDER BY 2 DESC;
 ```
 
-Cien sitios por 52 semanas, consultados desde un portátil, cero infraestructura. Es la opción
-recomendada por defecto para el nivel Pro; el hub Postgres queda para equipos y para el SaaS.
+A hundred sites over 52 weeks, queried from a laptop, zero infrastructure. It is the recommended
+default for the Pro tier; the Postgres hub is left for teams and for the SaaS.
 
-## 8. Opción intermedia: libSQL / Turso
+## 8. Middle option: libSQL / Turso
 
-Si en algún momento se quiere "SQLite pero remoto y sincronizado" sin cambiar de API: `libsql`
-es compatible a nivel de driver con réplicas embebidas. Evaluar **solo si** el hub
-Postgres resulta demasiado pesado para el caso de uso real. No se implementa antes.
+If at some point "SQLite but remote and synchronized" is wanted without changing APIs: `libsql` is
+driver-compatible with embedded replicas. Evaluate it **only if** the Postgres hub turns out to be
+too heavy for the real use case. It is not built before that.
