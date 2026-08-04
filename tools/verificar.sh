@@ -42,6 +42,11 @@ paso "Banco de fixtures"
 # el test que dice si el catálogo de reglas sigue detectando lo que dice detectar.
 cargo test -p crawlforge-core --test fixtures_de_reglas -- --nocapture 2>&1 | tail -3
 
+paso "Web sincronizada con el catálogo"
+# La referencia de reglas de la web se genera del catálogo (`rules --format json`). Si una
+# regla entra o cambia y nadie regenera, esto es lo que lo dice antes que un lector.
+tools/comprobar-web.sh
+
 if [ "$RAPIDO" = "0" ]; then
     paso "Regresión de rendimiento (release)"
     # Solo afirma sobre los números compilado con optimizaciones; en debug el motor va un orden de

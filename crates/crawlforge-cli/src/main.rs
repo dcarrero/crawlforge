@@ -343,6 +343,10 @@ enum Command {
         /// Full description of every rule instead of a table.
         #[arg(long)]
         detail: bool,
+        /// `table` to read it here, or `json` for CI and integrations: the whole record of
+        /// every rule, with names and descriptions in both languages.
+        #[arg(short, long, default_value = "table")]
+        format: String,
     },
 }
 
@@ -628,11 +632,17 @@ async fn main() -> Result<()> {
             crawlforge_cli::portfolio::run(&source, &paths, &format, out.as_deref())
                 .context("the portfolio panel could not be generated")
         }
-        Command::Rules { id, category, detail, .. } => match id {
-            // El bucle real es «el informe enseña un ID → quiero saber qué significa».
-            // Con un ID delante, los filtros de catálogo no pintan nada: la ficha ya es una.
-            Some(id) => rules::print_rule(lang, &id),
-            None => rules::print_catalog(lang, category.as_deref(), detail),
+        Command::Rules { id, category, detail, format, .. } => match format.as_str() {
+            // JSON carries both languages at once — the consumer picks. `--lang` governs the
+            // human formats only, which is why it is not passed down here.
+            "json" => rules::print_json(id.as_deref(), category.as_deref()),
+            "table" => match id {
+                // El bucle real es «el informe enseña un ID → quiero saber qué significa».
+                // Con un ID delante, los filtros de catálogo no pintan nada: la ficha ya es una.
+                Some(id) => rules::print_rule(lang, &id),
+                None => rules::print_catalog(lang, category.as_deref(), detail),
+            },
+            other => bail!("unknown format {other:?}: use table or json"),
         },
     }
 }

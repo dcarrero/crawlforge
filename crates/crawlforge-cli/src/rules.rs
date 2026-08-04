@@ -58,6 +58,72 @@ pub fn print_rule(lang: Lang, id: &str) -> Result<()> {
     }
 }
 
+/// The catalog as JSON, for CI and for anything that consumes the rules as data — the
+/// website's rule reference is generated from this output instead of keeping a copy that
+/// would drift from the product.
+///
+/// Both languages are always included and `--lang` is ignored on purpose: a pipeline that
+/// greps for a rule ID does not care, and a consumer that shows text picks its language from
+/// the payload. The envelope carries `rules_version` and `count` so a consumer can assert
+/// that what it generated matches the catalog it generated it from.
+///
+/// The order is the reading order of the human formats — severity, then ID — so the same
+/// command with and without `--format json` lists the rules in the same sequence, and the
+/// generated output is stable across runs.
+pub fn print_json(id: Option<&str>, category: Option<&str>) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(&catalog_json(id, category)?)?);
+    Ok(())
+}
+
+/// Builds the JSON value so tests can assert on the structure without capturing stdout.
+fn catalog_json(id: Option<&str>, category: Option<&str>) -> Result<serde_json::Value> {
+    if let Some(wanted) = id {
+        let wanted = wanted.trim();
+        return match catalog().into_iter().find(|m| m.id.eq_ignore_ascii_case(wanted)) {
+            Some(meta) => Ok(rule_json(meta)),
+            // In English on purpose: an argument error, same ground as clap's parse errors.
+            None => bail!("no rule has the ID {wanted:?}. List the catalog with: crawlforge rules"),
+        };
+    }
+
+    let mut reglas = catalog();
+    if let Some(filtro) = category {
+        let filtro = filtro.to_ascii_lowercase();
+        reglas.retain(|m| m.category.as_str() == filtro);
+        if reglas.is_empty() {
+            bail!(msg::error_unknown_category(
+                Lang::En,
+                &filtro,
+                category_names().join(", ")
+            ));
+        }
+    }
+    reglas.sort_by_key(|m| (orden_severidad(m.severity), m.id));
+
+    Ok(serde_json::json!({
+        "rules_version": crawlforge_rules::RULES_VERSION,
+        "count": reglas.len(),
+        "rules": reglas.iter().map(|m| rule_json(m)).collect::<Vec<_>>(),
+    }))
+}
+
+fn rule_json(meta: &RuleMeta) -> serde_json::Value {
+    serde_json::json!({
+        "id": meta.id,
+        "severity": meta.severity,
+        "category": meta.category,
+        "scope": meta.scope,
+        "min_tier": meta.min_tier,
+        "name": { "en": meta.name_en, "es": meta.name_es },
+        "description": { "en": meta.desc_en, "es": meta.desc_es },
+        "references": meta.references.iter().map(|r| serde_json::json!({
+            "standard": r.standard,
+            "clause": r.clause,
+            "url": r.url,
+        })).collect::<Vec<_>>(),
+    })
+}
+
 /// Las categorías que existen de verdad, deducidas del catálogo y no de una lista aparte que
 /// se quedaría vieja al añadir una regla.
 fn category_names() -> Vec<&'static str> {
@@ -235,5 +301,54 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("CANON-CADENA"), "it names the culprit: {msg}");
         assert!(msg.contains("crawlforge rules"), "and states the next step: {msg}");
+    }
+
+    #[test]
+    fn the_json_catalog_carries_every_rule_in_both_languages() {
+        // The website's rule reference is generated from this output: a rule missing here is
+        // a rule missing from the published reference, and an empty text is a blank card.
+        let json = catalog_json(None, None).expect("the full catalog serializes");
+        assert_eq!(json["rules_version"], crawlforge_rules::RULES_VERSION);
+        let rules = json["rules"].as_array().expect("rules is an array");
+        assert_eq!(rules.len(), catalog().len(), "one JSON entry per catalog rule");
+        assert_eq!(json["count"], rules.len(), "the envelope count matches the array");
+        for rule in rules {
+            let id = rule["id"].as_str().expect("every rule has an ID");
+            for field in ["name", "description"] {
+                for lang in ["en", "es"] {
+                    let text = rule[field][lang].as_str().unwrap_or("");
+                    assert!(!text.trim().is_empty(), "{id} has no {field}.{lang}");
+                }
+            }
+            for field in ["severity", "category", "scope", "min_tier"] {
+                assert!(rule[field].is_string(), "{id} has no {field}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_json_of_one_rule_is_found_case_insensitively() {
+        // Same contract as the human card: the ID is typed from memory as often as copied.
+        let json = catalog_json(Some("canon-chain"), None).expect("the rule exists");
+        assert_eq!(json["id"], "CANON-CHAIN");
+        assert!(json["name"]["en"].is_string() && json["name"]["es"].is_string());
+    }
+
+    #[test]
+    fn the_json_errors_match_the_table_ones() {
+        // Unknown ID and unknown category fail the same way in both formats, so a pipeline
+        // switching to json does not lose the diagnosis.
+        let err = catalog_json(Some("CANON-CADENA"), None).expect_err("does not exist");
+        assert!(err.to_string().contains("crawlforge rules"), "{err}");
+        let err = catalog_json(None, Some("metas")).expect_err("metas does not exist");
+        assert!(err.to_string().contains("meta"), "it lists the real categories: {err}");
+    }
+
+    #[test]
+    fn the_json_category_filter_returns_only_that_category() {
+        let json = catalog_json(None, Some("canonical")).expect("canonical exists");
+        let rules = json["rules"].as_array().expect("rules is an array");
+        assert!(!rules.is_empty());
+        assert!(rules.iter().all(|r| r["category"] == "canonical"), "{json}");
     }
 }

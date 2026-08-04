@@ -1,6 +1,6 @@
 # CrawlForge Manual (CLI)
 
-> Versión en español: [`es/MANUAL.md`](es/MANUAL.md)
+> Versión en español: [leer el manual en español](es/MANUAL.md)
 
 > The tool is command-line only today. A graphical interface is planned and does not exist yet.
 >
@@ -203,7 +203,12 @@ crawlforge rules --lang es                    # all 59, as a table
 crawlforge rules INDEX-ORPHAN-PAGE            # one rule's card, by its ID
 crawlforge rules --lang es --category canonical
 crawlforge rules --lang es --detail           # with each rule's full explanation
+crawlforge rules --format json                # the whole catalog as data, both languages
 ```
+
+The JSON is for anything that consumes the catalog as data — a CI script checking that a
+rule ID still exists, or a page generated from the catalog instead of copying it. It always
+carries both languages, and its envelope states the catalog version and the rule count.
 
 ---
 
@@ -532,7 +537,7 @@ crawlforge report <FILE>      # summary, or --format md|html
 crawlforge export <FILE> --format xlsx --out a.xlsx
 crawlforge diff   <BEFORE> <AFTER> [--fail-on high]
 crawlforge portfolio <PATH>... [--format md|html --out f]   # panel across many crawls
-crawlforge rules  [--category X] [--detail]
+crawlforge rules  [--category X] [--detail] [--format json]
 ```
 
 Any of them with `--help` gives the full list of options.
