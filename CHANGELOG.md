@@ -19,6 +19,22 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.6.2] — 2026-08-04
+
+### Security
+
+- **A local audit is no longer reachable through a public name that answers privately.** A crawl
+  every one of whose targets is local may reach that network — deliberate, because whoever started
+  it is inside that network already. What that exemption must never cover is `10.0.0.5.nip.io`: a
+  name anyone can aim anywhere, pointed at an address the operator never wrote down. Everything
+  the exemption exists for — `localhost`, `nas.lan`, a literal `192.168.1.10`, a host named on the
+  command line — is a name that is not public, and still goes through.
+
+  Removing the exemption altogether was tried first and put back: in a local audit the operator is
+  already inside the network, so what it grants an attacker is far less than it appears, and losing
+  it would stop a local audit from checking links to another service of its own network. The narrow
+  shape is the one that had no legitimate use.
+
 ## [0.6.1] — 2026-08-04
 
 ### Fixed

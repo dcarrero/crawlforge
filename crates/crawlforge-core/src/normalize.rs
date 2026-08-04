@@ -560,7 +560,22 @@ impl NetworkScreen {
         if is_metadata_ip(ip) {
             return false;
         }
-        is_public_ip(ip) || self.local_audit || self.is_target(host)
+        if is_public_ip(ip) || self.is_target(host) {
+            return true;
+        }
+        // Rule 4, with the one shape it must not cover: **a public name that answers a private
+        // address**.
+        //
+        // A local audit reaches its own network, and that is deliberate — whoever launched it is
+        // inside that network already. What is never legitimate there is `10.0.0.5.nip.io`: a
+        // name anyone can point anywhere, aimed at an address the operator never wrote down.
+        // Everything the exemption actually exists for —`localhost`, `nas.lan`, a literal
+        // `192.168.1.10`, a host named on the command line— is a name that is not public, and
+        // goes through.
+        //
+        // It is the shape of a rebinding attack, and it costs nothing to refuse: no real local
+        // service is reached by a public name that resolves privately and was not named.
+        self.local_audit && !host_is_public(host)
     }
 }
 
@@ -1112,6 +1127,27 @@ mod tests {
         assert!(!mixed.is_local_audit(), "one public target takes the exemption away");
         assert!(!mixed.allows_host(&url("http://192.168.1.10/")));
         assert!(mixed.allows_host(&url("http://localhost:4321/dev")), "its own target, though");
+    }
+
+    /// Una auditoría local alcanza su red —es la excepción deliberada— pero **no** a través de un
+    /// nombre público que resuelva ahí dentro. Es la forma de un ataque de rebinding, y no hay
+    /// servicio local legítimo al que se llegue así.
+    #[test]
+    fn a_local_audit_is_not_reached_through_a_public_name_that_answers_privately() {
+        let local = NetworkScreen::for_seeds([&url("http://localhost:4321/")]);
+        let lan: IpAddr = "10.0.0.5".parse().expect("ip");
+
+        assert!(local.allows_address("nas.lan", lan), "un nombre local suyo, sí");
+        assert!(local.allows_address("10.0.0.5", lan), "un literal suyo, también");
+        assert!(local.allows_address("localhost", "127.0.0.1".parse().expect("ip")), "su objetivo");
+        assert!(
+            !local.allows_address("10-0-0-5.sslip.io", lan),
+            "un nombre público apuntado a su red, no: nadie llega así a un servicio de verdad"
+        );
+
+        // Y en un rastreo público sigue bloqueado, que ya lo estaba.
+        let publico = NetworkScreen::for_seeds([&url("https://cliente.es/")]);
+        assert!(!publico.allows_address("10-0-0-5.sslip.io", lan));
     }
 
     #[test]
