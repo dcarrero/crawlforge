@@ -56,7 +56,11 @@ fn body_limit_for(content_type: Option<&str>, page_limit: u64) -> u64 {
 /// quiere saber quién le está pidiendo páginas. **Si deja de responder, esta cadena pasa de
 /// identificación a ruido**, así que cambiar el dominio aquí obliga a que esa página exista
 /// antes, no después.
-pub const DEFAULT_USER_AGENT: &str = "CrawlForge/1.0 (+https://crawlforge.org/bot)";
+///
+/// La barra final tampoco es decorativa: el sitio sirve `/bot/`, y sin ella la única URL que
+/// este producto pide teclear a un desconocido depende de que el servidor acierte a redirigir.
+/// `tools/comprobar-web.sh` compara esta constante con la que muestra la página.
+pub const DEFAULT_USER_AGENT: &str = "CrawlForge/1.0 (+https://crawlforge.org/bot/)";
 
 /// Por qué falló la obtención de una URL. Se corresponde con `urls.error_kind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -659,6 +663,24 @@ impl FilesystemFetcher {
     }
 
     fn resolve_inner(&self, url: &Url, check_symlinks: bool) -> Option<PathBuf> {
+        // **El host decide, no la ruta.** Sin esto, esta función miraba solo `url.path()`, así
+        // que cualquier URL ajena cuya ruta existiera dentro del `dist/` se resolvía a un fichero
+        // del sitio auditado. El caso común no era raro: `https://cualquier-dominio.com/` tiene
+        // ruta `/`, que resuelve a `index.html`, de modo que **todo enlace a la portada de otro
+        // dominio se registraba como enlace a la portada del sitio auditado**.
+        //
+        // Lo encontró auditar nuestra propia web: doce entradas del devlog aparecían con
+        // `INDEX-NOFOLLOW-INTERNAL` por los botones de compartir, que enlazan a `chatgpt.com/?q=…`
+        // y a `grok.com/?q=…`. Ninguno es interno; la ruta de los tres es `/`.
+        //
+        // El daño iba más allá del falso positivo: esos enlaces externos desaparecían del grafo
+        // —no se comprobaba su estado, así que `HTTP-404-EXTERNAL` no podía verlos— y a cambio
+        // inflaban los enlaces entrantes de la portada. Es la tercera vez que este proyecto
+        // decide sobre el texto de una ruta en lugar de sobre el destino real; las dos anteriores
+        // están en `REVISION-2026-08-04.md`.
+        if url.origin() != self.base.origin() {
+            return None;
+        }
         let path = url.path().trim_start_matches('/');
         let decoded = percent_decode(path);
         let candidate = self.root.join(&decoded);

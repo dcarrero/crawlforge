@@ -19,6 +19,48 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.8.0] — 2026-08-08
+
+### Fixed
+
+- **In `audit`, a link to another domain is no longer resolved against the audited site.** The
+  filesystem mode unifies `/about`, `/about/` and `/about/index.html` because a static server
+  serves all three from the same file. That unification looked at the **path alone**, so any
+  external URL whose path happened to exist inside `dist/` was canonicalised to the audited site.
+  The common case was not exotic: `https://any-domain.com/` has path `/`, which resolves to
+  `index.html` — so **every link to another site's home page was recorded as a link to the home
+  page of the site being audited**.
+
+  The damage went past the wrong row. Those external links vanished from the graph, so
+  `HTTP-404-EXTERNAL` could not check them, and in exchange they inflated the inbound link count
+  of the home page, which other rules read as a signal.
+
+  **This is a minor bump because a rule stops firing:** `INDEX-NOFOLLOW-INTERNAL` no longer
+  reports share buttons and any other `nofollow` link pointing at another domain's root. If a CI
+  gate was counting those, the count changes.
+
+  Found by auditing our own website, not by a test — twelve devlog entries were reported for
+  linking to `chatgpt.com/?q=…` and `grok.com/?q=…`. It is the third time this project has decided
+  something from the text of a path instead of from the real destination. Regression tests in
+  `tests/enlaces_externos_en_dist.rs`, both verified by reverting the fix and watching them fail.
+
+## [0.7.1] — 2026-08-08
+
+### Fixed
+
+- **The User-Agent now points at a URL that exists exactly as written.** It announced
+  `https://crawlforge.org/bot` and the site serves `/bot/`. The difference is one character and it
+  matters more here than almost anywhere else: that URL is the whole point of identifying
+  yourself, and it is the one address this tool asks a stranger to type. Getting there through a
+  redirect works until a server is configured not to add one, and then the only promise the
+  crawler makes to an administrator reading their logs resolves to a 404.
+
+- **`tools/verificar.sh` no longer dies on a step that does not apply here.** It called a check
+  that lives in the private repository, so with `set -e` the verification this project's
+  documentation tells you to run failed on a fresh clone — before reaching the performance
+  regression, which is the step that matters most. The step is now skipped with a note when the
+  check is absent.
+
 ## [0.7.0] — 2026-08-04
 
 ### Added

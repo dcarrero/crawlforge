@@ -1,0 +1,35 @@
+{
+  "name": "crawlforge",
+  "version": "0.8.0",
+  "description": "Technical SEO auditing for people who run many sites, not one. This package exists so other projects can consume the rule catalogue, the manual and the changelog by tag — the tool itself is a Rust binary, not an npm package.",
+  "license": "Apache-2.0",
+  "author": "David Carrero Fernández-Baillo (https://carrero.es)",
+  "homepage": "https://crawlforge.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dcarrero/crawlforge.git"
+  },
+  "files": [
+    "rules.json",
+    "meta.json",
+    "CHANGELOG.md",
+    "docs/MANUAL.md",
+    "docs/es/MANUAL.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./rules.json": "./rules.json",
+    "./meta.json": "./meta.json",
+    "./CHANGELOG.md": "./CHANGELOG.md",
+    "./docs/MANUAL.md": "./docs/MANUAL.md",
+    "./docs/es/MANUAL.md": "./docs/es/MANUAL.md",
+    "./package.json": "./package.json"
+  },
+  "keywords": [
+    "seo",
+    "crawler",
+    "site-audit",
+    "technical-seo",
+    "rust"
+  ]
+}

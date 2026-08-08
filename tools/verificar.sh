@@ -42,10 +42,32 @@ paso "Banco de fixtures"
 # el test que dice si el catálogo de reglas sigue detectando lo que dice detectar.
 cargo test -p crawlforge-core --test fixtures_de_reglas -- --nocapture 2>&1 | tail -3
 
+paso "Artefactos publicados"
+# `rules.json` y `meta.json` van versionados porque el repositorio de la web los consume
+# instalando este por tag. Si el catálogo cambia y nadie los regenera, la web publica un catálogo
+# que ya no existe — y como se instalan por tag, el error viaja congelado hasta que alguien lo ve.
+tools/gen-artefactos-web.sh > /dev/null
+if ! git diff --quiet -- rules.json meta.json 2>/dev/null; then
+    printf '\033[31m  ✗ rules.json o meta.json estaban desfasados; se han regenerado.\033[0m\n'
+    printf '\033[33m    Revisa el diff y añádelos al commit.\033[0m\n'
+    git --no-pager diff --stat -- rules.json meta.json
+    exit 1
+fi
+printf '  \033[32m✓\033[0m rules.json y meta.json al día\n'
+
 paso "Web sincronizada con el catálogo"
 # La referencia de reglas de la web se genera del catálogo (`rules --format json`). Si una
 # regla entra o cambia y nadie regenera, esto es lo que lo dice antes que un lector.
-tools/comprobar-web.sh
+#
+# El paso es condicional porque este fichero se publica y la web no: en el repositorio público
+# no hay `comprobar-web.sh`, y con `set -e` esa línea mataba la verificación entera antes de
+# llegar a la regresión de rendimiento. Quien clonara el proyecto para contribuir se encontraba
+# con que el comando que la documentación manda ejecutar falla siempre.
+if [ -x tools/comprobar-web.sh ]; then
+    tools/comprobar-web.sh
+else
+    printf '  no aplica: la web no forma parte de este repositorio\n'
+fi
 
 if [ "$RAPIDO" = "0" ]; then
     paso "Regresión de rendimiento (release)"

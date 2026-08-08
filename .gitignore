@@ -52,3 +52,8 @@ xcuserdata/
 /web/astro/node_modules/
 /web/astro/dist/
 /web/astro/.astro/
+
+# Cloudflare Workers. `.dev.vars` lleva el token de Acumbamail para `wrangler dev`: es el
+# equivalente local de un secreto del Worker y no se versiona nunca.
+/web/astro/.dev.vars
+/web/astro/.wrangler/
