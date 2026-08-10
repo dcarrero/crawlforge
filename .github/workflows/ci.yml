@@ -44,13 +44,20 @@ jobs:
       # Sin fail-fast: si algo se rompe solo en Windows, interesa ver que Linux va bien.
       fail-fast: false
       matrix:
-        # **macOS no está aquí a propósito.** Es la máquina de desarrollo, y se verifica en
-        # local con `tools/suite.sh`, que además hace más que este pipeline: usa la
-        # herramienta de verdad —audita, exporta, informa, compara— y abre el `.xlsx` con
-        # `openpyxl`. Duplicarlo en CI costaría el **décuplo** de minutos: GitHub factura
-        # macOS a 10x y Windows a 2x, así que un job de macOS de 12 minutos se cobra como
-        # 120. Lo que aquí hace falta es exactamente lo que en local no se puede probar.
-        os: [ubuntu-latest, windows-latest]
+        # Las tres, desde el 2026-08-10. macOS estuvo fuera mientras el repositorio era privado,
+        # porque GitHub factura sus runners a **10x** —un job de 12 minutos se cobraba como 120—
+        # y era la máquina de desarrollo, cubierta en local por `tools/suite.sh`, que además hace
+        # más: usa la herramienta de verdad, audita, exporta, informa y abre el `.xlsx`.
+        #
+        # Al abrir el repositorio los runners estándar pasaron a ser gratuitos, macOS incluido, y
+        # ese argumento desapareció. Queda el que de verdad importa ahora: **este repositorio
+        # acepta pull requests de gente que no tiene este Mac**. «Se verifica en local» cubre lo
+        # que escribimos nosotros y nada de lo que llegue de fuera.
+        #
+        # Y macOS no es Linux con otro nombre para este motor: APFS no distingue mayúsculas por
+        # defecto y normaliza los nombres de fichero en NFD en vez de NFC. Un rastreador que
+        # escribe ficheros y compara rutas se rompe exactamente ahí.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
