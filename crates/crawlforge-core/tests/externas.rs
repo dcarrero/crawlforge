@@ -826,3 +826,65 @@ async fn un_bucle_de_redirecciones_no_cuelga_la_vista_de_rotos() {
         .expect("contar bucles");
     assert_eq!(bucles, 1, "el bucle lo reporta su regla, no esta vista");
 }
+
+#[tokio::test]
+async fn el_progreso_separa_las_sondas_de_la_cola_del_sitio() {
+    // El test hermano de `engine::tests::las_sondas_de_externas_viajan_aparte…`, que prueba el
+    // emisor por su cuenta y **seguía pasando** con el cableado revertido. Este mira el rastreo
+    // entero: si el bucle vuelve a sumar las sondas al contador del sitio, aquí se ve.
+    //
+    // El ajeno responde despacio a propósito, para que quede alguna instantánea con el sitio ya
+    // rastreado y las sondas todavía en marcha, que es el momento que parecía un cuelgue.
+    let ajeno = ServidorDePruebas::arrancar_como_otro_host(&[
+        // 300 ms cada una, y van en serie —una petición en vuelo por host ajeno—, así que el
+        // rastreo dura de sobra para varias instantáneas: el emisor muestrea cada 150 ms.
+        ("/uno", Respuesta::pagina("Uno", "<p>a</p>").con_retardo(Duration::from_millis(300))),
+        ("/dos", Respuesta::pagina("Dos", "<p>b</p>").con_retardo(Duration::from_millis(300))),
+    ])
+    .await;
+    let propio = ServidorDePruebas::arrancar(&[(
+        "/",
+        pagina_con(&format!(
+            "<a href=\"{uno}\">uno</a> <a href=\"{dos}\">dos</a>",
+            uno = ajeno.url_como_otro_host("/uno"),
+            dos = ajeno.url_como_otro_host("/dos"),
+        )),
+    )])
+    .await;
+
+    let tmp = Temporal::new("progreso-sondas");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+
+    // Se queda con el máximo visto de cada contador: las instantáneas van por tiempo y no hay
+    // por qué atrapar una concreta.
+    let sondas_max = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let cola_con_sondas = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let observado = {
+        let sondas_max = std::sync::Arc::clone(&sondas_max);
+        let cola_con_sondas = std::sync::Arc::clone(&cola_con_sondas);
+        let cb: crawlforge_core::engine::ProgressCallback = std::sync::Arc::new(move |p| {
+            use std::sync::atomic::Ordering;
+            sondas_max.fetch_max(p.externals_pending, Ordering::SeqCst);
+            // Con dos externas y una sola página, la cola del sitio nunca puede pasar de 1.
+            cola_con_sondas.fetch_max(p.urls_queued, Ordering::SeqCst);
+        });
+        cb
+    };
+
+    let outcome = crawlforge_core::engine::run_observed(job, &tmp.store(), Some(observado))
+        .await
+        .expect("rastrear");
+
+    use std::sync::atomic::Ordering;
+    assert_eq!(outcome.metrics.externals_checked, 2, "las dos externas se comprobaron");
+    assert!(
+        sondas_max.load(Ordering::SeqCst) > 0,
+        "alguna instantánea tuvo que enseñar sondas pendientes"
+    );
+    assert!(
+        cola_con_sondas.load(Ordering::SeqCst) <= 1,
+        "la cola del sitio es de una página: si trae más, lleva sondas sumadas ({})",
+        cola_con_sondas.load(Ordering::SeqCst)
+    );
+}

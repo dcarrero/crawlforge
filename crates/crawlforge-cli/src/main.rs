@@ -1209,6 +1209,18 @@ fn progress_message(p: &CrawlProgress) -> String {
             Some(s) => format!("final pass · {}…", s.name.replace('_', " ")),
             None => "final pass: incoming links and site-wide rules…".to_string(),
         },
+        // El sitio ya está rastreado y lo único que queda es preguntar por enlaces ajenos. Se
+        // dice con todas las letras porque es la parte del rastreo que más parece un cuelgue:
+        // se va a la velocidad del servidor más lento de otro, con una petición en vuelo por
+        // host, y hasta ahora esas sondas iban sumadas al contador de «queued» sin etiqueta.
+        CrawlPhase::Crawl if p.urls_queued == 0 && p.externals_pending > 0 => {
+            format!(
+                "{} crawled · checking external links · {} left · {} findings",
+                thousands(p.urls_fetched),
+                thousands(p.externals_pending),
+                thousands(p.issues_found),
+            )
+        }
         CrawlPhase::Crawl => {
             let secs = p.elapsed.as_secs_f64();
             let rate = if secs > 0.0 { p.urls_fetched as f64 / secs } else { 0.0 };
@@ -1219,6 +1231,11 @@ fn progress_message(p: &CrawlProgress) -> String {
                 format_rate(rate),
                 thousands(p.issues_found),
             );
+            // Mientras el sitio avanza, las sondas son un apunte al margen: quien mira quiere
+            // saber que están ahí, no que compitan con el número que importa.
+            if p.externals_pending > 0 {
+                msg.push_str(&format!(" · {} external", thousands(p.externals_pending)));
+            }
             if p.urls_errored > 0 {
                 msg.push_str(&format!(" · {} failed", thousands(p.urls_errored)));
             }
@@ -1938,6 +1955,7 @@ mod tests {
             urls_fetched: 1240,
             urls_discovered: 5056,
             urls_queued: 3816,
+            externals_pending: 0,
             urls_errored: 0,
             issues_found: 32,
             elapsed: std::time::Duration::from_secs_f64(1240.0 / 14.0),
@@ -1949,6 +1967,35 @@ mod tests {
         );
     }
 
+    /// El caso que la revisión del 4 de agosto llamaba «parece muerto»: el sitio está
+    /// rastreado y solo quedan sondas a servidores de otros, que van a su ritmo.
+    #[test]
+    fn cuando_solo_quedan_sondas_la_linea_lo_dice() {
+        let mut p = CrawlProgress {
+            phase: CrawlPhase::Crawl,
+            urls_fetched: 5865,
+            urls_discovered: 5865,
+            urls_queued: 0,
+            externals_pending: 1204,
+            urls_errored: 0,
+            issues_found: 2834,
+            elapsed: std::time::Duration::from_secs(90),
+            step: None,
+        };
+        assert_eq!(
+            progress_message(&p),
+            "5,865 crawled · checking external links · 1,204 left · 2,834 findings"
+        );
+
+        // Mientras el sitio avanza, las sondas son un apunte al margen y el número que manda
+        // sigue siendo el suyo.
+        p.urls_queued = 300;
+        assert_eq!(
+            progress_message(&p),
+            "5,865 crawled · 300 queued · 65 URL/s · 2,834 findings · 1,204 external"
+        );
+    }
+
     #[test]
     fn las_fases_sin_contador_se_nombran() {
         let mut p = CrawlProgress {
@@ -1956,6 +2003,7 @@ mod tests {
             urls_fetched: 0,
             urls_discovered: 0,
             urls_queued: 0,
+            externals_pending: 0,
             urls_errored: 0,
             issues_found: 0,
             elapsed: std::time::Duration::ZERO,
@@ -1976,6 +2024,7 @@ mod tests {
             urls_fetched: 0,
             urls_discovered: 0,
             urls_queued: 0,
+            externals_pending: 0,
             urls_errored: 0,
             issues_found: 0,
             elapsed: std::time::Duration::ZERO,
@@ -1999,6 +2048,7 @@ mod tests {
             urls_fetched: 0,
             urls_discovered: 0,
             urls_queued: 0,
+            externals_pending: 0,
             urls_errored: 0,
             issues_found: 0,
             elapsed: std::time::Duration::ZERO,

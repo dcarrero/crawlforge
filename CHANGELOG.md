@@ -19,6 +19,30 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.9.2] — 2026-08-26
+
+### Fixed
+
+- **A crawl waiting on other people's servers no longer looks dead.** External status probes were
+  added into `urls_queued` with no label, so a crawl that had finished the user's own site and was
+  only waiting on foreign hosts still showed thousands of "queued" that were not its own — and as
+  the rest drained, the figure sat still with no explanation. Probes now travel in their own
+  `CrawlProgress` field, `externals_pending`, counting both queued and in flight.
+
+  The CLI says it outright. While the site is still being crawled the probes are a note at the
+  margin (`… · 1,204 external`); once nothing of the site is left, the line becomes
+  `5,865 crawled · checking external links · 1,204 left · 2,834 findings`. That last state is the
+  one that read as a hang: it runs at the speed of the slowest server that belongs to someone
+  else, one request in flight per host, out of courtesy.
+
+  No crawl data changes, no rule fires differently, and the crawl file is byte-for-byte what it
+  was. The only API change is a field added to `CrawlProgress`, a struct nothing outside this
+  repository builds today.
+
+  Two tests, because the first one was not enough: one on the emitter, and one on a whole crawl —
+  the emitter test kept passing with the wiring reverted, which is exactly the failure it was
+  supposed to catch.
+
 ## [0.9.1] — 2026-08-26
 
 ### Fixed

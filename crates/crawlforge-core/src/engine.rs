@@ -173,8 +173,19 @@ pub struct CrawlProgress {
     pub phase: CrawlPhase,
     pub urls_fetched: u64,
     pub urls_discovered: u64,
-    /// URLs pendientes: las encoladas más las que están en vuelo ahora mismo.
+    /// URLs **del sitio** pendientes: las encoladas más las que están en vuelo ahora mismo.
+    ///
+    /// Las sondas de enlaces externos no cuentan aquí, y antes sí: iban sumadas sin etiqueta,
+    /// así que un rastreo que había terminado su sitio y solo esperaba a hosts ajenos enseñaba
+    /// miles de «queued» que no eran suyos, y al vaciarse el resto la cifra se quedaba quieta
+    /// sin explicación. Van aparte, en `externals_pending`.
     pub urls_queued: u64,
+    /// Sondas de estado de enlaces externos por resolver: en cola más en vuelo.
+    ///
+    /// Es el dato que separa «esto se ha colgado» de «esto está esperando a servidores de
+    /// otros». Un host ajeno lento se paga entero —una petición en vuelo por host, por
+    /// educación— y esa espera es la última parte de muchos rastreos.
+    pub externals_pending: u64,
     pub urls_errored: u64,
     pub issues_found: u64,
     /// Tiempo transcurrido **en la fase actual**. Para la fase de rastreo, dividir
@@ -231,16 +242,16 @@ impl ProgressEmitter {
     fn enter_phase(&mut self, phase: CrawlPhase, metrics: &CrawlMetrics, queued: u64) {
         self.phase = phase;
         self.phase_started = Instant::now();
-        self.emit(metrics, queued);
+        self.emit(metrics, queued, 0);
     }
 
     /// Emite si ha pasado el intervalo. Es la llamada del camino caliente: cuando no hay
     /// observador cuesta una comparación, y cuando lo hay, una lectura de reloj.
-    fn tick(&mut self, metrics: &CrawlMetrics, queued: u64) {
+    fn tick(&mut self, metrics: &CrawlMetrics, queued: u64, externals: u64) {
         if self.callback.is_none() || self.last_emit.elapsed() < PROGRESS_INTERVAL {
             return;
         }
-        self.emit(metrics, queued);
+        self.emit(metrics, queued, externals);
     }
 
     /// Anuncia un paso de la pasada final **sin esperar al intervalo**: son pasos largos y de
@@ -250,10 +261,10 @@ impl ProgressEmitter {
             return;
         }
         self.step = Some(FinalizeStep { name, index, total });
-        self.emit(metrics, 0);
+        self.emit(metrics, 0, 0);
     }
 
-    fn emit(&mut self, metrics: &CrawlMetrics, queued: u64) {
+    fn emit(&mut self, metrics: &CrawlMetrics, queued: u64, externals: u64) {
         let Some(cb) = &self.callback else { return };
         self.last_emit = Instant::now();
         cb(&CrawlProgress {
@@ -261,6 +272,7 @@ impl ProgressEmitter {
             urls_fetched: metrics.urls_fetched,
             urls_discovered: metrics.urls_discovered,
             urls_queued: queued,
+            externals_pending: externals,
             urls_errored: metrics.urls_errored,
             issues_found: metrics.issues_found,
             elapsed: self.phase_started.elapsed(),
@@ -1034,6 +1046,10 @@ async fn run_with<F: Fetcher + 'static>(
     // `max_urls: Some(1000)` y las sondas apagadas. Las externas no cuentan contra `max_urls` a
     // propósito —ese presupuesto es de páginas del usuario— y hasta aquí nada más las acotaba.
     let mut externals_registered: u64 = 0;
+    // Sondas despachadas y todavía sin respuesta. Se lleva a mano porque `in_flight` mezcla las
+    // dos clases de petición y el progreso necesita distinguirlas: sin este contador, «lo que
+    // queda del sitio» incluiría las sondas en vuelo.
+    let mut externals_in_flight: u64 = 0;
     // Sondas que quedaron a medias en una sesión anterior: filas externas, sin estado y sin
     // error, que el corte pilló en vuelo o en cola. Sin esto se perdían para siempre — la
     // reanudación solo relee las `pending`, y el frontier ya las tiene por vistas.
@@ -1121,6 +1137,7 @@ async fn run_with<F: Fetcher + 'static>(
                 discovered_from: None,
                 source: DiscoverySource::Link,
             };
+            externals_in_flight += 1;
             let task = in_flight.spawn(async move {
                 // Ni el robots.txt ni el Crawl-delay del host ajeno se consultan, y es una
                 // decisión, no un olvido: comprobar que un enlace resuelve es lo que hace el
@@ -1188,6 +1205,12 @@ async fn run_with<F: Fetcher + 'static>(
             };
             let hash = url_hash(&item.url);
 
+            // Antes del reparto por brazos y no dentro de uno: `ExternalChecked` lo manejan dos
+            // —el general y el del perímetro—, y decrementar solo en el primero dejaba el
+            // contador colgado en cuanto una sonda resolvía a una dirección rechazada.
+            if matches!(outcome, UrlOutcome::ExternalChecked(_)) {
+                externals_in_flight = externals_in_flight.saturating_sub(1);
+            }
             match outcome {
                 UrlOutcome::Excluded(reason) => {
                     metrics.urls_excluded += 1;
@@ -1728,9 +1751,14 @@ async fn run_with<F: Fetcher + 'static>(
         // Muestrear son syscalls, así que se hace por tiempo y no por URL: el bucle une una
         // tarea por iteración, y aquí se pagaban 5-20 µs por URL. Ver `RSS_SAMPLE_INTERVAL`.
         metrics.peak_rss_bytes = rss.sample_if_due();
+        // Las dos cuentas van separadas: lo que queda del sitio del usuario, y lo que queda de
+        // preguntar por enlaces ajenos. Sumarlas era lo que hacía parecer muerto un rastreo que
+        // solo esperaba a un host lento de otro.
+        let sondas = externals.pending() as u64 + externals_in_flight;
         emitter.tick(
             &metrics,
-            (frontier.pending() + in_flight.len() + externals.pending()) as u64,
+            (frontier.pending() + in_flight.len()) as u64 - externals_in_flight,
+            sondas,
         );
     }
 
@@ -4784,13 +4812,13 @@ mod tests {
         // Mil ticks seguidos dentro del intervalo no emiten nada: es lo que protege al
         // bucle de `filesystem`, que procesa miles de URLs por segundo.
         for _ in 0..1000 {
-            emitter.tick(&metrics, 0);
+            emitter.tick(&metrics, 0, 0);
         }
         assert_eq!(emitidos.load(Ordering::SeqCst), 1);
 
         // Pasado el intervalo, el siguiente tick sí emite.
         std::thread::sleep(PROGRESS_INTERVAL + Duration::from_millis(10));
-        emitter.tick(&metrics, 5);
+        emitter.tick(&metrics, 5, 0);
         assert_eq!(emitidos.load(Ordering::SeqCst), 2);
     }
 
@@ -4815,6 +4843,32 @@ mod tests {
         assert_eq!(p.urls_fetched, 42);
         assert_eq!(p.issues_found, 7);
         assert_eq!(p.urls_queued, 9);
+        assert_eq!(p.externals_pending, 0, "el descubrimiento de sitemaps no manda sondas");
+    }
+
+    /// Lo que pedía la revisión del 4 de agosto: las sondas de externas dejan de ir sumadas al
+    /// contador del sitio, porque un rastreo que ya terminó el suyo y solo espera a hosts
+    /// ajenos enseñaba miles de «queued» que no eran suyos.
+    #[test]
+    fn las_sondas_de_externas_viajan_aparte_de_la_cola_del_sitio() {
+        let visto: Arc<std::sync::Mutex<Option<CrawlProgress>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let destino = Arc::clone(&visto);
+        let cb: ProgressCallback = Arc::new(move |p| {
+            if let Ok(mut guard) = destino.lock() {
+                *guard = Some(p.clone());
+            }
+        });
+
+        let mut emitter = ProgressEmitter::new(Some(cb));
+        let metrics = CrawlMetrics { urls_fetched: 1_000, ..Default::default() };
+        std::thread::sleep(PROGRESS_INTERVAL + Duration::from_millis(10));
+        emitter.tick(&metrics, 0, 314);
+
+        let guard = visto.lock().unwrap_or_else(|e| e.into_inner());
+        let p = guard.as_ref().expect("debe haberse emitido una instantánea");
+        assert_eq!(p.urls_queued, 0, "del sitio no queda nada");
+        assert_eq!(p.externals_pending, 314, "y lo que queda son sondas, dicho aparte");
     }
 
     #[test]
@@ -4822,7 +4876,7 @@ mod tests {
         let mut emitter = ProgressEmitter::new(None);
         let metrics = CrawlMetrics::default();
         emitter.enter_phase(CrawlPhase::Crawl, &metrics, 0);
-        emitter.tick(&metrics, 0);
+        emitter.tick(&metrics, 0, 0);
         // Sin callback no hay nada que observar: basta con que no entre en pánico.
     }
 
