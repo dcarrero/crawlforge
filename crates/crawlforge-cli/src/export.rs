@@ -69,7 +69,10 @@ const EXPORTS: &[(&str, &str)] = &[
     ),
     (
         "broken_links",
-        "SELECT from_url, to_url, status_code, anchor FROM v_broken_links ORDER BY from_url",
+        // `via` y `hops` vienen de la migración 009: un enlace que llega a algo roto pasando
+        // por una redirección. En una fila directa van vacías.
+        "SELECT from_url, to_url, status_code, anchor, via, hops FROM v_broken_links
+         ORDER BY from_url",
     ),
 ];
 

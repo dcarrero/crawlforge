@@ -108,15 +108,39 @@ fn sheets() -> Vec<SheetSpec> {
         // ------------------------------------------------------ Lo que hay que arreglar
         // Ordenado por destino roto, no por origen: se arregla una vez el destino y se sabe de
         // golpe cuántas páginas hay que tocar. `element` distingue un <a> de un <img>.
+        //
+        // La segunda mitad son los enlaces que llegan a algo roto **pasando por una
+        // redirección**, que es como se pudre un enlace de afiliado o un acortador propio.
+        // `via` dice qué URL se enlazó de verdad —la que hay que reescribir— y `hops` cuántos
+        // saltos hubo; en una fila directa las dos van vacías. El tope de diez saltos corta los
+        // bucles, igual que en `v_broken_links` (migración 009), donde se explica el porqué.
         SheetSpec {
             name: "Broken links",
-            sql: "SELECT ut.status_code AS to_status, ut.url AS to_url, uf.url AS from_url,
-                         l.anchor, l.element, l.region
+            sql: "WITH RECURSIVE resolved(start_id, end_id, hops) AS (
+                      SELECT id, redirect_to, 1 FROM urls
+                       WHERE status_code >= 300 AND status_code < 400 AND redirect_to IS NOT NULL
+                      UNION ALL
+                      SELECT r.start_id, u.redirect_to, r.hops + 1
+                        FROM resolved r JOIN urls u ON u.id = r.end_id
+                       WHERE u.status_code >= 300 AND u.status_code < 400
+                         AND u.redirect_to IS NOT NULL AND r.hops < 10
+                  )
+                  SELECT ut.status_code AS to_status, ut.url AS to_url, NULL AS via,
+                         uf.url AS from_url, l.anchor, l.element, l.region, NULL AS hops
                   FROM links l
                   JOIN urls uf ON uf.id = l.from_url_id
                   JOIN urls ut ON ut.id = l.to_url_id
                   WHERE ut.status_code >= 400
-                  ORDER BY ut.status_code DESC, ut.url, uf.url",
+                  UNION ALL
+                  SELECT fin.status_code AS to_status, fin.url AS to_url, ut.url AS via,
+                         uf.url AS from_url, l.anchor, l.element, l.region, r.hops AS hops
+                  FROM links l
+                  JOIN urls uf ON uf.id = l.from_url_id
+                  JOIN urls ut ON ut.id = l.to_url_id
+                  JOIN resolved r ON r.start_id = ut.id
+                  JOIN urls fin ON fin.id = r.end_id
+                  WHERE fin.status_code >= 400
+                  ORDER BY to_status DESC, to_url, from_url",
             severity_col: None,
             requires_table: None,
         },

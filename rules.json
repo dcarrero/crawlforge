@@ -946,5 +946,5 @@
       "severity": "low"
     }
   ],
-  "rules_version": "0.9.0"
+  "rules_version": "0.9.1"
 }

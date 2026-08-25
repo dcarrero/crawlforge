@@ -263,6 +263,11 @@ sqlite3 crawl-cliente-com.sqlite \
 There are ready-made views for the usual questions: `v_orphans`, `v_broken_links`,
 `v_indexable_pages` and `v_issue_summary`.
 
+`v_broken_links` also follows redirects to where they end up, so a link to your own `/go/product`
+that redirects to a shop returning 404 shows up as broken. In those rows `via` holds the URL that
+was actually linked — the one to rewrite — and `hops` how many jumps it took; both are `NULL` when
+the link points straight at the broken URL.
+
 Two warnings that save you a while: the column is **`status_code`**, not `status`, and it is
 `NULL` for any URL that was recorded without being requested — an internal link the crawl never
 reached, or an external one when `--no-external-check` is in play.

@@ -38,6 +38,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (6, include_str!("../migrations/006_indice_html_hash.sql")),
     (7, include_str!("../migrations/007_indice_images_src.sql")),
     (8, include_str!("../migrations/008_indice_unico_resources.sql")),
+    (9, include_str!("../migrations/009_broken_links_sigue_redirecciones.sql")),
 ];
 
 struct Dir {
@@ -185,13 +186,14 @@ fn verificar_datos_y_vistas(conn: &Connection) {
     assert_eq!(count(conn, "SELECT COUNT(*) FROM v_indexable_pages"), 3);
     assert_eq!(count(conn, "SELECT COUNT(*) FROM v_issue_summary"), 2);
 
-    let (from_url, to_url): (String, String) = conn
-        .query_row("SELECT from_url, to_url FROM v_broken_links", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
+    let (from_url, to_url, via): (String, String, Option<String>) = conn
+        .query_row("SELECT from_url, to_url, via FROM v_broken_links", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .expect("leer v_broken_links");
     assert_eq!(from_url, "https://ejemplo.es/");
     assert_eq!(to_url, "https://ejemplo.es/rota");
+    assert_eq!(via, None, "el enlace roto de siempre es directo, y la 009 no se lo inventa");
 
     // Y con la semántica corregida de la 003 y la 005: la semilla no es huérfana, la imagen
     // del sitemap tampoco —no es una página—, y la huérfana de verdad sí.

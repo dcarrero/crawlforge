@@ -1,6 +1,6 @@
 {
   "name": "crawlforge",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Technical SEO auditing for people who run many sites, not one. This package exists so other projects can consume the rule catalogue, the manual and the changelog by tag — the tool itself is a Rust binary, not an npm package.",
   "license": "Apache-2.0",
   "author": "David Carrero Fernández-Baillo (https://carrero.es)",

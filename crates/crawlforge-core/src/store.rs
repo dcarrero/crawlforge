@@ -22,6 +22,9 @@ const MIGRATIONS: &[(i64, &str, ResumeSafety)] = &[
     // motor repone las filas de `resources` de la mitad antigua al reanudar (ver
     // `engine::resend_existing_rows`), así que el fichero reanudado queda completo.
     (8, include_str!("../migrations/008_indice_unico_resources.sql"), ResumeSafety::Safe),
+    // Redefinir una vista no toca ni una fila: la mitad rastreada antes y la de después dicen
+    // lo mismo, y la vista nueva las lee igual.
+    (9, include_str!("../migrations/009_broken_links_sigue_redirecciones.sql"), ResumeSafety::Safe),
 ];
 
 /// ¿Puede un rastreo a medias cruzar esta migración y seguir reanudándose?
@@ -36,7 +39,7 @@ const MIGRATIONS: &[(i64, &str, ResumeSafety)] = &[
 /// URLs. Ahí sí, la primera mitad del rastreo diría una cosa y la segunda otra, y es mejor
 /// rechazar y pedir un rastreo nuevo que entregar un fichero mestizo.
 ///
-/// Hoy las seis son `Safe`. La distinción existe porque **hasta el 2026-08-02 no había ninguna**:
+/// Hoy las nueve son `Safe`. La distinción existe porque **hasta el 2026-08-02 no había ninguna**:
 /// `resume` exigía versión exacta, así que la migración 006 —que solo crea un índice— convirtió
 /// un rastreo de dieciocho horas en irrecuperable, y el error decía «vuelve a rastrearlo».
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

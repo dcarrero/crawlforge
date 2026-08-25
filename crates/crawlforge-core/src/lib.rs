@@ -29,6 +29,6 @@ pub use error::CoreError;
 
 /// Version del esquema SQLite que este core escribe.
 /// Debe coincidir con la ultima migracion de `migrations/`.
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");

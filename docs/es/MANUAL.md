@@ -263,6 +263,11 @@ sqlite3 crawl-cliente-com.sqlite \
 Hay vistas ya preparadas para las preguntas habituales: `v_orphans`, `v_broken_links`,
 `v_indexable_pages` y `v_issue_summary`.
 
+`v_broken_links` sigue además las redirecciones hasta donde acaban, así que un enlace a tu propio
+`/go/producto` que redirige a una tienda que devuelve 404 sale como roto. En esas filas `via` es la
+URL que se enlazó de verdad, la que hay que reescribir, y `hops` cuántos saltos hicieron falta; las
+dos van a `NULL` cuando el enlace apunta directamente a lo roto.
+
 Dos avisos que ahorran un rato: la columna es **`status_code`**, no `status`, y está a `NULL` en
 toda URL que se registró sin pedirse: un enlace interno al que el rastreo no llegó, o uno externo
 si va `--no-external-check`.

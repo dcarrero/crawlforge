@@ -19,6 +19,37 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.9.1] — 2026-08-26
+
+### Fixed
+
+- **`v_broken_links` now follows redirects to where they end up.** The view only looked at a
+  link's immediate destination, so a page linking `/go/product`, which 301s to a shop returning
+  404, appeared nowhere: a 301 is not a broken status, and nothing links the 404 directly, so the
+  row fell between the two conditions. 0.9.0 started registering and checking that destination;
+  this is the half that makes the work visible.
+
+  Two new columns carry what following the chain would otherwise lose. `via` is the URL that was
+  actually linked — the one to rewrite — and `hops` how many jumps it took. Both are `NULL` on a
+  direct row, which is the difference between "this is broken" and "this leads to something
+  broken". The `Broken links` sheet gains the same two columns, and `broken_links.csv` exports
+  them.
+
+  The chain is walked in SQL so the view stays self-contained: opening the crawl file with
+  `sqlite3` answers the question without going through the tool. A ten-hop cap stops a redirect
+  loop from spinning forever; `HTTP-REDIRECT-CHAIN` already reports at two, so the cap is a
+  safety net rather than a judgement. Measured on a real crawl of 145,191 links with 486
+  redirects, counting the view went from 8 ms to 21 ms.
+
+  **Patch, not minor, on purpose:** no rule reads this view — only the export does — so no rule
+  starts or stops firing and no rule ID changes meaning. What changes is that links which were
+  broken all along are now listed. If you count rows in `broken_links.csv`, that count can go up.
+
+  Migration 009 redefines the view. Older crawl files open and migrate as usual, and a direct
+  broken link keeps reporting exactly as before, with `via` empty. Verified by reverting the
+  migration and watching the test fail, plus a test that a redirect loop makes the view answer
+  instead of hang.
+
 ## [0.9.0] — 2026-08-25
 
 ### Added

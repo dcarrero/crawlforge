@@ -745,3 +745,84 @@ async fn el_destino_externo_de_una_redireccion_deja_fila_y_se_comprueba() {
         .expect("contar páginas externas");
     assert_eq!(paginas_ajenas, 0, "el destino se comprueba, no se rastrea");
 }
+
+#[tokio::test]
+async fn un_enlace_que_llega_a_un_404_por_redireccion_sale_en_los_rotos() {
+    // La otra mitad del caso de arriba. Registrar el destino externo sirve de poco si quien
+    // busca enlaces rotos no lo encuentra: `v_broken_links` miraba el destino inmediato del
+    // enlace, y entre un 301 —que no está roto— y un 404 que nadie enlaza, la fila se perdía.
+    //
+    // Dos saltos a propósito: `/go/oferta` → `/promo/verano` → la tienda ajena. Con un solo
+    // salto pasaría también una vista sin recursión.
+    let ajeno = ServidorDePruebas::arrancar_como_otro_host(&[]).await;
+    let propio = ServidorDePruebas::arrancar(&[
+        ("/", pagina_con("<a href=\"/go/oferta\">la oferta</a>")),
+        ("/go/oferta", Respuesta::redirige(301, "/promo/verano")),
+        ("/promo/verano", Respuesta::redirige(302, &ajeno.url_como_otro_host("/retirado"))),
+    ])
+    .await;
+
+    let tmp = Temporal::new("rotos-por-redireccion");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+
+    crawlforge_core::engine::run(job, &tmp.store()).await.expect("rastrear");
+    let conn = abrir(&tmp.store());
+
+    let (from, to, estado, via, saltos): (String, String, i64, String, i64) = conn
+        .query_row(
+            "SELECT from_url, to_url, status_code, via, hops FROM v_broken_links
+             WHERE via IS NOT NULL",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .expect("el enlace roto por redirección está en la vista");
+
+    assert!(from.ends_with('/'), "lo firma la página que enlaza: {from}");
+    assert!(to.ends_with("/retirado"), "y apunta al destino muerto de verdad: {to}");
+    assert_eq!(estado, 404);
+    assert!(via.ends_with("/go/oferta"), "«via» es la URL que hay que reescribir: {via}");
+    assert_eq!(saltos, 2, "dos saltos hasta el final");
+
+    // Y la vista no se inventa filas: el enlace directo a `/go/oferta` no aparece por su cuenta,
+    // porque un 301 no es un enlace roto.
+    let filas: i64 = conn
+        .query_row("SELECT COUNT(*) FROM v_broken_links", [], |r| r.get(0))
+        .expect("contar");
+    assert_eq!(filas, 1, "una fila, la que lleva a algo roto");
+}
+
+#[tokio::test]
+async fn un_bucle_de_redirecciones_no_cuelga_la_vista_de_rotos() {
+    // El tope de diez saltos de la migración 009 existe por esto: sin él, `A → B → A` deja a
+    // la recursión generando filas hasta que alguien mate el proceso.
+    let propio = ServidorDePruebas::arrancar(&[
+        ("/", pagina_con("<a href=\"/vueltas\">a ninguna parte</a>")),
+        ("/vueltas", Respuesta::redirige(302, "/mas-vueltas")),
+        ("/mas-vueltas", Respuesta::redirige(302, "/vueltas")),
+    ])
+    .await;
+
+    let tmp = Temporal::new("bucle");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+
+    crawlforge_core::engine::run(job, &tmp.store()).await.expect("rastrear");
+    let conn = abrir(&tmp.store());
+
+    // Termina, que es lo que se está comprobando. Y no reporta nada roto: un bucle no acaba en
+    // un 4xx, y para eso está HTTP-REDIRECT-LOOP.
+    let filas: i64 = conn
+        .query_row("SELECT COUNT(*) FROM v_broken_links", [], |r| r.get(0))
+        .expect("la vista responde en vez de colgarse");
+    assert_eq!(filas, 0);
+
+    let bucles: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM issues WHERE rule_id = 'HTTP-REDIRECT-LOOP'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("contar bucles");
+    assert_eq!(bucles, 1, "el bucle lo reporta su regla, no esta vista");
+}
