@@ -225,7 +225,7 @@ grouped by severity. It is for answering "how is this doing?" in ten seconds.
 crawlforge export crawl.sqlite --format xlsx --out auditoria.xlsx
 ```
 
-Thirteen sheets, each with the header frozen and the autofilter on. Status codes are real
+Fourteen sheets, each with the header frozen and the autofilter on. Status codes are real
 numbers, so a "greater than 399" filter works the way you expect. An empty status cell is a URL
 that was recorded but never requested — an internal link beyond the crawl's reach, or an external
 one when the check is off.

@@ -225,7 +225,7 @@ severidad. Es para responder «¿cómo está esto?» en diez segundos.
 crawlforge export crawl.sqlite --format xlsx --out auditoria.xlsx
 ```
 
-Trece hojas, cada una con la cabecera congelada y el autofiltro puesto. Los códigos de estado son
+Catorce hojas, cada una con la cabecera congelada y el autofiltro puesto. Los códigos de estado son
 números de verdad, así que un filtro «mayor que 399» funciona como esperas. Una celda de estado
 vacía es una URL que se registró y nunca se pidió: un enlace interno fuera del alcance del rastreo,
 o uno externo con la comprobación apagada.

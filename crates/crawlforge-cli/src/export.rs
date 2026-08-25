@@ -58,6 +58,16 @@ const EXPORTS: &[(&str, &str)] = &[
          ORDER BY i.page_url_id",
     ),
     (
+        // Una fila por URL de recurso, no por par (página, recurso): esa arista solo existe
+        // para las imágenes (`docs/02-MODELO-DATOS.md §3.5`). Lo pesado arriba, que es a lo
+        // que se viene; los de tamaño desconocido caen al final, porque NULL ordena último
+        // en DESC.
+        "resources",
+        "SELECT u.url AS resource_url, r.kind, r.status_code, r.size_bytes, r.mime
+         FROM resources r JOIN urls u ON u.id = r.url_id
+         ORDER BY r.size_bytes DESC, u.url",
+    ),
+    (
         "broken_links",
         "SELECT from_url, to_url, status_code, anchor FROM v_broken_links ORDER BY from_url",
     ),
@@ -244,7 +254,7 @@ mod tests {
     #[test]
     fn hay_una_exportacion_por_cada_tabla_que_usa_un_seo() {
         let names: Vec<_> = EXPORTS.iter().map(|(n, _)| *n).collect();
-        for expected in ["urls", "pages", "issues", "links", "images", "broken_links"] {
+        for expected in ["urls", "pages", "issues", "links", "images", "resources", "broken_links"] {
             assert!(names.contains(&expected), "the {expected} export is missing");
         }
     }

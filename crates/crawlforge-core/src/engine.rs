@@ -1572,6 +1572,77 @@ async fn run_with<F: Fetcher + 'static>(
                                 let seguir = interno
                                     || (job.limits.follow_external
                                         && screen.allows_host(&n.normalized));
+                                // El destino externo que no se sigue **también deja fila, y
+                                // sonda**, con el mismo trato que un enlace externo.
+                                //
+                                // Sin esta rama, un `/go/producto` que redirige a una tienda
+                                // ajena muerta era invisible: se veía el 301 y nada más. El
+                                // destino no existía como fila, `redirect_to` se quedaba sin
+                                // resolver y ninguna regla podía decir que el otro extremo es
+                                // un 404. Es el patrón donde más se pudren los enlaces,
+                                // precisamente porque el destino es de otro y nadie avisa
+                                // cuando cae.
+                                //
+                                // `!seguir` ya implica externo: `seguir` es cierto para todo
+                                // lo interno. Y va antes del reparto por modo porque no
+                                // depende de él: en modo lista tampoco se registraba.
+                                if !seguir && frontier.mark_seen(destino_hash) {
+                                    if externals_registered >= job.limits.max_external_urls {
+                                        metrics.externals_unregistered += 1;
+                                    } else {
+                                        externals_registered += 1;
+                                        metrics.urls_discovered += 1;
+                                        let mut row = external_row(&n, destino_hash);
+                                        if external_checks {
+                                            // Una redirección no tiene `rel`, así que su
+                                            // destino nunca llega aquí como `nofollow`.
+                                            let skip = why_not_probe(
+                                                &n.normalized,
+                                                false,
+                                                &filter,
+                                                &job.limits,
+                                                externals_enqueued,
+                                                &screen,
+                                            );
+                                            let skip = match skip {
+                                                Some(reason) => Some(reason),
+                                                None => {
+                                                    if let Some(h) = n.normalized.host_str() {
+                                                        throttle.force_serial(h);
+                                                    }
+                                                    match externals.push(n.normalized.clone()) {
+                                                        Ok(()) => {
+                                                            externals_enqueued += 1;
+                                                            None
+                                                        }
+                                                        Err(reason) => Some(reason),
+                                                    }
+                                                }
+                                            };
+                                            if let Some(reason) = skip {
+                                                metrics.externals_unchecked += 1;
+                                                row.exclusion_reason = reason.exclusion_reason();
+                                                tracing::debug!(
+                                                    url = %n.normalized,
+                                                    motivo = reason.as_str(),
+                                                    "destino externo de una redirección \
+                                                     registrado sin comprobar su estado"
+                                                );
+                                            }
+                                        } else if job.limits.follow_external {
+                                            // Con `follow_external` puesto, llegar aquí solo
+                                            // puede ser el perímetro. La fila lo dice, igual
+                                            // que en los enlaces.
+                                            metrics.externals_unchecked += 1;
+                                            row.exclusion_reason =
+                                                Some(ExclusionReason::LocalNetwork);
+                                        }
+                                        writer.send(CrawlResult {
+                                            url: Some(row),
+                                            ..Default::default()
+                                        }).await?;
+                                    }
+                                }
                                 // En modo lista, el mismo trato que un enlace: la fila del
                                 // destino se registra —sin ella `redirect_to` queda sin
                                 // resolver y las reglas de cadena no tienen grafo— y no se
@@ -2620,7 +2691,6 @@ impl ExternalQueue {
     /// Encola una sonda, o dice por qué no.
     fn push(&mut self, url: Url) -> std::result::Result<(), NotProbed> {
         let host = url.host_str().unwrap_or_default().to_string();
-        let nuevo = !self.by_host.contains_key(&host);
         let state = self.by_host.entry(host.clone()).or_default();
         if let Some(reason) = state.closed {
             return Err(reason);
@@ -2628,9 +2698,21 @@ impl ExternalQueue {
         if state.accepted >= MAX_EXTERNAL_PER_HOST {
             return Err(NotProbed::HostBudget);
         }
+        // Lo que decide si el host entra en la ronda es **su cola**, no si se le había visto
+        // antes: por el invariante de `hosts`, una cola vacía significa que el host no está
+        // en la ronda, la haya tenido llena antes o no.
+        //
+        // Mirar `by_host` en su lugar —«¿es un host nuevo?»— dejaba la sonda muerta en cuanto
+        // un host repetía: su entrada sobrevive al vaciado, porque guarda el cupo y la racha
+        // de fallos, así que el push no lo devolvía a la ronda y la URL no la despachaba
+        // nadie. Salía con dos destinos al mismo host descubiertos en momentos distintos, que
+        // es justo lo que hacen dos redirecciones a la misma tienda; en `debug` reventaba el
+        // invariante del planificador y en `release` esas sondas acababan contadas como «sin
+        // comprobar» al terminar, sin más explicación.
+        let fuera_de_la_ronda = state.queue.is_empty();
         state.accepted += 1;
         state.queue.push_back(url);
-        if nuevo {
+        if fuera_de_la_ronda {
             self.hosts.push_back(host);
         }
         self.pending += 1;
@@ -4453,6 +4535,35 @@ mod tests {
         let url = cola.next_dispatchable(&throttle, &en_vuelo).expect("la del host vivo");
         assert_eq!(url.host_str(), Some("vivo.example"));
         assert!(cola.next_dispatchable(&throttle, &en_vuelo).is_none());
+    }
+
+    /// El fallo que destapó registrar el destino externo de las redirecciones: un host que
+    /// vacía su cola y vuelve a recibir trabajo no regresaba a la ronda, y su sonda no la
+    /// despachaba nadie.
+    ///
+    /// Se ve con dos URLs del mismo host **descubiertas en momentos distintos**, que es lo
+    /// normal cuando llegan de dos redirecciones y no de la misma página. En `debug` rompía el
+    /// invariante del planificador; en `release`, la sonda se perdía y solo aparecía al final
+    /// como una externa «sin comprobar».
+    #[test]
+    fn a_host_that_empties_its_queue_comes_back_when_it_gets_more_work() {
+        let throttle = crate::throttle::Throttle::new(1);
+        let en_vuelo = HashMap::new();
+        let mut cola = ExternalQueue::default();
+
+        cola.push(externa("https://tienda.example/producto-vivo")).expect("cabe");
+        let primera = cola.next_dispatchable(&throttle, &en_vuelo).expect("la primera sale");
+        assert_eq!(primera.path(), "/producto-vivo");
+        assert_eq!(cola.pending(), 0, "la cola del host queda vacía");
+
+        // Segundo descubrimiento del mismo host, ya con su cola vacía.
+        cola.push(externa("https://tienda.example/producto-retirado")).expect("cabe");
+        assert_eq!(cola.pending(), 1);
+        let segunda = cola
+            .next_dispatchable(&throttle, &en_vuelo)
+            .expect("y la segunda también, que era el fallo");
+        assert_eq!(segunda.path(), "/producto-retirado");
+        assert_eq!(cola.pending(), 0, "no queda nada colgado");
     }
 
     // ── El alcance de una reanudación ────────────────────────────────────────

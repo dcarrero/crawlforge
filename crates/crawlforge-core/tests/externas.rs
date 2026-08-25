@@ -679,3 +679,69 @@ async fn un_recurso_externo_comprobado_deja_su_fila_en_resources() {
     assert_eq!(status, 200);
     assert_eq!(mime, "text/css");
 }
+
+#[tokio::test]
+async fn el_destino_externo_de_una_redireccion_deja_fila_y_se_comprueba() {
+    // El patrón del enlace de afiliado, o del acortador propio: `/go/producto` es una URL del
+    // sitio auditado que redirige a una tienda ajena. Cuando esa tienda retira el producto, el
+    // 404 lo cobra el sitio que enlaza, y hasta aquí era invisible: se veía el 301 de `/go/…`
+    // y su destino no existía como fila en ningún modo.
+    let ajeno = ServidorDePruebas::arrancar_como_otro_host(&[(
+        "/producto-vivo",
+        Respuesta::pagina("En venta", "<p>quedan tres</p>"),
+    )])
+    .await;
+    let propio = ServidorDePruebas::arrancar(&[
+        (
+            "/",
+            pagina_con("<a href=\"/go/vivo\">el bueno</a> <a href=\"/go/muerto\">el otro</a>"),
+        ),
+        ("/go/vivo", Respuesta::redirige(301, &ajeno.url_como_otro_host("/producto-vivo"))),
+        ("/go/muerto", Respuesta::redirige(301, &ajeno.url_como_otro_host("/producto-retirado"))),
+    ])
+    .await;
+
+    let tmp = Temporal::new("redireccion-externa");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+
+    let outcome = crawlforge_core::engine::run(job, &tmp.store()).await.expect("rastrear");
+    let conn = abrir(&tmp.store());
+
+    assert_eq!(
+        estado_externa(&conn, "/producto-vivo"),
+        Some(Some(200)),
+        "el destino externo que sigue vivo queda con su 200"
+    );
+    assert_eq!(
+        estado_externa(&conn, "/producto-retirado"),
+        Some(Some(404)),
+        "y el que cayó, con su 404: es todo el objeto de esta rama"
+    );
+    assert_eq!(outcome.metrics.externals_checked, 2, "dos destinos, dos sondas");
+
+    // La cadena queda recorrible: `redirect_to` resuelto a la fila del destino, que es lo que
+    // no ocurría cuando el destino no se registraba.
+    let (origen, destino, estado_destino): (String, String, Option<i64>) = conn
+        .query_row(
+            "SELECT o.url, t.url, t.status_code FROM urls o JOIN urls t ON t.id = o.redirect_to
+             WHERE o.path = '/go/muerto'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("el origen tiene su destino resuelto");
+    assert!(origen.ends_with("/go/muerto"));
+    assert!(destino.ends_with("/producto-retirado"));
+    assert_eq!(estado_destino, Some(404), "y el estado del destino se ve desde el origen");
+
+    // Sigue siendo solo estado: HEAD, y ni una página del sitio ajeno en el fichero.
+    assert_eq!(ajeno.metodos("/producto-retirado"), vec!["HEAD"]);
+    let paginas_ajenas: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pages p JOIN urls u ON u.id = p.url_id WHERE u.is_internal = 0",
+            [],
+            |r| r.get(0),
+        )
+        .expect("contar páginas externas");
+    assert_eq!(paginas_ajenas, 0, "el destino se comprueba, no se rastrea");
+}

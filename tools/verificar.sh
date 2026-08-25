@@ -2,13 +2,13 @@
 #
 # Lo mismo que hace el CI, en local y antes de subir.
 #
-# Existe por dos motivos. El primero es práctico: enterarse de que clippy protesta cuando ya has
-# hecho `push` cuesta un viaje de ida y vuelta. El segundo es que **el CI de GitHub Actions no
-# está operativo en este repositorio**: los trabajos se encolan y mueren en doce segundos sin
-# asignarse a ninguna máquina (`runner_name` vacío, cero pasos ejecutados), que es como se
-# manifiesta un repositorio privado sin minutos de Actions disponibles. El fichero
-# `.github/workflows/ci.yml` está escrito y es correcto; en cuanto la cuenta tenga minutos, corre
-# solo. Mientras tanto, esto.
+# Existe por un motivo práctico: enterarse de que clippy protesta cuando ya has hecho `push`
+# cuesta un viaje de ida y vuelta.
+#
+# Desde que el repositorio es público (2026-08-10) el CI de GitHub Actions sí corre en cada push,
+# así que esto ya no lo sustituye: lo adelanta. Mientras fue privado, los trabajos se encolaban y
+# morían en doce segundos sin asignarse a ninguna máquina —`runner_name` vacío, cero pasos—, que
+# es como se manifiesta una cuenta sin minutos de Actions.
 #
 # La regresión de rendimiento se ejecuta **siempre**, y en `--release`. No es opcional por una
 # razón aprendida a base de romperlo: un arreglo de seguridad de tres líneas hundió el modo

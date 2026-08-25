@@ -33,6 +33,9 @@
 //! | Tiempo | 23,8 s | 24,0 s |
 //! | Salida | 98,7 MB | 100,7 MB, 13 hojas |
 //!
+//! La medición es de cuando el libro tenía esas 13 hojas; `Resources` llegó después y no se
+//! ha vuelto a medir. El coste por hoja es constante en RAM, así que el pico no cambia.
+//!
 //! El gigabyte que queda no son las celdas: es el propio empaquetado del `.xlsx`, que comprime
 //! sobre un centenar de megabytes de XML. Se puede seguir bajando, pero conviene recordar el
 //! contexto: un libro con 1,5 millones de filas es un fichero que Excel abre con dificultad, y un
@@ -119,9 +122,14 @@ fn sheets() -> Vec<SheetSpec> {
         },
         // `inbound_links` es el número accionable: cuántos enlaces internos hay que reescribir
         // para dejar de pasar por el redirect.
+        //
+        // `to_status` es el estado del destino, y con externas comprobadas es la columna que
+        // enseña el caso caro: `/go/producto` → tienda ajena que devuelve 404. Sale vacía
+        // cuando el destino no se llegó a pedir.
         SheetSpec {
             name: "Redirects",
-            sql: "SELECT u.status_code, u.url, r.url AS redirect_to, u.redirect_chain_len,
+            sql: "SELECT u.status_code, u.url, r.url AS redirect_to, r.status_code AS to_status,
+                         u.redirect_chain_len,
                          (SELECT COUNT(*) FROM links l WHERE l.to_url_id = u.id) AS inbound_links
                   FROM urls u LEFT JOIN urls r ON r.id = u.redirect_to
                   WHERE u.status_code >= 300 AND u.status_code < 400
@@ -173,6 +181,22 @@ fn sheets() -> Vec<SheetSpec> {
                   JOIN urls p ON p.id = i.page_url_id
                   JOIN urls s ON s.id = i.src_url_id
                   ORDER BY i.alt_present, s.url",
+            severity_col: None,
+            requires_table: None,
+        },
+        // El peso de lo que cuelga de las páginas: CSS, JS, fuentes y vídeo. Una fila por URL
+        // de recurso, no por par (página, recurso) — esa arista solo existe para las imágenes
+        // (`docs/02-MODELO-DATOS.md §3.5`), así que aquí no se puede decir en cuántas páginas
+        // aparece cada uno; lo que sí se responde, y era el caso que justificaba la tabla, es
+        // «qué es lo más pesado que estoy sirviendo».
+        //
+        // De ahí el orden: el mayor arriba. Los de tamaño desconocido —un servidor sin
+        // `Content-Length`— caen al final solos, porque NULL ordena último en DESC.
+        SheetSpec {
+            name: "Resources",
+            sql: "SELECT r.size_bytes, r.kind, r.status_code, r.mime, u.url
+                  FROM resources r JOIN urls u ON u.id = r.url_id
+                  ORDER BY r.size_bytes DESC, u.url",
             severity_col: None,
             requires_table: None,
         },
@@ -918,6 +942,17 @@ mod tests {
         )
         .expect("issues");
 
+        // Tres recursos con pesos muy distintos y uno sin `Content-Length`: es lo que ordena
+        // la hoja `Resources`.
+        conn.execute(
+            "INSERT INTO resources (url_id, kind, status_code, size_bytes, mime)
+             VALUES (2, 'js',   200, 921600, 'application/javascript'),
+                    (3, 'css',  200,  14200, 'text/css'),
+                    (5, 'font', 200,   NULL, 'font/woff2')",
+            [],
+        )
+        .expect("resources");
+
         conn.execute(
             "INSERT INTO robots_txt (host, status_code, content, blocks_all, sitemap_count)
              VALUES ('sitio.es', 200, 'User-agent: *\nDisallow: /privado/\n', 0, 1)",
@@ -981,6 +1016,7 @@ mod tests {
             "Orphans",
             "Pages",
             "Images",
+            "Resources",
             "Links",
             "URLs",
             "Robots",
@@ -989,6 +1025,42 @@ mod tests {
         let real: Vec<&str> =
             std::iter::once("Summary").chain(sheets().iter().map(|s| s.name)).collect();
         assert_eq!(real, esperado);
+    }
+
+    /// La hoja existe para una pregunta: «¿qué es lo más pesado que estoy sirviendo?». Si el
+    /// orden se pierde, la hoja deja de responderla y vuelve a ser un volcado que nadie abre.
+    #[test]
+    fn la_hoja_de_recursos_pone_lo_pesado_arriba() {
+        let store = temp_path("recursos.sqlite");
+        {
+            let conn = crawl_file(&store);
+            poblar(&conn);
+        }
+        let conn = Connection::open(&store).expect("open");
+        let spec = sheets()
+            .into_iter()
+            .find(|s| s.name == "Resources")
+            .expect("the Resources sheet exists");
+
+        let mut stmt = conn.prepare(spec.sql).expect("the query compiles");
+        let filas: Vec<(Option<i64>, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .expect("query")
+            .map(|r| r.expect("row"))
+            .collect();
+
+        assert_eq!(filas.len(), 3, "the three resources are there");
+        assert_eq!(filas[0], (Some(921_600), "js".to_string()), "the 900 KB bundle first");
+        assert_eq!(filas[1], (Some(14_200), "css".to_string()));
+        assert_eq!(
+            filas[2],
+            (None, "font".to_string()),
+            "and the one without Content-Length last, not first: NULL sorts last in DESC"
+        );
+
+        drop(stmt);
+        drop(conn);
+        let _ = std::fs::remove_file(&store);
     }
 
     #[test]

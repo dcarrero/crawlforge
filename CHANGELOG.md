@@ -19,6 +19,49 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.9.0] — 2026-08-25
+
+### Added
+
+- **A `Resources` sheet in the XLSX export, and a `resources.csv`.** The table has been in the
+  schema since migration 001 and the crawler has been filling it since 0.8.0, but nothing could
+  read it: no sheet, no CSV, no report. The case that justified the table — a 900 KB `bundle.js`
+  served on every page of a template — could not be answered with any command.
+
+  One row per resource URL, not per (page, resource) pair: that edge only exists for images
+  (`docs/02-MODELO-DATOS.md §3.5`), so the sheet answers "what is the heaviest thing I am
+  serving", not "on how many pages". Sorted by size, largest first; resources whose server sent
+  no `Content-Length` sort last rather than first.
+
+- **The `Redirects` sheet now carries `to_status`**, the status code of the destination. With
+  external checks on — the default — that is the column that shows the expensive case at a
+  glance: a redirect of yours landing on someone else's 404.
+
+### Fixed
+
+- **The external destination of a redirect now gets a row, and a probe.** A `/go/product` URL
+  that redirects to another shop was recorded as a 301 and nothing else: its destination existed
+  in no mode, `redirect_to` was left unresolved, and no rule could say the far end was dead. This
+  is the pattern where links rot most, precisely because the destination belongs to someone else
+  and nobody tells you when it falls over.
+
+  The destination is now registered and status-checked exactly like an external link — same
+  budget (`max_external_urls`), same probe queue, same perimeter, same courtesy of one request in
+  flight per foreign host. It is still only a status check: HEAD, no parsing, no page row.
+
+  **This is a minor bump because rules start firing on data that did not exist before.**
+
+- **A foreign host whose probe queue emptied never came back to the round.** `ExternalQueue::push`
+  decided whether to put a host back in the dispatch round by asking "is this host new?", but a
+  host's entry outlives its queue — it holds the per-host budget and the failure streak — so the
+  second time a host was discovered its probe was queued and dispatched by nobody. In `debug` it
+  tripped the scheduler's own invariant; in `release` the probe was silently lost and surfaced at
+  the end as an external "not checked", with no reason given.
+
+  It needs two URLs of the same host discovered at **different moments**, which is exactly what
+  two redirects to the same shop do — so registering redirect destinations is what brought it to
+  the surface. Both fixes are covered by tests verified by reverting them and watching them fail.
+
 ## [0.8.0] — 2026-08-08
 
 ### Fixed
