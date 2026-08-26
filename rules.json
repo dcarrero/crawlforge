@@ -1,6 +1,22 @@
 {
-  "count": 59,
+  "count": 63,
   "rules": [
+    {
+      "category": "asset",
+      "description": {
+        "en": "A form's `action` points at a URL of yours returning 4xx or 5xx. The form looks fine, fills in fine and is lost on submit: one of the few defects that costs customers outright, and nobody finds out, because whoever hits it leaves without saying so. Only forms submitted with GET are checked —a search box, a catalogue filter—: checking a POST would mean submitting it, and this tool does not submit forms.",
+        "es": "El `action` de un formulario apunta a una URL propia que devuelve 4xx o 5xx. El formulario se ve bien, se rellena bien y se pierde al enviarlo: es de los pocos defectos que cuestan clientes directamente, y nadie se entera porque quien lo sufre se va sin avisar. Solo se comprueban los formularios que se envían por GET —un buscador, un filtro de catálogo—: comprobar un POST exigiría enviarlo, y esta herramienta no envía formularios."
+      },
+      "id": "ASSET-FORM-BROKEN",
+      "min_tier": "free",
+      "name": {
+        "en": "Form posting to a broken URL",
+        "es": "Formulario que envía a una URL rota"
+      },
+      "references": [],
+      "scope": "site",
+      "severity": "critical"
+    },
     {
       "category": "canonical",
       "description": {
@@ -220,6 +236,22 @@
       "name": {
         "en": "Broken CSS or JS",
         "es": "Hoja de estilo o script que no carga"
+      },
+      "references": [],
+      "scope": "site",
+      "severity": "high"
+    },
+    {
+      "category": "asset",
+      "description": {
+        "en": "An `<iframe>` on the page points at a URL of yours returning 4xx or 5xx, so the visitor sees a blank hole where the map, the video or the form should be. It leaves no trace in the containing page —the HTML is still valid— which is why it goes unnoticed for months.",
+        "es": "Un `<iframe>` de la página apunta a una URL propia que devuelve 4xx o 5xx, así que el visitante ve un hueco en blanco donde debería estar el mapa, el vídeo o el formulario. No deja rastro en la página que lo contiene —el HTML sigue siendo válido— y por eso pasa desapercibido durante meses."
+      },
+      "id": "ASSET-IFRAME-BROKEN",
+      "min_tier": "free",
+      "name": {
+        "en": "Broken embedded frame",
+        "es": "Marco embebido que no carga"
       },
       "references": [],
       "scope": "site",
@@ -596,6 +628,22 @@
     {
       "category": "asset",
       "description": {
+        "en": "The stylesheet is over 100 KB as delivered. The browser paints nothing until it has it, so these bytes cost more than a script's: they delay the whole first paint. That is why the bar is lower. It is nearly always a full framework shipped to use a tenth of it.",
+        "es": "La hoja de estilo supera los 100 KB tal como se sirve. El navegador no pinta nada hasta tenerla, así que estos bytes cuestan más que los de un script: retrasan la primera pintura entera. El umbral es más bajo por eso. Casi siempre es un framework completo servido para usar una décima parte."
+      },
+      "id": "ASSET-CSS-HEAVY",
+      "min_tier": "free",
+      "name": {
+        "en": "Oversized stylesheet",
+        "es": "Hoja de estilo demasiado pesada"
+      },
+      "references": [],
+      "scope": "site",
+      "severity": "medium"
+    },
+    {
+      "category": "asset",
+      "description": {
         "en": "The image is over 200 KB. It is the most common cause of a poor mobile LCP: it delays painting the main element and eats the bandwidth of a slow connection. Exporting it at the size it is actually displayed and serving WebP or AVIF is usually enough.",
         "es": "La imagen supera los 200 KB. Es la causa más frecuente de un LCP malo en móvil: retrasa la pintura del elemento principal y se come el ancho de banda de una conexión lenta. Suele bastar con exportarla al tamaño en que se muestra de verdad y servirla en WebP o AVIF."
       },
@@ -604,6 +652,22 @@
       "name": {
         "en": "Oversized image",
         "es": "Imagen demasiado pesada"
+      },
+      "references": [],
+      "scope": "site",
+      "severity": "medium"
+    },
+    {
+      "category": "asset",
+      "description": {
+        "en": "The script is over 250 KB as delivered. Every page that loads it pays for the download and, more to the point, for parsing and executing it on the main thread, which is where poor responsiveness on an ordinary phone comes from. It is usually a bundle nobody has split: work out what is needed for the first screen and load the rest separately.",
+        "es": "El script supera los 250 KB tal como se sirve. Cada página que lo carga paga su descarga y, sobre todo, el tiempo de analizarlo y ejecutarlo en el hilo principal, que es de donde sale una mala respuesta al primer toque en un móvil corriente. Suele ser un paquete que nadie ha dividido: mira qué parte hace falta en la primera pantalla y carga el resto aparte."
+      },
+      "id": "ASSET-JS-HEAVY",
+      "min_tier": "free",
+      "name": {
+        "en": "Oversized script",
+        "es": "Script demasiado pesado"
       },
       "references": [],
       "scope": "site",
@@ -946,5 +1010,5 @@
       "severity": "low"
     }
   ],
-  "rules_version": "0.9.2"
+  "rules_version": "0.10.0"
 }

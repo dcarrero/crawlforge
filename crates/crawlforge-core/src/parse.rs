@@ -757,6 +757,51 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                             Ok(())
                         }
                     }),
+                    // El destino de un formulario, **solo si se envía por GET**.
+                    //
+                    // Un `action` que se envía por POST no se puede comprobar sin enviar el
+                    // formulario, y este motor no envía formularios: pedirlo con GET no diría
+                    // si el envío funciona —un endpoint que solo acepta POST responde 405 al
+                    // GET, y uno mal escrito podría ejecutar algo—, así que la fila se
+                    // callaría o mentiría. Los formularios GET no tienen ese problema: el
+                    // estándar dice que un GET no debe tener efectos, y el buscador que
+                    // devuelve 404 tras una migración es un caso real y frecuente.
+                    //
+                    // El método se lee aquí y no se guarda: lo que la tabla necesita saber es
+                    // que ese destino llegó de un `<form>`, y lo que no está aquí es que no se
+                    // podía comprobar.
+                    element!("form[action]", {
+                        let acc = Rc::clone(&acc);
+                        move |el| {
+                            let action = match el.get_attribute("action") {
+                                Some(s) if !s.trim().is_empty() => s,
+                                _ => return Ok(()),
+                            };
+                            let method = el
+                                .get_attribute("method")
+                                .unwrap_or_default()
+                                .trim()
+                                .to_ascii_lowercase();
+                            // Sin `method` el estándar manda GET.
+                            if !method.is_empty() && method != "get" {
+                                return Ok(());
+                            }
+                            let mut a = acc.borrow_mut();
+                            let region = a.current_region();
+                            let position = a.link_position;
+                            a.link_position += 1;
+                            a.page.links.push(RawLink {
+                                href: action,
+                                anchor: None,
+                                rel: None,
+                                is_nofollow: false,
+                                element: LinkElement::Form,
+                                region,
+                                position,
+                            });
+                            Ok(())
+                        }
+                    }),
                     element!("iframe[src]", {
                         let acc = Rc::clone(&acc);
                         move |el| {

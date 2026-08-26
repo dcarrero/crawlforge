@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<!-- ASSET-IFRAME-BROKEN: el marco del mapa apunta a una URL propia que no existe, así que el
+     visitante ve un hueco en blanco donde debería estar el mapa. La página que lo contiene sigue
+     siendo HTML válido y no delata nada: por eso hace falta una regla.
+     Un fichero suelto basta —lo que provoca el defecto es que el destino falte— y por eso mismo
+     dispara además HTTP-404-INTERNAL: un iframe roto es también una URL interna que devuelve 404.
+     El segundo marco apunta a una página que sí existe... y no existe aquí, porque un fixture de
+     un fichero no tiene dónde ponerla; para eso está el test unitario de la regla. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Una página con el mapa de la tienda embebido</title>
+<meta name="description" content="Una descripción correcta, de longitud suficiente para no llamar la atención de otras reglas.">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<main><h1>Cómo llegar a la tienda</h1>
+<p>Debajo de este párrafo tendría que verse el mapa, y hace meses que no se ve.</p>
+<iframe src="/mapas/tienda-centro.html" title="Mapa de la tienda del centro" width="600" height="400"></iframe>
+</main>
+</body>
+</html>

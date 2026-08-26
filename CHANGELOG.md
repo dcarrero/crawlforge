@@ -19,6 +19,75 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.10.0] — 2026-08-26
+
+Four new rules and one change to what counts as your own site. Both halves are minor bumps by this
+project's own rule: rules start firing, and a rule that starts firing can break someone's CI gate.
+
+### Added
+
+- **`ASSET-JS-HEAVY` and `ASSET-CSS-HEAVY`.** The `resources` table has been filled since 0.8.0 and
+  got a sheet in 0.9.0, and until now nothing judged it: the number was there and no rule said
+  whether it was too much. A script over 250 KB as delivered, or a stylesheet over 100 KB, is now a
+  `medium` finding. The stylesheet bar is lower on purpose — CSS is render-blocking, so the same
+  bytes cost more — and the script bar sits above a normal framework runtime, so what it catches is
+  a bundle nobody split rather than a site that chose React.
+
+  **Only what the site serves itself.** A heavy script on someone else's CDN is not something the
+  owner can split, and its size arrives from a `HEAD` probe rather than a downloaded body, so
+  asserting on it would mean judging a number of a different quality.
+
+- **`ASSET-IFRAME-BROKEN`** (high): an `<iframe>` pointing at a URL of yours that returns 4xx or
+  5xx. The visitor sees a blank hole where the map or the video should be, the containing page
+  stays valid HTML, and nothing else in the report mentions it.
+
+- **`ASSET-FORM-BROKEN`** (critical): a form whose `action` points at a URL of yours that returns
+  4xx or 5xx. The form looks fine, fills in fine, and is lost on submit.
+
+  **GET forms only** — a search box, a catalogue filter. Checking a POST would mean submitting the
+  form, which this tool does not do, so the parser does not record those destinations at all: a row
+  that cannot be judged is worse than no row. The `<form action>` was in the link-element enum since
+  the beginning and the parser never emitted it, which is why the earlier attempt at this rule was
+  a false one.
+
+  It is the only `ASSET` rule at `critical`. A form that swallows what was typed costs customers
+  outright, and nobody reports it: whoever hits it leaves without saying so.
+
+### Changed
+
+- **The port is now part of "same site".** `is_internal` compared hosts only, so auditing
+  `http://localhost:3000` treated a link to `http://localhost:8080` as your own site: its pages
+  entered the internal count, its 404s were reported as `HTTP-404-INTERNAL`, and the link graph
+  mixed two different applications. In production this is rare; in development it is routine, and
+  development is exactly where the mode that audits a `dist/` before publishing gets used.
+
+  `https://example.com` and `https://example.com:443` still mean the same thing — the default port
+  for the scheme normalises away. **This is why the bump is minor:** on a site served on a
+  non-default port, findings move between the internal and external sides of the report.
+
+  Sitemap discovery derived its own bare host and had to be aligned, or a sitemap of your own site
+  served on an explicit port was discarded whole as "outside the audited site". The
+  authentication test caught it.
+
+### Performance
+
+- **Migration 010 indexes `links(element)`.** The two new embed rules filter on that column, and
+  without an index the plan was a full scan of the links table **for each of them**. Caught by the
+  release regression, which fell from 107,702 items per second to 81,169 — a 24% drop that the
+  test's own threshold would have let through. With the index it is back to 104,493, and the rest
+  is the honest cost of two more queries.
+
+  A first guess blamed the `is_internal` change for building a `String` per link. That was real —
+  it is called once per link of every page — and fixing it to compare without allocating bought
+  4%, not 24%. The scan was the cause. Both fixes stay, and a plan test now fails if that scan
+  ever comes back.
+
+### Documented
+
+- **A list is one site.** In `list` mode, "internal" is decided by the first URL in the file, so a
+  list mixing domains audits the first and treats the rest as external. The restriction was
+  undeclared; it is now in the manual, in both languages, until it is lifted.
+
 ## [0.9.2] — 2026-08-26
 
 ### Fixed

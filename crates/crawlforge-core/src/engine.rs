@@ -742,11 +742,12 @@ async fn run_with<F: Fetcher + 'static>(
     // tráfico a 10.000 URLs). Clonar el `Arc` es un incremento atómico.
     let job = Arc::new(job);
 
+    // La autoridad, no el host pelado: el puerto forma parte de «mismo sitio». Ver
+    // `normalize::is_internal`.
     let seed_host = seeds
         .first()
-        .and_then(|s| s.normalized.host_str())
-        .unwrap_or_default()
-        .to_string();
+        .map(|s| normalize::site_authority(&s.normalized))
+        .unwrap_or_default();
 
     // El perímetro de red del rastreo. Ver [`network_screen`] y `normalize::NetworkScreen`.
     //
@@ -2984,7 +2985,11 @@ async fn discover_sitemap_urls<F: Fetcher + 'static>(
     let Some(host) = seed.host_str() else {
         return (Vec::new(), Vec::new());
     };
-    let seed_host = host.to_string();
+    // La autoridad, no el host pelado: `is_internal` compara host **y puerto** desde la 0.10.0,
+    // y con el host solo, un sitemap del propio sitio servido en un puerto explícito se
+    // descartaba entero por «fuera del sitio auditado». `host` se sigue usando tal cual para el
+    // `robots.txt`, que es de un host y no de un puerto.
+    let seed_authority = normalize::site_authority(seed);
     let rules = load_host_rules(&**fetcher, cache, seed, host, job).await;
 
     // Una URL más que el presupuesto: el bucle de `run_with` necesita ver la que desborda
@@ -3049,7 +3054,7 @@ async fn discover_sitemap_urls<F: Fetcher + 'static>(
                     if !normalize::is_crawlable_scheme(&url) {
                         continue;
                     }
-                    if !normalize::is_internal(&url, &seed_host) && !job.limits.follow_external {
+                    if !normalize::is_internal(&url, &seed_authority) && !job.limits.follow_external {
                         tracing::debug!(
                             url = %url,
                             "sitemap fuera del sitio auditado: no se descarga"

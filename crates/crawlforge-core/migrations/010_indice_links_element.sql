@@ -1,0 +1,16 @@
+-- 010 · Índice sobre `links(element)`.
+--
+-- Lo piden las dos reglas de la 0.10.0 que buscan marcos y formularios rotos: su condición es
+-- `element = 'iframe'` o `element = 'form'`, y sin índice el plan era `SCAN l`, un recorrido
+-- entero de la tabla de enlaces **por cada una**. En un rastreo real de 145.191 enlaces eso ya
+-- se nota; en uno de un millón, la pasada final se para a esperar.
+--
+-- La columna tiene seis valores posibles, así que el índice no es selectivo *en general* —para
+-- `element = 'a'` no sirve de nada, y SQLite hará bien en ignorarlo—. Sirve justo donde hace
+-- falta: `iframe` y `form` son una fracción minúscula de los enlaces de cualquier sitio, y esas
+-- son las dos consultas que lo usan.
+--
+-- Se descartó un índice parcial (`WHERE element IN ('iframe','form')`), que sería más pequeño:
+-- las consultas pasan el elemento como parámetro y SQLite no puede demostrar que un parámetro
+-- satisface la condición del índice, así que no lo usaría.
+CREATE INDEX IF NOT EXISTS idx_links_element ON links(element);

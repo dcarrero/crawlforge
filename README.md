@@ -28,7 +28,7 @@ Eleven things fixed, one created. That is the report a snapshot cannot give you.
 **Crawls three ways.** Over HTTP, against a built directory (`dist/`, before you deploy), or over an
 exact list of URLs.
 
-**Evaluates 59 rules**, each with its own test fixture — indexability, HTTP status, meta, canonical,
+**Evaluates 63 rules**, each with its own test fixture — indexability, HTTP status, meta, canonical,
 content, assets and hreflang. The rules are the product: when one is wrong, you stop trusting the
 whole report.
 
@@ -89,7 +89,7 @@ same 300 URLs to both tools in list mode — status code, title, meta descriptio
 indexability. The one difference that did show up was ours, and it is
 [in the history](CHANGELOG.md): a `<br>` inside an `<h1>` was gluing the words around it.
 
-**59 rules, each with a fixture and a test.** A test asserts that no rule ships without one.
+**63 rules, each with a fixture and a test.** A test asserts that no rule ships without one.
 
 Anything else you read about speed should carry its conditions too. Comparisons run at different
 concurrency, on different machines, against different sites are not comparisons.

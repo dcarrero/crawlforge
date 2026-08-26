@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<!-- ASSET-FORM-BROKEN: el buscador de la tienda envía a una URL propia que devuelve 404. Se ve
+     bien, se rellena bien y no lleva a ninguna parte. Es de los pocos defectos que cuestan
+     clientes directamente, y no se entera nadie: quien lo sufre se va sin avisar.
+     El formulario se envía por GET, y no es un detalle del fixture sino el alcance de la regla:
+     comprobar un `action` que va por POST exigiría enviar el formulario, y esta herramienta no
+     envía formularios. Un buscador roto tras una migración de rutas es el caso real y frecuente.
+     El segundo formulario, el de alta, va por POST: está aquí para demostrar lo contrario, que
+     de ese no se dice nada, ni siquiera que su destino falte.
+     Como todo fixture cuyo defecto es una URL que no existe, dispara además HTTP-404-INTERNAL. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Una página cuyo buscador no lleva a ninguna parte</title>
+<meta name="description" content="Una descripción correcta, de longitud suficiente para no llamar la atención de otras reglas.">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<main><h1>Busca en el catálogo</h1>
+<form action="/buscar/resultados.html" method="get">
+<label for="q">Qué buscas</label>
+<input id="q" name="q" type="search">
+<button type="submit">Buscar</button>
+</form>
+<h2>Y si prefieres, te avisamos</h2>
+<form action="/alta/suscripcion.php" method="post">
+<label for="correo">Tu correo</label>
+<input id="correo" name="correo" type="email" required>
+<button type="submit">Darme de alta</button>
+</form>
+</main>
+</body>
+</html>

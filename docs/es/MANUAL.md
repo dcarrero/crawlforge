@@ -177,6 +177,12 @@ Un fichero con una URL por línea. Sirve para revisar un conjunto concreto —la
 campaña— y es también el modo que hace justa una comparación con otra herramienta: las dos reciben
 exactamente el mismo conjunto.
 
+**Una lista, un sitio.** Lo que cuenta como interno lo decide la primera URL del fichero, con su
+host y su puerto, así que una lista que mezcla dominios audita el primero y trata al resto como
+ajenos: sus páginas se registran y se les comprueba el estado, no se rastrean, y sus enlaces rotos
+salen como externos y no como internos. Es una restricción, no un fallo, y mientras siga ahí lo
+honesto es decirlo: una lista por sitio.
+
 ### Se ha cortado el rastreo
 
 ```bash

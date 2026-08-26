@@ -48,6 +48,10 @@ pub(crate) const MIGRATIONS: &[(&str, &str)] = &[
         "009_broken_links_sigue_redirecciones.sql",
         include_str!("../../crawlforge-core/migrations/009_broken_links_sigue_redirecciones.sql"),
     ),
+    (
+        "010_indice_links_element.sql",
+        include_str!("../../crawlforge-core/migrations/010_indice_links_element.sql"),
+    ),
 ];
 
 /// Creates `path` as a crawl file with the complete published schema.

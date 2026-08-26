@@ -23,6 +23,25 @@ use rusqlite::Connection;
 /// the visitor pays for, not over the dimensions declared in the HTML.
 pub const HEAVY_IMAGE_MAX_BYTES: i64 = 200 * 1024;
 
+/// From here on a script is "heavy": 250 KiB **as delivered**.
+///
+/// Measured over `resources.size_bytes`, the bytes the server actually sent, so a bundle served
+/// with compression is judged by what the visitor downloads and not by what it weighs on disk.
+/// A script this size is a parse-and-execute cost on the main thread of every page that loads
+/// it, which is where a bad INP comes from on a mid-range phone.
+///
+/// The threshold is deliberately above the usual framework runtime —React plus its DOM sits
+/// around 45 KB compressed— so what it catches is a bundle nobody has split, not a site that
+/// chose a framework.
+pub const HEAVY_SCRIPT_MAX_BYTES: i64 = 250 * 1024;
+
+/// From here on a stylesheet is "heavy": 100 KiB as delivered.
+///
+/// CSS is render-blocking: the browser paints nothing until it has it. That is why the bar is
+/// lower than for a script — the same bytes hurt more, and a sheet this size is almost always a
+/// whole framework shipped to use a tenth of it.
+pub const HEAVY_STYLESHEET_MAX_BYTES: i64 = 100 * 1024;
+
 /// How many URLs are kept in the `detail_json` of a page finding.
 ///
 /// A gallery can bring two hundred images without `alt`. The count stays complete; the list is
@@ -126,6 +145,88 @@ pub static ASSET_BROKEN: RuleMeta = RuleMeta {
               it, so a missing stylesheet can make it see an unstyled —hence not \
               mobile-friendly— page, and a missing script can leave client-rendered content \
               empty. It is typical of a deploy with mismatched file hashes.",
+    references: &[],
+};
+
+pub static ASSET_JS_HEAVY: RuleMeta = RuleMeta {
+    id: "ASSET-JS-HEAVY",
+    severity: Severity::Medium,
+    category: Category::Asset,
+    min_tier: Tier::Free,
+    scope: Scope::Site,
+    name_es: "Script demasiado pesado",
+    name_en: "Oversized script",
+    desc_es: "El script supera los 250 KB tal como se sirve. Cada página que lo carga paga su \
+              descarga y, sobre todo, el tiempo de analizarlo y ejecutarlo en el hilo principal, \
+              que es de donde sale una mala respuesta al primer toque en un móvil corriente. \
+              Suele ser un paquete que nadie ha dividido: mira qué parte hace falta en la \
+              primera pantalla y carga el resto aparte.",
+    desc_en: "The script is over 250 KB as delivered. Every page that loads it pays for the \
+              download and, more to the point, for parsing and executing it on the main thread, \
+              which is where poor responsiveness on an ordinary phone comes from. It is usually \
+              a bundle nobody has split: work out what is needed for the first screen and load \
+              the rest separately.",
+    references: &[],
+};
+
+pub static ASSET_CSS_HEAVY: RuleMeta = RuleMeta {
+    id: "ASSET-CSS-HEAVY",
+    severity: Severity::Medium,
+    category: Category::Asset,
+    min_tier: Tier::Free,
+    scope: Scope::Site,
+    name_es: "Hoja de estilo demasiado pesada",
+    name_en: "Oversized stylesheet",
+    desc_es: "La hoja de estilo supera los 100 KB tal como se sirve. El navegador no pinta nada \
+              hasta tenerla, así que estos bytes cuestan más que los de un script: retrasan la \
+              primera pintura entera. El umbral es más bajo por eso. Casi siempre es un \
+              framework completo servido para usar una décima parte.",
+    desc_en: "The stylesheet is over 100 KB as delivered. The browser paints nothing until it \
+              has it, so these bytes cost more than a script's: they delay the whole first \
+              paint. That is why the bar is lower. It is nearly always a full framework shipped \
+              to use a tenth of it.",
+    references: &[],
+};
+
+pub static ASSET_IFRAME_BROKEN: RuleMeta = RuleMeta {
+    id: "ASSET-IFRAME-BROKEN",
+    severity: Severity::High,
+    category: Category::Asset,
+    min_tier: Tier::Free,
+    scope: Scope::Site,
+    name_es: "Marco embebido que no carga",
+    name_en: "Broken embedded frame",
+    desc_es: "Un `<iframe>` de la página apunta a una URL propia que devuelve 4xx o 5xx, así que \
+              el visitante ve un hueco en blanco donde debería estar el mapa, el vídeo o el \
+              formulario. No deja rastro en la página que lo contiene —el HTML sigue siendo \
+              válido— y por eso pasa desapercibido durante meses.",
+    desc_en: "An `<iframe>` on the page points at a URL of yours returning 4xx or 5xx, so the \
+              visitor sees a blank hole where the map, the video or the form should be. It \
+              leaves no trace in the containing page —the HTML is still valid— which is why it \
+              goes unnoticed for months.",
+    references: &[],
+};
+
+pub static ASSET_FORM_BROKEN: RuleMeta = RuleMeta {
+    id: "ASSET-FORM-BROKEN",
+    severity: Severity::Critical,
+    category: Category::Asset,
+    min_tier: Tier::Free,
+    scope: Scope::Site,
+    name_es: "Formulario que envía a una URL rota",
+    name_en: "Form posting to a broken URL",
+    desc_es: "El `action` de un formulario apunta a una URL propia que devuelve 4xx o 5xx. El \
+              formulario se ve bien, se rellena bien y se pierde al enviarlo: es de los pocos \
+              defectos que cuestan clientes directamente, y nadie se entera porque quien lo \
+              sufre se va sin avisar. Solo se comprueban los formularios que se envían por GET \
+              —un buscador, un filtro de catálogo—: comprobar un POST exigiría enviarlo, y esta \
+              herramienta no envía formularios.",
+    desc_en: "A form's `action` points at a URL of yours returning 4xx or 5xx. The form looks \
+              fine, fills in fine and is lost on submit: one of the few defects that costs \
+              customers outright, and nobody finds out, because whoever hits it leaves without \
+              saying so. Only forms submitted with GET are checked —a search box, a catalogue \
+              filter—: checking a POST would mean submitting it, and this tool does not submit \
+              forms.",
     references: &[],
 };
 
@@ -457,12 +558,149 @@ impl SiteRule for AssetBroken {
     }
 }
 
+/// A script or a stylesheet the site serves, over its weight limit.
+///
+/// The two rules are one implementation with two sets of numbers: same query, same shape of
+/// finding, different `kind` and different threshold. Writing them twice would mean two places
+/// to fix the day the query grows a condition.
+///
+/// **Only what the site serves itself** (`is_internal = 1`). A heavy script from someone else's
+/// CDN is not something the owner can split, and its size arrives from a `HEAD` probe rather
+/// than from a body actually downloaded, so asserting on it would be judging a number of a
+/// different quality. The rule stays where its advice is actionable.
+///
+/// Reads `resources`, the table the crawler fills with one row per resource URL. That is also
+/// why the finding cannot say how many pages carry the weight: the page-to-resource edge only
+/// exists for images (`docs/02-MODELO-DATOS.md §3.5`).
+struct HeavyResource {
+    meta: &'static RuleMeta,
+    kind: &'static str,
+    max_bytes: i64,
+}
+
+impl SiteRule for HeavyResource {
+    fn meta(&self) -> &'static RuleMeta {
+        self.meta
+    }
+
+    fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
+        let mut stmt = conn.prepare(
+            "SELECT u.url_hash, u.url, r.size_bytes
+             FROM resources r
+             JOIN urls u ON u.id = r.url_id
+             WHERE r.kind = ?1
+               AND r.status_code = 200
+               AND u.is_internal = 1
+               AND r.size_bytes > ?2
+             ORDER BY r.size_bytes DESC",
+        )?;
+
+        let rows = stmt.query_map(rusqlite::params![self.kind, self.max_bytes], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (hash, url, bytes) = row?;
+            out.push((
+                Some(hash),
+                Issue::new(self.meta).with_detail(serde_json::json!({
+                    "url": url,
+                    "bytes": bytes,
+                    "limit_bytes": self.max_bytes,
+                })),
+            ));
+        }
+        Ok(out)
+    }
+}
+
+/// An `<iframe>` or a `<form>` pointing at a URL of the site that answers 4xx or 5xx.
+///
+/// Same shape for both, and the same reason to exist: neither leaves a mark on the page that
+/// contains it. The HTML stays valid, nothing looks wrong in the source, and the defect only
+/// shows up to whoever tries to use it — a blank frame, or a form that swallows what was typed.
+///
+/// **Internal destinations only**, like [`AssetBroken`]: a foreign 403 to a bot probe says
+/// nothing about what a visitor's browser gets, and that volatility must not enter through this
+/// rule. An embedded map from another provider is exactly the case that would flap.
+///
+/// One finding per broken destination, not per page that embeds it: it is normally a template,
+/// and the count plus a couple of examples say more than four hundred identical rows.
+struct BrokenEmbed {
+    meta: &'static RuleMeta,
+    element: &'static str,
+}
+
+impl SiteRule for BrokenEmbed {
+    fn meta(&self) -> &'static RuleMeta {
+        self.meta
+    }
+
+    fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
+        let mut stmt = conn.prepare(
+            "SELECT ut.url_hash, ut.url, ut.status_code,
+                    COUNT(DISTINCT l.from_url_id) AS pages,
+                    MIN(uf.url) AS ejemplo
+             FROM links l
+             JOIN urls ut ON ut.id = l.to_url_id
+             JOIN urls uf ON uf.id = l.from_url_id
+             WHERE l.element = ?1
+               AND ut.is_internal = 1
+               AND ut.status_code >= 400
+             GROUP BY ut.id
+             ORDER BY pages DESC, ut.url",
+        )?;
+
+        let rows = stmt.query_map([self.element], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (hash, url, status, pages, ejemplo) = row?;
+            out.push((
+                Some(hash),
+                Issue::new(self.meta).with_detail(serde_json::json!({
+                    "url": url,
+                    "status": status,
+                    "used_by_pages": pages,
+                    "example_page": ejemplo,
+                })),
+            ));
+        }
+        Ok(out)
+    }
+}
+
 pub(crate) fn page_rules() -> Vec<Box<dyn PageRule>> {
     vec![Box::new(AssetImgNoAlt), Box::new(AssetImgEmptyAltLink)]
 }
 
 pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
-    vec![Box::new(AssetImgBroken), Box::new(AssetImgHeavy), Box::new(AssetBroken)]
+    vec![
+        Box::new(AssetImgBroken),
+        Box::new(AssetImgHeavy),
+        Box::new(AssetBroken),
+        Box::new(HeavyResource {
+            meta: &ASSET_JS_HEAVY,
+            kind: "js",
+            max_bytes: HEAVY_SCRIPT_MAX_BYTES,
+        }),
+        Box::new(HeavyResource {
+            meta: &ASSET_CSS_HEAVY,
+            kind: "css",
+            max_bytes: HEAVY_STYLESHEET_MAX_BYTES,
+        }),
+        Box::new(BrokenEmbed { meta: &ASSET_IFRAME_BROKEN, element: "iframe" }),
+        Box::new(BrokenEmbed { meta: &ASSET_FORM_BROKEN, element: "form" }),
+    ]
 }
 
 #[cfg(test)]
@@ -477,6 +715,45 @@ mod tests {
     /// hid the real `src` in `data-src` and the parser did not read it—. When that was fixed
     /// on 2026-08-02, a news site's table went from 0 to 4,409,298 rows in the same crawl and
     /// the final pass stretched to hours.
+    /// Las reglas de marco y formulario no pueden recorrer `links` entero.
+    ///
+    /// Es el mismo defecto que el de abajo, encontrado el mismo día que nacieron: el plan era
+    /// `SCAN l` **por cada una de las dos**, y en la medición de regresión eso costó un 24% del
+    /// rendimiento —de 107.702 elementos por segundo a 81.169—. La migración 010 puso el índice
+    /// y devolvió el número a 104.493. Un test de plan, y no de tiempo, porque el tiempo mide
+    /// también la máquina.
+    #[test]
+    fn the_embed_rules_do_not_scan_the_whole_links_table() {
+        let conn = crate::test_schema::full_schema();
+
+        let mut stmt = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT ut.url_hash, COUNT(DISTINCT l.from_url_id)
+                 FROM links l
+                 JOIN urls ut ON ut.id = l.to_url_id
+                 JOIN urls uf ON uf.id = l.from_url_id
+                 WHERE l.element = 'iframe' AND ut.is_internal = 1 AND ut.status_code >= 400
+                 GROUP BY ut.id",
+            )
+            .expect("prepare the plan");
+        let plan: String = stmt
+            .query_map([], |r| r.get::<_, String>(3))
+            .expect("read the plan")
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        assert!(
+            !plan.contains("SCAN l"),
+            "los enlaces no se pueden recorrer enteros para buscar dos elementos: {plan}"
+        );
+        assert!(
+            plan.contains("idx_links_element"),
+            "la búsqueda tiene que entrar por su índice, y el plan dice: {plan}"
+        );
+    }
+
     #[test]
     fn the_image_rules_join_has_an_index_to_enter_through() {
         let conn = crate::test_schema::full_schema();
@@ -1046,5 +1323,158 @@ mod tests {
         assert!(AssetImgBroken.evaluate(&conn).expect("evaluate").is_empty());
         assert!(AssetImgHeavy.evaluate(&conn).expect("evaluate").is_empty());
         assert!(AssetBroken.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    // --- ASSET-JS-HEAVY · ASSET-CSS-HEAVY · ASSET-IFRAME-BROKEN · ASSET-FORM-BROKEN ---
+
+    /// Esquema real con una URL y su fila de `resources`, que es lo que leen las reglas de peso.
+    fn db_recursos() -> Connection {
+        let conn = crate::test_schema::full_schema();
+        conn.pragma_update(None, "foreign_keys", false).expect("disable foreign keys");
+        conn
+    }
+
+    fn recurso(conn: &Connection, id: i64, url: &str, interno: bool, kind: &str, bytes: i64) {
+        conn.execute(
+            "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
+                               crawl_state, status_code)
+             VALUES (?1, ?2, ?1, 'https', 'ejemplo.es', '/', ?3, 0, 'done', 200)",
+            rusqlite::params![id, url, interno as i64],
+        )
+        .expect("insertar url");
+        conn.execute(
+            "INSERT INTO resources (url_id, kind, status_code, size_bytes, mime)
+             VALUES (?1, ?2, 200, ?3, NULL)",
+            rusqlite::params![id, kind, bytes],
+        )
+        .expect("insertar recurso");
+    }
+
+    fn regla_js() -> HeavyResource {
+        HeavyResource { meta: &ASSET_JS_HEAVY, kind: "js", max_bytes: HEAVY_SCRIPT_MAX_BYTES }
+    }
+
+    #[test]
+    fn a_script_over_the_limit_is_reported_and_one_under_it_is_not() {
+        let conn = db_recursos();
+        recurso(&conn, 1, "https://ejemplo.es/js/tienda.js", true, "js", HEAVY_SCRIPT_MAX_BYTES + 1);
+        recurso(&conn, 2, "https://ejemplo.es/js/poco.js", true, "js", HEAVY_SCRIPT_MAX_BYTES - 1);
+
+        let hallazgos = regla_js().evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1, "solo el que se pasa");
+        assert_eq!(hallazgos[0].1.rule_id, "ASSET-JS-HEAVY");
+        let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
+        assert!(detalle.contains("tienda.js"), "el detalle nombra el fichero: {detalle}");
+    }
+
+    #[test]
+    fn the_limit_itself_is_not_over_the_limit() {
+        // Justo en el umbral no se avisa: `>` y no `>=`, igual que en ASSET-IMG-HEAVY.
+        let conn = db_recursos();
+        recurso(&conn, 1, "https://ejemplo.es/js/justo.js", true, "js", HEAVY_SCRIPT_MAX_BYTES);
+        assert!(regla_js().evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn a_heavy_script_from_someone_else_is_not_reported() {
+        // No es algo que el dueño del sitio pueda dividir, y su tamaño viene de una sonda `HEAD`
+        // y no de un cuerpo descargado: afirmar sobre él sería juzgar un número de otra calidad.
+        let conn = db_recursos();
+        recurso(&conn, 1, "https://cdn-ajeno.com/todo.js", false, "js", HEAVY_SCRIPT_MAX_BYTES * 4);
+        assert!(regla_js().evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn each_weight_rule_looks_only_at_its_own_kind() {
+        // Una hoja de 200 KB pasa del umbral del CSS y no del de un script. Si las dos reglas
+        // compartieran filtro, esa hoja saldría dos veces y una de ellas con el nombre cambiado.
+        let conn = db_recursos();
+        recurso(&conn, 1, "https://ejemplo.es/css/framework.css", true, "css", 200 * 1024);
+
+        let css = HeavyResource {
+            meta: &ASSET_CSS_HEAVY,
+            kind: "css",
+            max_bytes: HEAVY_STYLESHEET_MAX_BYTES,
+        };
+        assert_eq!(css.evaluate(&conn).expect("evaluate").len(), 1, "el CSS sí");
+        assert!(regla_js().evaluate(&conn).expect("evaluate").is_empty(), "la regla del JS no");
+    }
+
+    /// Inserta una página que embebe algo, y el destino con su estado.
+    fn embebido(conn: &Connection, element: &str, destino_interno: bool, estado: i64) {
+        conn.execute(
+            "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
+                               crawl_state, status_code)
+             VALUES (1, 'https://ejemplo.es/pagina', 1, 'https', 'ejemplo.es', '/pagina', 1, 0,
+                     'done', 200)",
+            [],
+        )
+        .expect("insertar página");
+        conn.execute(
+            "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
+                               crawl_state, status_code)
+             VALUES (2, 'https://ejemplo.es/destino', 2, 'https', 'ejemplo.es', '/destino', ?1, 0,
+                     'done', ?2)",
+            rusqlite::params![destino_interno as i64, estado],
+        )
+        .expect("insertar destino");
+        conn.execute(
+            "INSERT INTO links (from_url_id, to_url_id, anchor, rel, is_nofollow, element,
+                                region, position)
+             VALUES (1, 2, NULL, NULL, 0, ?1, 'main', 0)",
+            [element],
+        )
+        .expect("insertar enlace");
+    }
+
+    #[test]
+    fn a_broken_iframe_is_reported_with_the_page_that_embeds_it() {
+        let conn = db_recursos();
+        embebido(&conn, "iframe", true, 404);
+        let regla = BrokenEmbed { meta: &ASSET_IFRAME_BROKEN, element: "iframe" };
+        let hallazgos = regla.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1);
+        assert_eq!(hallazgos[0].1.rule_id, "ASSET-IFRAME-BROKEN");
+        let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
+        assert!(detalle.contains("/pagina"), "dice en qué página está: {detalle}");
+    }
+
+    #[test]
+    fn an_iframe_pointing_somewhere_alive_is_not_reported() {
+        let conn = db_recursos();
+        embebido(&conn, "iframe", true, 200);
+        let regla = BrokenEmbed { meta: &ASSET_IFRAME_BROKEN, element: "iframe" };
+        assert!(regla.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn someone_elses_broken_embed_is_not_ours_to_report() {
+        // Un 403 de un proveedor a una sonda de bot no dice nada de lo que ve el visitante, y esa
+        // volatilidad no puede entrar por esta regla. Es la misma restricción de ASSET-BROKEN.
+        let conn = db_recursos();
+        embebido(&conn, "iframe", false, 403);
+        let regla = BrokenEmbed { meta: &ASSET_IFRAME_BROKEN, element: "iframe" };
+        assert!(regla.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn a_broken_form_target_is_reported_as_critical() {
+        let conn = db_recursos();
+        embebido(&conn, "form", true, 404);
+        let regla = BrokenEmbed { meta: &ASSET_FORM_BROKEN, element: "form" };
+        let hallazgos = regla.evaluate(&conn).expect("evaluate");
+        assert_eq!(hallazgos.len(), 1);
+        assert_eq!(hallazgos[0].1.severity, Severity::Critical, "un formulario perdido cuesta clientes");
+    }
+
+    #[test]
+    fn the_two_embed_rules_do_not_read_each_others_rows() {
+        let conn = db_recursos();
+        embebido(&conn, "form", true, 404);
+        let iframe = BrokenEmbed { meta: &ASSET_IFRAME_BROKEN, element: "iframe" };
+        assert!(
+            iframe.evaluate(&conn).expect("evaluate").is_empty(),
+            "un formulario roto no es un marco roto"
+        );
     }
 }

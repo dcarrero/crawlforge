@@ -2,7 +2,7 @@
 
 **Auditoría SEO técnica para quien gestiona muchos sitios, no uno.**
 
-CrawlForge rastrea un sitio propio, extrae lo que importa para el posicionamiento, evalúa 59 reglas
+CrawlForge rastrea un sitio propio, extrae lo que importa para el posicionamiento, evalúa 63 reglas
 de auditoría y lo guarda todo en un único fichero SQLite. Después puede decirte qué cambió desde el
 rastreo anterior, que es lo que convierte una auditoría suelta en algo que puedes repetir cada
 semana.
@@ -29,7 +29,7 @@ Once cosas arregladas, una creada. Ese es el informe que una foto no puede darte
 **Rastrea de tres maneras.** Por HTTP, contra una carpeta compilada (`dist/`, antes de publicar) o
 sobre una lista exacta de URLs.
 
-**Evalúa 59 reglas**, cada una con su caso de prueba: indexabilidad, estado HTTP, meta, canonical,
+**Evalúa 63 reglas**, cada una con su caso de prueba: indexabilidad, estado HTTP, meta, canonical,
 contenido, recursos y hreflang. Las reglas son el producto: si una se equivoca, dejas de fiarte del
 informe entero.
 
@@ -94,7 +94,7 @@ mismas 300 URLs a las dos herramientas en modo lista: código de estado, título
 H1, canonical e indexabilidad. La única diferencia que apareció era nuestra, y está
 [en el historial](CHANGELOG.md): un `<br>` dentro de un `<h1>` juntaba las palabras de los extremos.
 
-**59 reglas, cada una con fixture y test.** Hay un test que falla si alguna se publica sin él.
+**63 reglas, cada una con fixture y test.** Hay un test que falla si alguna se publica sin él.
 
 Cualquier otra cosa que leas sobre velocidad debería venir también con sus condiciones. Comparar
 ejecuciones con concurrencias distintas, en máquinas distintas o sobre sitios distintos no es
@@ -105,7 +105,7 @@ comparar.
 ```
 crates/
   crawlforge-core/      rastreo, parseo, motor de reglas, almacén SQLite
-  crawlforge-rules/     las 59 reglas de auditoría
+  crawlforge-rules/     las 63 reglas de auditoría
   crawlforge-cli/       el binario
   crawlforge-adapters/  WordPress y Astro
   crawlforge-ffi/       bindings C y Swift

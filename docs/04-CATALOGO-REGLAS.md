@@ -204,6 +204,23 @@ characters, and it matters even more in Spanish because the words are longer.
 | `ASSET-IMG-LEGACY-FORMAT` | low | page | pro | JPEG/PNG without a WebP/AVIF alternative |
 | `ASSET-IMG-NO-DIMENSIONS` | medium | page | pro | No `width`/`height` (causes CLS) |
 | `ASSET-BROKEN` | high | site | free | CSS or JS that returns 4xx/5xx (own host) or 404/410 (foreign host, see §3 note) |
+| `ASSET-JS-HEAVY` | medium | site | free | Own script > 250 KB as delivered |
+| `ASSET-CSS-HEAVY` | medium | site | free | Own stylesheet > 100 KB as delivered |
+| `ASSET-IFRAME-BROKEN` | high | site | free | `<iframe src>` pointing at an own URL that returns 4xx/5xx |
+| `ASSET-FORM-BROKEN` | critical | site | free | `<form action>` (GET only) pointing at an own URL that returns 4xx/5xx |
+
+**Added in 0.10.0.** The two weight rules read `resources`, the table the crawler has been filling
+since 0.8.0 and that nothing could judge until now: the sheet showed the number and no rule said
+whether it was too much. They only look at what the site serves itself — a heavy script on someone
+else's CDN is not something the owner can split, and its size arrives from a `HEAD` probe rather
+than a downloaded body. The stylesheet bar is lower than the script one on purpose: CSS is
+render-blocking, so the same bytes cost more.
+
+`ASSET-FORM-BROKEN` covers **only forms submitted with GET** — a search box, a catalogue filter.
+Checking a POST would mean submitting the form, which this tool does not do, so the parser does not
+even record those destinations: a row that cannot be judged is worse than no row. The severity is
+`critical` and it is the only `ASSET` rule that is: a form that loses what was typed costs
+customers outright, and nobody reports it, because whoever hits it leaves without saying so.
 
 **Scope correction (2026-07-30):** `ASSET-IMG-HEAVY` was listed as `page` and it is `site`. An
 image's weight is not in the HTML —`width` and `height` declare layout, not bytes— so it cannot be

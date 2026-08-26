@@ -176,6 +176,12 @@ A file with one URL per line. Useful for reviewing a specific set — the 40 lan
 campaign — and it is also what makes a comparison with another tool fair: both receive exactly
 the same set.
 
+**One site per list.** "Internal" is decided by the first URL in the file — its host and its port
+— so a list mixing domains audits the first one and treats the rest as somebody else's: their
+pages are recorded and status-checked, not crawled, and their broken links are reported as
+external rather than internal. It is a restriction, not a bug, and until it is lifted the honest
+thing is to say so: one list per site.
+
 ### The crawl was interrupted
 
 ```bash
