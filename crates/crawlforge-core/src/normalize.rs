@@ -6,7 +6,7 @@
 //! Se conservan **ambas** formas: la URL tal como aparecía en el HTML (para los informes) y la
 //! normalizada (para deduplicar). Ver [`NormalizedUrl`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use url::Url;
@@ -231,6 +231,95 @@ pub fn is_internal(url: &Url, seed_authority: &str) -> bool {
             };
             seed_host.eq_ignore_ascii_case(host) && seed_port.parse::<u16>() == Ok(port)
         }
+    }
+}
+
+/// The sites a crawl audits: the authority of each seed, without repeats.
+///
+/// One in `http` and `filesystem` mode. In `list` mode, every site in the list — and until 0.11.0
+/// it was not: "internal" was decided by the first line of the file, so a list mixing the blogs of
+/// a portfolio audited the first one and treated the rest as somebody else's. Their pages were
+/// status-probed instead of audited, and their 404s came out as external.
+///
+/// There are **two different questions** here, and they must not be confused:
+///
+/// - [`SiteScope::contains`] — does this URL belong to one of the audited sites? It decides what
+///   is fetched, what is probed, and the `urls.is_internal` column.
+/// - [`SiteScope::is_internal_link`] — does this link stay inside the site of the page that
+///   carries it? With one site it is the same question. With several it is not: a link from blog
+///   A to blog B leaves A even though B is audited too, and counting it as internal would fire
+///   `INDEX-NOFOLLOW-INTERNAL` on every `nofollow` link between two sites of the portfolio.
+#[derive(Debug, Clone)]
+pub enum SiteScope {
+    /// The usual case, with the allocation-free comparison of [`is_internal`]. This is the hot
+    /// path —one call per link of every page— and it must not pay for a hash because of a sibling
+    /// that is rarely used.
+    Single(String),
+    /// Several sites: host → accepted explicit ports (`None` = the scheme's default). Looked up by
+    /// host with a `&str`, without building the authority: a list can carry thousands of domains,
+    /// and walking them one by one for every link would be quadratic.
+    Many(HashMap<String, Vec<Option<u16>>>),
+}
+
+impl SiteScope {
+    /// The scope of a set of seeds. With none, an empty scope that admits nothing.
+    ///
+    /// Hosts are keyed as `host_str` gives them, which for `http` and `https` is already
+    /// lowercase: `Url` runs the domain through IDNA. Every URL the engine compares went through
+    /// the same parser, so the lookup can be exact.
+    pub fn of_seeds<'a>(seeds: impl IntoIterator<Item = &'a Url>) -> Self {
+        let mut sites: HashMap<String, Vec<Option<u16>>> = HashMap::new();
+        let mut first: Option<String> = None;
+        for url in seeds {
+            let Some(host) = url.host_str() else { continue };
+            first.get_or_insert_with(|| site_authority(url));
+            let ports = sites.entry(host.to_string()).or_default();
+            if !ports.contains(&url.port()) {
+                ports.push(url.port());
+            }
+        }
+        let authorities: usize = sites.values().map(Vec::len).sum();
+        match first {
+            Some(authority) if authorities == 1 => SiteScope::Single(authority),
+            Some(_) => SiteScope::Many(sites),
+            None => SiteScope::Single(String::new()),
+        }
+    }
+
+    /// Does it audit more than one site? Only `list` mode can.
+    pub fn is_multi_site(&self) -> bool {
+        matches!(self, SiteScope::Many(_))
+    }
+
+    /// Does this URL belong to one of the audited sites?
+    pub fn contains(&self, url: &Url) -> bool {
+        match self {
+            SiteScope::Single(authority) => is_internal(url, authority),
+            SiteScope::Many(sites) => url
+                .host_str()
+                .and_then(|host| sites.get(host))
+                .is_some_and(|ports| ports.contains(&url.port())),
+        }
+    }
+
+    /// Does this link stay inside the site of the page that carries it?
+    ///
+    /// With one site it is [`contains`](Self::contains) on the target, exactly as before — also
+    /// for the foreign pages that `follow_external` crawls. With several, the target has to be on
+    /// the **same** site as the page, and that site has to be one of the audited ones.
+    pub fn is_internal_link(&self, page: &Url, target: &Url) -> bool {
+        match self {
+            SiteScope::Single(_) => self.contains(target),
+            SiteScope::Many(_) => same_site(page, target) && self.contains(target),
+        }
+    }
+}
+
+/// Do two URLs share an authority? The criterion of [`site_authority`], without building it.
+fn same_site(a: &Url, b: &Url) -> bool {
+    match (a.host_str(), b.host_str()) {
+        (Some(x), Some(y)) => x.eq_ignore_ascii_case(y) && a.port() == b.port(),
+        _ => false,
     }
 }
 
@@ -923,6 +1012,110 @@ mod tests {
         let sin_puerto = Url::parse("https://ejemplo.es/a").expect("URL válida");
         assert_eq!(site_authority(&con_puerto), site_authority(&sin_puerto));
         assert!(is_internal(&con_puerto, "ejemplo.es"));
+    }
+
+    fn urls(raw: &[&str]) -> Vec<Url> {
+        raw.iter()
+            .map(|r| Url::parse(r).expect("valid test URL"))
+            .collect()
+    }
+
+    /// Many URLs of one site are one site: the hot path keeps its allocation-free comparison,
+    /// whatever the mode. `filesystem` seeds with every page of the directory.
+    #[test]
+    fn many_seeds_of_one_site_stay_on_the_single_site_path() {
+        let seeds = urls(&[
+            "https://ejemplo.es/",
+            "https://ejemplo.es/a",
+            "https://ejemplo.es:443/b",
+        ]);
+        let scope = SiteScope::of_seeds(&seeds);
+        assert!(
+            matches!(scope, SiteScope::Single(ref a) if a == "ejemplo.es"),
+            "{scope:?}"
+        );
+        assert!(!scope.is_multi_site());
+    }
+
+    #[test]
+    fn a_scope_of_several_sites_admits_each_of_them_and_nothing_else() {
+        let seeds = urls(&[
+            "https://blog-uno.es/post",
+            "https://blog-dos.es/",
+            "http://localhost:3000/",
+        ]);
+        let scope = SiteScope::of_seeds(&seeds);
+        assert!(scope.is_multi_site());
+
+        let admits = |raw: &str| scope.contains(&Url::parse(raw).expect("valid test URL"));
+        assert!(
+            admits("https://blog-uno.es/otra"),
+            "any page of a listed site"
+        );
+        assert!(
+            admits("https://BLOG-DOS.es/x"),
+            "the parser lowercases the host"
+        );
+        assert!(
+            admits("https://blog-dos.es:443/x"),
+            "the scheme's default port is no port"
+        );
+        assert!(admits("http://localhost:3000/panel"));
+        assert!(
+            !admits("http://localhost:8080/panel"),
+            "another port is another site"
+        );
+        assert!(
+            !admits("https://www.blog-uno.es/"),
+            "a subdomain is another site"
+        );
+        assert!(!admits("https://ajeno.es/"));
+    }
+
+    /// Two ports of one host are two sites, and the host alone must not merge them.
+    #[test]
+    fn two_ports_of_one_host_are_two_sites() {
+        let scope =
+            SiteScope::of_seeds(&urls(&["http://localhost:3000/", "http://localhost:4321/"]));
+        assert!(scope.is_multi_site());
+        let admits = |raw: &str| scope.contains(&Url::parse(raw).expect("valid test URL"));
+        assert!(admits("http://localhost:3000/a") && admits("http://localhost:4321/a"));
+        assert!(
+            !admits("http://localhost/a"),
+            "no port is port 80, which was not listed"
+        );
+    }
+
+    #[test]
+    fn a_link_is_internal_only_within_the_site_of_its_page() {
+        let [uno, dos, ajeno] = [
+            "https://blog-uno.es/post",
+            "https://blog-dos.es/",
+            "https://ajeno.es/",
+        ]
+        .map(|r| Url::parse(r).expect("valid test URL"));
+        let many = SiteScope::of_seeds([&uno, &dos]);
+        assert!(many.is_internal_link(&uno, &Url::parse("https://blog-uno.es/x").expect("valid")));
+        assert!(
+            !many.is_internal_link(&uno, &dos),
+            "to a sister site is leaving the page's site"
+        );
+        assert!(
+            !many.is_internal_link(&ajeno, &Url::parse("https://ajeno.es/x").expect("valid")),
+            "same site, but not an audited one"
+        );
+
+        // With one site nothing changes: the target decides, as it always did — also on a
+        // foreign page crawled with `follow_external`.
+        let single = SiteScope::of_seeds([&uno]);
+        assert!(single.is_internal_link(&ajeno, &uno));
+        assert!(!single.is_internal_link(&uno, &dos));
+    }
+
+    #[test]
+    fn an_empty_scope_admits_nothing() {
+        let scope = SiteScope::of_seeds(std::iter::empty());
+        assert!(!scope.contains(&Url::parse("https://ejemplo.es/").expect("valid test URL")));
     }
 
     #[test]

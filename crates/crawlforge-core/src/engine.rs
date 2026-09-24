@@ -598,9 +598,10 @@ async fn dispatch(
             for u in urls {
                 seeds.push(normalize::normalize(u, &policy)?);
             }
-            // En una lista, «el host de la semilla» es el de la primera URL: el mismo criterio
-            // con el que `run_with` calcula `seed_host` para decidir qué es interno. El
-            // perímetro, en cambio, ya **no** sale de la primera línea: sale de todas.
+            // The credential stays scoped to the host of the first URL: a list can mix sites,
+            // and picking which of them gets it would be guessing. What is internal no longer
+            // comes from the first line (`SiteScope`, since 0.11.0), and neither does the
+            // network perimeter: both come from every line.
             let seed_host = seeds.first().and_then(|s| s.normalized.host_str());
             let fetcher =
                 http_fetcher_for(&job, seed_host, network_screen(&seeds), controls.lookup.take())?;
@@ -744,10 +745,16 @@ async fn run_with<F: Fetcher + 'static>(
 
     // La autoridad, no el host pelado: el puerto forma parte de «mismo sitio». Ver
     // `normalize::is_internal`.
+    //
+    // This is the *first* seed's site, and since 0.11.0 it no longer decides what is internal:
+    // it is what `crawl_meta` records and whose sitemaps are read. What is internal is `scope`.
     let seed_host = seeds
         .first()
         .map(|s| normalize::site_authority(&s.normalized))
         .unwrap_or_default();
+    // Every site the crawl audits: one in `http` and `filesystem`, all of them in a `list` that
+    // mixes domains. See `normalize::SiteScope` for the two questions it answers.
+    let scope = normalize::SiteScope::of_seeds(seeds.iter().map(|s| &s.normalized));
 
     // El perímetro de red del rastreo. Ver [`network_screen`] y `normalize::NetworkScreen`.
     //
@@ -943,6 +950,11 @@ async fn run_with<F: Fetcher + 'static>(
                     if !normalize::is_crawlable_scheme(&n.normalized) {
                         continue;
                     }
+                    // Against the first seed's site, not the whole scope: these are *its*
+                    // sitemaps, and a sitemap only speaks for its own site (sitemaps.org
+                    // forbids cross-host entries). In a multi-site list the other sites'
+                    // sitemaps are not read — list mode never lets a sitemap widen the crawl,
+                    // and the CLI turns them off there anyway.
                     let interno = normalize::is_internal(&n.normalized, &seed_host);
                     // `follow_external` amplía el **alcance** del rastreo, no el perímetro de
                     // red: una URL de sitemap que la criba rechaza no se pide ni con él puesto.
@@ -1363,7 +1375,7 @@ async fn run_with<F: Fetcher + 'static>(
                         &resolved_links,
                         blocked_by_robots,
                         in_sitemap.contains(&hash),
-                        &seed_host,
+                        &scope,
                         &policy,
                         &page_rules,
                         &*fetcher,
@@ -1400,7 +1412,9 @@ async fn run_with<F: Fetcher + 'static>(
                             if frontier.has_seen(link_hash) {
                                 continue;
                             }
-                            let internal = normalize::is_internal(&n.normalized, &seed_host);
+                            // URL-level: does the target belong to an audited site? That is
+                            // what decides whether it is crawled, registered or probed.
+                            let internal = scope.contains(&n.normalized);
                             // `follow_external` amplía el **alcance** del rastreo; no es un
                             // permiso para llegar a la red del usuario. Sin esta segunda
                             // condición la rama de abajo no se ejecutaba con él puesto y el
@@ -1589,7 +1603,7 @@ async fn run_with<F: Fetcher + 'static>(
                                     n.normalized = canonical;
                                 }
                                 let destino_hash = n.hash();
-                                let interno = normalize::is_internal(&n.normalized, &seed_host);
+                                let interno = scope.contains(&n.normalized);
                                 // Mismo criterio que en los enlaces: el perímetro manda sobre
                                 // `follow_external`. Un `/go/oferta` que redirige a una
                                 // dirección de la red del usuario no se sigue.
@@ -3655,7 +3669,7 @@ fn build_result<F: Fetcher>(
     resolved_links: &[Option<NormalizedUrl>],
     blocked_by_robots: bool,
     in_sitemap: bool,
-    seed_host: &str,
+    scope: &normalize::SiteScope,
     policy: &NormalizePolicy,
     rules: &[Box<dyn PageRule>],
     fetcher: &F,
@@ -3667,7 +3681,7 @@ fn build_result<F: Fetcher>(
     url_row.content_length = Some(doc.content_length());
     url_row.response_time_ms = Some(doc.response_time_ms);
     url_row.fetched_at = Some(now_iso8601());
-    url_row.is_internal = normalize::is_internal(&doc.url, seed_host);
+    url_row.is_internal = scope.contains(&doc.url);
 
     // Redirección: se guarda el destino y se encola aparte. Cada salto es una fila.
     if doc.is_redirect() {
@@ -3715,7 +3729,7 @@ fn build_result<F: Fetcher>(
     let internal_links_out = resolved_links
         .iter()
         .flatten()
-        .filter(|n| normalize::is_internal(&n.normalized, seed_host))
+        .filter(|n| scope.is_internal_link(&doc.url, &n.normalized))
         .count() as u32;
 
     let page_row = PageRow {
@@ -3788,7 +3802,7 @@ fn build_result<F: Fetcher>(
             is_nofollow: l.is_nofollow,
             is_internal: resuelto
                 .as_ref()
-                .is_some_and(|n| normalize::is_internal(&n.normalized, seed_host)),
+                .is_some_and(|n| scope.is_internal_link(&doc.url, &n.normalized)),
             is_resource: !matches!(l.element, parse::LinkElement::A),
             is_infrastructure: resuelto
                 .as_ref()
@@ -5091,15 +5105,16 @@ mod tests {
             Url::parse("https://ejemplo.es/").expect("base de test válida"),
         );
         let resolved: Vec<Option<NormalizedUrl>> = Vec::new();
+        let scope = normalize::SiteScope::Single("ejemplo.es".to_string());
 
         let con_reglas = build_result(
-            &item, 1, &doc, Some(&page), &resolved, false, false, "ejemplo.es", &policy,
+            &item, 1, &doc, Some(&page), &resolved, false, false, &scope, &policy,
             &crawlforge_rules::page_rules(), &fetcher,
         );
         assert!(!con_reglas.issues.is_empty(), "el catálogo completo encuentra algo aquí");
 
         let sin_reglas = build_result(
-            &item, 1, &doc, Some(&page), &resolved, false, false, "ejemplo.es", &policy,
+            &item, 1, &doc, Some(&page), &resolved, false, false, &scope, &policy,
             &[], &fetcher,
         );
         assert!(

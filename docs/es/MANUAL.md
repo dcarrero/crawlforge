@@ -177,11 +177,17 @@ Un fichero con una URL por línea. Sirve para revisar un conjunto concreto —la
 campaña— y es también el modo que hace justa una comparación con otra herramienta: las dos reciben
 exactamente el mismo conjunto.
 
-**Una lista, un sitio.** Lo que cuenta como interno lo decide la primera URL del fichero, con su
-host y su puerto, así que una lista que mezcla dominios audita el primero y trata al resto como
-ajenos: sus páginas se registran y se les comprueba el estado, no se rastrean, y sus enlaces rotos
-salen como externos y no como internos. Es una restricción, no un fallo, y mientras siga ahí lo
-honesto es decirlo: una lista por sitio.
+**Una lista puede mezclar sitios.** Se audita cada sitio que aparece en el fichero —host y puerto—,
+así que en una misma lista caben páginas de todos los blogs de una cartera. Una página de cualquiera
+de ellos que está enlazada pero no en la lista se registra sin pedirse, igual que si fuera del
+primero, y una página rota de cualquiera de ellos es un 404 interno.
+
+Un enlace de un sitio de la lista a otro sigue **saliendo** del sitio de la página: no cuenta entre
+sus enlaces internos, y un `nofollow` en él no es `INDEX-NOFOLLOW-INTERNAL`. Los dos sitios son
+tuyos, pero para un buscador son dos sitios.
+
+Dos cosas siguen saliendo de la primera URL: la credencial de `CRAWLFORGE_AUTH` solo se manda a su
+host, y el informe lleva su nombre en el título.
 
 ### Se ha cortado el rastreo
 

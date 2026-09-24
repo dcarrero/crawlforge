@@ -19,6 +19,35 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.11.0] — 2026-09-24
+
+A list that mixes sites now audits all of them. It is a minor bump because what a crawl reports
+changes: rules fire on pages that used to be treated as somebody else's, and stop firing on what
+used to be probed as external.
+
+### Changed
+
+- **Every site in a `list` file is internal.** Until now "internal" was decided by the first URL in
+  the file, so a list carrying several blogs audited the first and treated the rest as foreign.
+  Their pages were fetched but recorded with `is_internal = 0`, their broken pages came out as
+  `HTTP-404-EXTERNAL`, and every page of theirs that was linked but not listed got a status probe —
+  121 of them in a twelve-URL list of two real sites. Two of those probes produced false
+  `ASSET-BROKEN` findings on Cloudflare's `/cdn-cgi/` scripts, which the engine deliberately ignores
+  on a site of your own.
+
+  Internal now means *one of the audited sites*, compared by host and port as since 0.10.0. A page
+  of any of them that is linked but not in the list is recorded and not fetched, as it always was
+  for the first one.
+
+- **A link between two sites of the list is not internal to its page.** Both sites are audited, but
+  a link from one to the other leaves the page's site: it does not count in `internal_links_out`,
+  and a `nofollow` on it does not fire `INDEX-NOFOLLOW-INTERNAL`. With one site nothing changes —
+  `http` and `filesystem` crawls behave exactly as before.
+
+Still tied to the first URL, on purpose: the `CRAWLFORGE_AUTH` credential (choosing which of several
+hosts gets it would be guessing), and which site's sitemaps are read when the core runs a list with
+sitemaps on (the CLI turns them off in list mode).
+
 ## [0.10.0] — 2026-08-26
 
 Four new rules and one change to what counts as your own site. Both halves are minor bumps by this

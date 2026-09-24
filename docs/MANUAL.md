@@ -176,11 +176,17 @@ A file with one URL per line. Useful for reviewing a specific set — the 40 lan
 campaign — and it is also what makes a comparison with another tool fair: both receive exactly
 the same set.
 
-**One site per list.** "Internal" is decided by the first URL in the file — its host and its port
-— so a list mixing domains audits the first one and treats the rest as somebody else's: their
-pages are recorded and status-checked, not crawled, and their broken links are reported as
-external rather than internal. It is a restriction, not a bug, and until it is lifted the honest
-thing is to say so: one list per site.
+**A list can mix sites.** Every site that appears in the file —host and port— is audited, so one
+list can carry pages from all the blogs of a portfolio. A page of any of them that is linked but not
+in the list is recorded without being fetched, exactly as it would be for the first site, and a
+broken page of any of them is an internal 404.
+
+A link from one site of the list to another still **leaves** the page's site: it does not count
+towards its internal links, and a `nofollow` on it is not `INDEX-NOFOLLOW-INTERNAL`. Both sites are
+yours, but for a search engine they are two sites.
+
+Two things still come from the first URL: the `CRAWLFORGE_AUTH` credential is only sent to its host,
+and the report is titled after it.
 
 ### The crawl was interrupted
 

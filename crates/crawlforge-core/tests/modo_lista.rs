@@ -373,3 +373,133 @@ async fn el_modo_http_sigue_sin_marcarse_como_lista() {
         conn.query_row("SELECT truncated FROM crawl_meta", [], |r| r.get(0)).expect("crawl_meta");
     assert_eq!(truncated, 0);
 }
+
+// ─── Part 4: a list that mixes sites audits all of them (0.11.0) ─────────────────────
+//
+// Until 0.11.0 "internal" was decided by the first line of the file. A list carrying two sites
+// audited the first and treated the second as somebody else's: its pages were fetched but
+// recorded as external, its broken links came out as `HTTP-404-EXTERNAL`, and a link to one of
+// its pages that was not in the list was status-probed instead of left alone.
+//
+// One server, two sites: `127.0.0.1` and `localhost` are different authorities for the engine
+// (`normalize::is_internal` compares names), even though both land on the same socket.
+
+/// `(crawl_state, status_code, is_internal)` of a URL's row, by its full URL.
+fn row_by_url(conn: &Connection, url: &str) -> Option<(String, Option<i64>, i64)> {
+    conn.query_row(
+        "SELECT crawl_state, status_code, is_internal FROM urls WHERE url = ?1",
+        [url],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .ok()
+}
+
+fn issues_of(conn: &Connection, rule: &str) -> i64 {
+    conn.query_row("SELECT COUNT(*) FROM issues WHERE rule_id = ?1", [rule], |r| r.get(0))
+        .expect("count issues")
+}
+
+#[tokio::test]
+async fn a_list_mixing_two_sites_audits_both_as_internal() {
+    let server = ServidorDePruebas::arrancar_como_otro_host_con_puerto(|port| {
+        let other = |path: &str| format!("http://localhost:{port}{path}");
+        vec![
+            (
+                "/a".to_string(),
+                Respuesta::pagina(
+                    "A",
+                    &format!(
+                        "<a href=\"{b}\">b</a> <a href=\"{gone}\">gone</a> \
+                         <a href=\"{outside}\">not in the list</a>",
+                        b = other("/b"),
+                        gone = other("/b-gone"),
+                        outside = other("/b-outside"),
+                    ),
+                ),
+            ),
+            ("/b".to_string(), Respuesta::pagina("B", "<p>second site</p>")),
+            ("/b-gone".to_string(), Respuesta::error(404)),
+            ("/b-outside".to_string(), Respuesta::pagina("Outside", "<p>nobody asks</p>")),
+        ]
+    })
+    .await;
+    let second = |path: &str| server.url_como_otro_host(path);
+
+    let tmp = Temporal::new("two-sites");
+    let mut job = trabajo_de_lista(vec![server.url("/a"), second("/b"), second("/b-gone")]);
+    job.discover_sitemaps = false;
+
+    let outcome = crawlforge_core::engine::run(job, &tmp.store()).await.expect("crawl");
+    assert_eq!(outcome.metrics.urls_fetched, 3, "the list and nothing else");
+
+    let conn = abrir(&tmp.store());
+    let (state, status, internal) = row_by_url(&conn, &second("/b")).expect("row of /b");
+    assert_eq!((state.as_str(), status), ("done", Some(200)));
+    assert_eq!(internal, 1, "the second site of the list is audited, not treated as foreign");
+
+    // A page of the second site that is not in the list gets the same treatment as one of the
+    // first site: registered, not fetched. Before, it was status-probed as an external URL.
+    let (state, status, internal) =
+        row_by_url(&conn, &second("/b-outside")).expect("row of /b-outside");
+    assert_eq!(state, "skipped", "registered without crawling");
+    assert_eq!(status, None, "nobody asked for it");
+    assert_eq!(internal, 1);
+    assert_eq!(server.peticiones("/b-outside"), 0, "not even a status probe");
+    assert_eq!(outcome.metrics.externals_checked, 0, "nothing in this crawl is external");
+
+    // The broken page of the second site is an internal 404, not an external one.
+    assert_eq!(issues_of(&conn, "HTTP-404-INTERNAL"), 1, "an internal broken link");
+    assert_eq!(issues_of(&conn, "HTTP-404-EXTERNAL"), 0, "and not reported as someone else's");
+}
+
+#[tokio::test]
+async fn a_link_between_two_sites_of_the_list_is_not_internal_to_the_page() {
+    // Both sites are audited, but a link from one to the other leaves the page's site. A
+    // `nofollow` on it is a choice about someone else's site —even if that someone is the
+    // same owner— and `INDEX-NOFOLLOW-INTERNAL` must not fire. A `nofollow` on a link to the
+    // page's own site still does: that is the control.
+    let server = ServidorDePruebas::arrancar_como_otro_host_con_puerto(|port| {
+        vec![
+            (
+                "/a".to_string(),
+                Respuesta::pagina(
+                    "A",
+                    &format!(
+                        "<a rel=\"nofollow\" href=\"http://localhost:{port}/b\">sister blog</a> \
+                         <a rel=\"nofollow\" href=\"/a2\">own page</a>"
+                    ),
+                ),
+            ),
+            ("/a2".to_string(), Respuesta::pagina("A2", "<p>first site</p>")),
+            ("/b".to_string(), Respuesta::pagina("B", "<p>second site</p>")),
+        ]
+    })
+    .await;
+
+    let tmp = Temporal::new("cross-site-link");
+    let mut job = trabajo_de_lista(vec![server.url("/a"), server.url_como_otro_host("/b")]);
+    job.discover_sitemaps = false;
+    crawlforge_core::engine::run(job, &tmp.store()).await.expect("crawl");
+
+    let conn = abrir(&tmp.store());
+    let detail: String = conn
+        .query_row(
+            "SELECT i.detail_json FROM issues i JOIN urls u ON u.id = i.url_id
+             WHERE i.rule_id = 'INDEX-NOFOLLOW-INTERNAL' AND u.path = '/a'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("the nofollow to the page's own site is reported");
+    assert!(detail.contains("/a2"), "the own-site link is the finding: {detail}");
+    assert!(!detail.contains("localhost"), "the cross-site link is not: {detail}");
+
+    let links_out: i64 = conn
+        .query_row(
+            "SELECT p.internal_links_out FROM pages p JOIN urls u ON u.id = p.url_id
+             WHERE u.path = '/a'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("page row of /a");
+    assert_eq!(links_out, 1, "only the link to its own site counts as internal");
+}
