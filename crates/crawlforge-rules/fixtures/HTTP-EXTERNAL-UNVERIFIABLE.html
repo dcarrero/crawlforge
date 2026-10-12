@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!-- HTTP-EXTERNAL-UNVERIFIABLE: no se puede provocar en modo filesystem, igual que
+     HTTP-404-EXTERNAL. Sin red no hay sonda, y sin sonda no hay 401, 403 ni 429 que guardar.
+     La regla se demuestra rastreando el servidor local de pruebas (`reglas_http.rs`). -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Enlace externo sin verificar</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Fixture de HTTP-EXTERNAL-UNVERIFIABLE. No dispara en modo filesystem porque las URLs de otros dominios no se piden.">
+<meta property="og:title" content="Enlace externo sin verificar">
+<meta property="og:description" content="Enlace a un dominio ajeno que rechaza la comprobación.">
+<meta property="og:image" content="https://fixture.local/portada.png">
+</head>
+<body>
+<main>
+<h1>Enlace externo sin verificar</h1>
+<h2>Por qué este fixture no dispara su regla</h2>
+<p>La regla necesita que la fila de una URL de otro dominio tenga <code>status_code</code> 401,
+403 o 429. En modo <code>filesystem</code> no hay red y las URLs externas se registran sin
+pedirlas, con el estado a nulo, así que no hay nada que reportar.</p>
+<p>El enlace de abajo es el que se comprobaría en un rastreo por HTTP.</p>
+<p><a href="https://otro.example/detras-de-un-muro">Un enlace externo detrás de un muro antibots</a></p>
+</main>
+</body>
+</html>

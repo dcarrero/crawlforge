@@ -542,7 +542,8 @@ Dicho por delante, para que no pierdas tiempo buscándolo:
 - **No renderiza JavaScript.** Un sitio cuyo contenido se monta en el navegador se verá vacío.
   Está previsto.
 - **No sigue los sitios externos.** De los enlaces salientes se comprueba el estado —que es lo que
-  hace saltar `HTTP-404-EXTERNAL`—, pero de otro dominio no se parsea ni se rastrea nada. **No hay
+  hace saltar `HTTP-404-EXTERNAL`, y `HTTP-EXTERNAL-UNVERIFIABLE` cuando el otro sitio rechaza la
+  comprobación con un 401, 403 o 429—, pero de otro dominio no se parsea ni se rastrea nada. **No hay
   flag `--follow-external`**: rastrear entero un sitio ajeno no es algo que la herramienta ofrezca
   desde la línea de comandos. La clave `follow_external` existe en el fichero de configuración y
   sigue apagada por defecto; una reanudación ignora lo que el fichero diga de ella, igual que

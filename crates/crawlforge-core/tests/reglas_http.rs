@@ -449,6 +449,30 @@ async fn con_follow_external_el_404_ajeno_se_reporta_como_externo_y_no_como_prop
     );
 }
 
+// ---------------------------------------------------------------- HTTP-EXTERNAL-UNVERIFIABLE
+
+#[tokio::test]
+async fn un_enlace_externo_tras_un_muro_se_reporta_como_sin_verificar_y_no_como_roto() {
+    // La otra mitad de `HTTP-404-EXTERNAL`. Un 403 de un host ajeno no prueba que el enlace esté
+    // roto, y por eso esa regla lo calla; pero tampoco prueba que funcione, y hasta la 0.16.0 no
+    // salía en ningún sitio. Con el 404 al lado, cada código va a su regla y a ninguna más.
+    let ajeno = ServidorDePruebas::arrancar_como_otro_host(&[
+        ("/muro", Respuesta::error(403)),
+        ("/viva", Respuesta::pagina("Viva", "<p>sigo aquí</p>")),
+    ])
+    .await;
+    let muro = ajeno.url_como_otro_host("/muro");
+    let rota = ajeno.url_como_otro_host("/rota");
+    let viva = ajeno.url_como_otro_host("/viva");
+    let propio = ServidorDePruebas::arrancar(&[("/", portada(&[&muro, &rota, &viva]))]).await;
+
+    let r = rastrear_con("externa-tras-muro", &propio, |_| {}).await;
+
+    assert_eq!(r.estado(&muro), Some(403), "la sonda guardó el 403");
+    assert_eq!(r.urls_de("HTTP-EXTERNAL-UNVERIFIABLE"), vec![muro]);
+    assert_eq!(r.urls_de("HTTP-404-EXTERNAL"), vec![rota], "el 404 sigue siendo roto");
+}
+
 #[tokio::test]
 async fn se_recorre_una_cadena_cuyos_eslabones_no_enlaza_nadie() {
     // Regresión: solo se encolaban las URLs que salen de un `<a>` de una página parseada, y un

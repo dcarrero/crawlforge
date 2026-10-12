@@ -112,6 +112,7 @@ normal crawl and zero findings with the flag on.
 |---|---|---|---|---|
 | `HTTP-404-INTERNAL` | critical | site | free | Internal `<a>` link to a URL that returns 4xx |
 | `HTTP-404-EXTERNAL` | medium | site | free | External `<a>` link whose URL is gone: 404, 410, or its domain does not resolve |
+| `HTTP-EXTERNAL-UNVERIFIABLE` | low | site | free | External `<a>` link whose host refused the check: 401, 403 or 429 |
 | `HTTP-5XX` | critical | page | free | 5xx response |
 | `HTTP-REDIRECT-CHAIN` | high | site | free | Redirect chain of 2 or more hops |
 | `HTTP-REDIRECT-LOOP` | critical | site | free | Redirect loop |
@@ -135,6 +136,12 @@ reason someone else's 5xx was already excluded. The criterion is shared
 (`crawlforge_rules::sql_external_gone`) by `HTTP-404-EXTERNAL`, `ASSET-IMG-BROKEN`,
 `ASSET-BROKEN`, `CANON-TO-4XX` and `HREFLANG-TO-4XX`; internal URLs, crawled with real requests
 against a host the user controls, keep their full error ranges.
+
+**The refusals get their own rule (0.16.0):** keeping 401, 403 and 429 out of the broken-link ID
+was right, but until 0.16.0 they appeared nowhere, so a link behind a wall looked like one that had
+been checked and was fine. `HTTP-EXTERNAL-UNVERIFIABLE` reports them at `low`, as links that could
+not be checked from here (`crawlforge_rules::sql_external_refused`). 407, 451 and 400/405 stay out
+of both rules.
 
 **Both 404 rules read `<a>` links only (2026-08-04):** the parser also writes `<img>`, `<script>`,
 `<link rel=stylesheet>`, `<iframe>` and `<form>` into `links`, and without the `element = 'a'`

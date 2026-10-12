@@ -582,6 +582,31 @@ pub fn sql_external_gone(status_column: &str) -> String {
     format!("{status_column} IN ({lista})")
 }
 
+/// Status codes with which an external host **refused the probe** instead of answering about the
+/// resource: **401, 403 and 429**.
+///
+/// They are the anti-bot walls, paywalls and rate limits that [`EXTERNAL_GONE_STATUS`] leaves
+/// out on purpose. Leaving them out of `HTTP-404-EXTERNAL` is right, because they don't prove the
+/// link is broken; leaving them out of the report altogether was not, because they don't prove it
+/// works either. `HTTP-EXTERNAL-UNVERIFIABLE` reports them as what they are: links that could not
+/// be checked from here and are worth opening in a browser.
+///
+/// The rest of the excluded list stays out of this one too. 407 is a proxy on the crawler's own
+/// side, not the target's answer; 451 is a legal block for this observer, rare enough that it
+/// would only add noise; 400/405 judge the request, and the probe already retries a refused
+/// `HEAD` with a `GET`.
+pub const EXTERNAL_REFUSED_STATUS: &[i64] = &[401, 403, 429];
+
+/// SQL condition "the external host refused the probe", the twin of [`sql_external_gone`].
+pub fn sql_external_refused(status_column: &str) -> String {
+    let lista = EXTERNAL_REFUSED_STATUS
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{status_column} IN ({lista})")
+}
+
 /// Does the rule need a complete crawl to assert what it asserts?
 pub fn requiere_grafo_completo(rule_id: &str) -> bool {
     REQUIERE_GRAFO_COMPLETO.contains(&rule_id)

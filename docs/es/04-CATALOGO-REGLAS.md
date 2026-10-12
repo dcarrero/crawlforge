@@ -104,6 +104,7 @@ rastrea el motor para que encaje el alcance de una regla.
 |---|---|---|---|---|
 | `HTTP-404-INTERNAL` | critical | site | free | Enlace interno a URL que devuelve 404 |
 | `HTTP-404-EXTERNAL` | medium | site | free | Enlace externo roto |
+| `HTTP-EXTERNAL-UNVERIFIABLE` | low | site | free | Enlace externo cuyo host rechazó la comprobación: 401, 403 o 429 |
 | `HTTP-5XX` | critical | page | free | Respuesta 5xx |
 | `HTTP-REDIRECT-CHAIN` | high | site | free | Cadena de redirección de 2 o más saltos |
 | `HTTP-REDIRECT-LOOP` | critical | site | free | Bucle de redirección |

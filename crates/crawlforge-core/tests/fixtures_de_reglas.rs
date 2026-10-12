@@ -143,6 +143,10 @@ const DEMOSTRADAS_CONTRA_EL_SERVIDOR: &[(&str, &str)] = &[
         "HTTP-404-EXTERNAL",
         "con_follow_external_el_404_ajeno_se_reporta_como_externo_y_no_como_propio",
     ),
+    (
+        "HTTP-EXTERNAL-UNVERIFIABLE",
+        "un_enlace_externo_tras_un_muro_se_reporta_como_sin_verificar_y_no_como_roto",
+    ),
 ];
 
 /// Reglas que **ningún rastreo demuestra todavía**, con el motivo exacto.

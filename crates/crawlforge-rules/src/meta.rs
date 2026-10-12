@@ -250,10 +250,9 @@ pub const DESC_MIN_CHARS: usize = 70;
 ///   and the error is large. Accepted: Google does not render a Japanese title in Arial, and
 ///   the rule does not pretend to be a text layout engine.
 ///
-/// The core has an equivalent function to fill the `pages.title_px` and `pages.meta_desc_px`
-/// columns. It is duplicated because the dependency goes from the core to the rules and not the
-/// other way around; [`estimated_width_px`] is `pub` so a future consolidation can go in that
-/// direction and not the opposite one.
+/// The core fills `pages.title_px` and `pages.meta_desc_px` by calling [`title_width_px`] and
+/// [`description_width_px`] (`writer.rs`), so this table is the only one: the stored columns and
+/// the rules cannot disagree.
 fn arial_advance_per_mille(c: char) -> u64 {
     match c {
         // Narrow class: the only things below a quarter of an em.
@@ -262,7 +261,7 @@ fn arial_advance_per_mille(c: char) -> u64 {
         '\'' | '’' => 191,
         ' ' | '.' | ',' | ':' | ';' | '!' | '|' | '/' | '\\' | '[' | ']' | 'f' | 't' | 'I'
         | 'Í' | 'Ï' => 278,
-        '(' | ')' | '{' | '}' | '-' | '–' | '`' | 'r' | '¡' => 333,
+        '(' | ')' | '{' | '}' | '-' | '`' | 'r' | '¡' => 333,
         '"' | '“' | '”' | '*' => 355,
         'c' | 'k' | 's' | 'v' | 'x' | 'y' | 'z' | 'J' | 'ç' => 500,
         '+' | '=' | '<' | '>' | '~' => 584,
@@ -275,6 +274,10 @@ fn arial_advance_per_mille(c: char) -> u64 {
         '%' => 889,
         'W' => 944,
         '@' => 1015,
+        // The em dash is a full em. It sat in the default (556) until 0.16.0, and the en dash in
+        // the hyphen's class (333) when it measures 556: the classic `Title — Site` separator
+        // came out 9 px short, on exactly the titles that carry a brand suffix.
+        '—' => 1000,
         // Remaining lowercase, the digits and the rest of the medium punctuation. Also the
         // value that characters unknown to the table receive.
         _ => 556,
@@ -765,6 +768,14 @@ mod tests {
         casi(title_width_px("Hola"), 41.12);
         casi(description_width_px("Hola"), 28.784);
         casi(title_width_px(""), 0.0);
+    }
+
+    #[test]
+    fn the_dashes_measure_what_arial_draws() {
+        // Em dash 1000, en dash 556, hyphen 333 thousandths of an em. At 20 px: 20, 11.12, 6.66.
+        casi(title_width_px("—"), 20.0);
+        casi(title_width_px("–"), 11.12);
+        casi(title_width_px("-"), 6.66);
     }
 
     #[test]

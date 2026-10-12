@@ -19,6 +19,29 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.16.0] — 2026-10-12
+
+A new rule, and a fix to how title and description widths are measured. Both change what the
+catalog reports, so it is a minor bump. The catalog has 64 rules.
+
+### Added
+
+- **`HTTP-EXTERNAL-UNVERIFIABLE`** (low). An external `<a>` link whose host refused the status
+  check with a 401, 403 or 429: usually an anti-bot wall, a paywall or a rate limit, and the page
+  almost always opens in a browser. `HTTP-404-EXTERNAL` keeps those codes out because they don't
+  prove the link is broken, and that stays as it was; but they don't prove it works either, and
+  until now they appeared nowhere. The finding is on the external URL, one per URL, `<a>` links
+  only. 407, 451 and 400/405 stay out of both rules.
+
+### Fixed
+
+- **The em dash and the en dash were measured too narrow.** The Arial width table behind
+  `META-TITLE-TOO-LONG`, `META-TITLE-TOO-SHORT`, the description rules and the stored
+  `title_px`/`meta_desc_px` gave the em dash `—` the default 556 thousandths of an em instead of
+  1000, and the en dash `–` the hyphen's 333 instead of 556. A `Title — Site` title came out 9 px
+  short, so titles with a brand suffix could pass the length check by a few pixels. Found while
+  preparing copy changes for this project's own website.
+
 ## [0.15.0] — 2026-10-12
 
 The portfolio panel counts sites, not files. It is a minor bump because what the panel reports

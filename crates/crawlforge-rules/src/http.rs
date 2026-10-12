@@ -93,6 +93,25 @@ pub static HTTP_404_EXTERNAL: RuleMeta = RuleMeta {
     references: &[],
 };
 
+pub static HTTP_EXTERNAL_UNVERIFIABLE: RuleMeta = RuleMeta {
+    id: "HTTP-EXTERNAL-UNVERIFIABLE",
+    severity: Severity::Low,
+    category: Category::Http,
+    min_tier: Tier::Free,
+    scope: Scope::Site,
+    name_es: "Enlace externo sin verificar",
+    name_en: "Unverifiable external link",
+    desc_es: "El sitio enlaza a una URL de otro dominio que rechazó la comprobación: respondió \
+              401, 403 o 429. Suele ser un muro antibots, un muro de pago o un límite de \
+              peticiones, y la página casi siempre abre bien en un navegador. No se da por rota \
+              porque no hay forma de saberlo desde aquí: ábrela para confirmar que sigue viva.",
+    desc_en: "The site links to a URL on another domain that refused the check: it answered \
+              401, 403 or 429. That is usually an anti-bot wall, a paywall or a rate limit, and \
+              the page almost always opens fine in a browser. It is not called broken because \
+              there is no way to tell from here: open it to confirm it is still there.",
+    references: &[],
+};
+
 pub static HTTP_5XX: RuleMeta = RuleMeta {
     id: "HTTP-5XX",
     severity: Severity::Critical,
@@ -491,6 +510,60 @@ impl SiteRule for Http404External {
     }
 }
 
+/// A URL on another domain that the site links to refused the probe: 401, 403 or 429.
+///
+/// The other half of [`Http404External`]. That rule keeps these codes out because they don't
+/// prove the link is broken (see [`crate::sql_external_gone`]); before this one existed they
+/// didn't appear anywhere, so a link behind a wall looked exactly like a link that had been
+/// checked and was fine. They are reported here at `low`, under their own ID, because the claim
+/// is different —"could not be checked"— and folding it into the broken-link ID would change
+/// what that ID means.
+///
+/// Same shape as its sibling: only `<a>` links, the finding on the external URL, one finding per
+/// URL however many pages link it. After a 429 the engine stops probing that host, so its other
+/// URLs stay unchecked and are not reported here: they never got an answer at all.
+pub struct HttpExternalUnverifiable;
+
+impl SiteRule for HttpExternalUnverifiable {
+    fn meta(&self) -> &'static RuleMeta {
+        &HTTP_EXTERNAL_UNVERIFIABLE
+    }
+
+    fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
+        let sql = format!(
+            "SELECT u.url_hash, u.url, u.status_code, COUNT(DISTINCT l.from_url_id) AS inlinks
+             FROM urls u
+             JOIN links l ON l.to_url_id = u.id
+             WHERE u.is_internal = 0 AND l.element = 'a' AND {rechazada}
+             GROUP BY u.id",
+            rechazada = crate::sql_external_refused("u.status_code"),
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (hash, url, status, inlinks) = row?;
+            out.push((
+                Some(hash),
+                Issue::new(&HTTP_EXTERNAL_UNVERIFIABLE).with_detail(serde_json::json!({
+                    "url": url,
+                    "status_code": status,
+                    "linked_from": inlinks
+                })),
+            ));
+        }
+        Ok(out)
+    }
+}
+
 /// Two or more consecutive hops until the final destination.
 ///
 /// The finding is recorded on the **head** of the chain: the URL that nobody redirects to and
@@ -811,6 +884,7 @@ pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
     vec![
         Box::new(Http404Internal),
         Box::new(Http404External),
+        Box::new(HttpExternalUnverifiable),
         Box::new(HttpRedirectChain),
         Box::new(HttpRedirectLoop),
         Box::new(HttpRedirectTo404),
@@ -1238,6 +1312,63 @@ mod tests {
                 "a {status} from a host we do not control proves nothing about the link"
             );
         }
+    }
+
+    #[test]
+    fn a_bot_wall_status_is_an_unverifiable_external_link() {
+        // The other half of the test above: the wall is not "broken", but it is not "fine"
+        // either, and until this rule it was reported as nothing at all.
+        for status in [401, 403, 429] {
+            let conn = db();
+            insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
+            insertar(&conn, Fila::interna(3, "https://ejemplo.es/b", 200));
+            insertar(&conn, Fila::externa(2, "https://otro.example/paywall", Some(status)));
+            enlazar(&conn, 1, 2);
+            enlazar(&conn, 3, 2);
+
+            let hallazgos = HttpExternalUnverifiable.evaluate(&conn).expect("evaluate");
+            assert_eq!(hallazgos.len(), 1, "one URL, one finding, for a {status}");
+            assert_eq!(hallazgos[0].1.rule_id, "HTTP-EXTERNAL-UNVERIFIABLE");
+            let detalle = hallazgos[0].1.detail_json.as_deref().unwrap_or_default();
+            assert!(detalle.contains(&format!("\"status_code\":{status}")), "{detalle}");
+            assert!(detalle.contains("\"linked_from\":2"), "{detalle}");
+        }
+    }
+
+    #[test]
+    fn only_a_refusal_is_unverifiable() {
+        // Gone, alive, a proxy of our own (407), a legal block (451), a code that judges the
+        // request (400/405), someone else's 5xx and no status at all: none of them is this rule.
+        for status in [Some(200), Some(404), Some(410), Some(407), Some(451), Some(400), Some(405), Some(503), None] {
+            let conn = db();
+            insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
+            insertar(&conn, Fila::externa(2, "https://otro.example/x", status));
+            enlazar(&conn, 1, 2);
+            assert!(
+                HttpExternalUnverifiable.evaluate(&conn).expect("evaluate").is_empty(),
+                "{status:?} is not a refused probe"
+            );
+        }
+    }
+
+    #[test]
+    fn a_walled_external_image_is_not_a_link() {
+        // Same filter as the 404 rules: a hotlinked image nobody clicks is not a link to check.
+        let conn = db();
+        insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
+        insertar(&conn, Fila::externa(2, "https://cdn.otro.example/foto.jpg", Some(403)));
+        enlazar_como(&conn, 1, 2, "img");
+        assert!(HttpExternalUnverifiable.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn a_walled_internal_url_is_not_this_rule() {
+        // Inside the site a 403 is the site's own doing, and `HTTP-404-INTERNAL` already says so.
+        let conn = db();
+        insertar(&conn, Fila::interna(1, "https://ejemplo.es/", 200));
+        insertar(&conn, Fila::interna(2, "https://ejemplo.es/privado", 403));
+        enlazar(&conn, 1, 2);
+        assert!(HttpExternalUnverifiable.evaluate(&conn).expect("evaluate").is_empty());
     }
 
     #[test]

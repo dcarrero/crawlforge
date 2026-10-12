@@ -1,5 +1,5 @@
 {
-  "count": 63,
+  "count": 64,
   "rules": [
     {
       "category": "asset",
@@ -946,6 +946,22 @@
       "severity": "low"
     },
     {
+      "category": "http",
+      "description": {
+        "en": "The site links to a URL on another domain that refused the check: it answered 401, 403 or 429. That is usually an anti-bot wall, a paywall or a rate limit, and the page almost always opens fine in a browser. It is not called broken because there is no way to tell from here: open it to confirm it is still there.",
+        "es": "El sitio enlaza a una URL de otro dominio que rechazó la comprobación: respondió 401, 403 o 429. Suele ser un muro antibots, un muro de pago o un límite de peticiones, y la página casi siempre abre bien en un navegador. No se da por rota porque no hay forma de saberlo desde aquí: ábrela para confirmar que sigue viva."
+      },
+      "id": "HTTP-EXTERNAL-UNVERIFIABLE",
+      "min_tier": "free",
+      "name": {
+        "en": "Unverifiable external link",
+        "es": "Enlace externo sin verificar"
+      },
+      "references": [],
+      "scope": "site",
+      "severity": "low"
+    },
+    {
       "category": "meta",
       "description": {
         "en": "The description does not fit in the search result and gets truncated, so the call to action at the end is never read. It is measured in pixels, not characters, because the cut is decided by rendered width.",
@@ -1010,5 +1026,5 @@
       "severity": "low"
     }
   ],
-  "rules_version": "0.15.0"
+  "rules_version": "0.16.0"
 }

@@ -538,7 +538,8 @@ Said upfront, so you do not waste time looking for it:
 - **It does not render JavaScript.** A site whose content is assembled in the browser will look
   empty. It is planned.
 - **It does not follow external sites.** Outbound links are checked for status —that is what makes
-  `HTTP-404-EXTERNAL` fire— but nothing of another domain is parsed or crawled. There is **no
+  `HTTP-404-EXTERNAL` fire, and `HTTP-EXTERNAL-UNVERIFIABLE` when the other site refuses the check
+  with a 401, 403 or 429— but nothing of another domain is parsed or crawled. There is **no
   `--follow-external` flag**: crawling a third-party site whole is not something the tool offers
   from the command line. The `follow_external` key exists in the configuration file and stays off
   by default; a resumed crawl ignores whatever the file says about it, the same way it ignores a
