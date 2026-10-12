@@ -586,6 +586,15 @@ fn markdown(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
         // que decir eso, no «truncado».
         if motivo == "list_mode" {
             s.push_str(&format!("{}\n\n", msg::report_list_mode_note(lang)));
+        } else if motivo == "rate_limited" {
+            // The count is read from the file, not from the crawl's metrics: the report is
+            // run later, maybe after a `resume` that fetched some of them.
+            let pendientes: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM urls WHERE is_internal = 1 AND crawl_state = 'pending'",
+                [],
+                |r| r.get(0),
+            )?;
+            s.push_str(&format!("{}\n\n", msg::report_rate_limited_note(lang, n(pendientes))));
         } else {
             s.push_str(&format!("{}\n\n", msg::report_truncated_note(lang, motivo)));
         }
@@ -1078,6 +1087,28 @@ mod tests {
         let aviso = md.find("modo lista").expect("must warn about what actually happened");
         let metrica = md.find("| URLs |").expect("metrics table");
         assert!(aviso < metrica, "the notice comes before the numbers it qualifies");
+    }
+
+    #[test]
+    fn un_rastreo_frenado_dice_cuantas_paginas_quedaron_pendientes() {
+        let (_d, path) = store_de_prueba(true);
+        {
+            let conn = Connection::open(&path).expect("open");
+            conn.execute("UPDATE crawl_meta SET truncated_reason = 'rate_limited'", [])
+                .expect("meta");
+            for i in 0..3 {
+                conn.execute(
+                    "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal,
+                                       in_sitemap, crawl_state)
+                     VALUES (?1, ?2, ?1, 'https', 'ejemplo.es', '/p', 1, 0, 'pending')",
+                    rusqlite::params![i + 20, format!("https://ejemplo.es/p{i}")],
+                )
+                .expect("pending");
+            }
+        }
+        let md = render(&path, "md", Lang::Es, None).expect("report");
+        assert!(md.contains("**El sitio limitó el rastreo.** 3 páginas"), "{md:.600}");
+        assert!(!md.contains("truncado"), "a rate limit is not a cut: {md:.600}");
     }
 
     /// Turns the test store into a `list` crawl of these URLs: listed ones at depth 0, as the

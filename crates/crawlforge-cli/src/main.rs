@@ -1068,6 +1068,8 @@ fn resume_precheck(store: &Path) -> Result<ResumeInfo> {
 
     match status.as_str() {
         "running" | "paused" => {}
+        // The site rate-limited it and some pages were left pending to fetch later.
+        "done" if crawlforge_core::engine::finished_rate_limited(&conn) => {}
         "done" => bail!(msg::error_resume_done(lang, store.display())),
         otro => bail!(msg::error_resume_status(lang, store.display(), otro)),
     }

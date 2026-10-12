@@ -220,6 +220,13 @@ It continues exactly where it left off, with the configuration stored in the fil
 does not repeat what was already crawled. A finished crawl cannot be resumed: for that you crawl
 again.
 
+With one exception: **a crawl the site rate-limited.** If pages still answer `429 Too Many
+Requests` after the retries —a Cloudflare or a firewall telling the crawler to slow down— they
+are not reported as broken. They are left pending, the summary says how many, and the rules that
+need the whole site stay quiet. `resume` on that finished file fetches just those pages, when the
+limit has lifted. If it keeps happening, crawl with a lower `--concurrency` or let the CrawlForge
+user-agent through the site's firewall.
+
 ### Recurring crawls: save the configuration
 
 ```bash

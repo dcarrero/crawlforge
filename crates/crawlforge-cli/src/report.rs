@@ -94,6 +94,14 @@ fn truncation_lines(outcome: &CrawlOutcome, lang: Lang) -> Vec<Option<String>> {
             out.push(None);
             out.push(Some(msg::crawl_list_mode_note(lang)));
         }
+        Some(TruncationReason::RateLimited) => {
+            out.push(None);
+            out.push(Some(msg::crawl_rate_limited_note(
+                lang,
+                i18n::group_thousands(lang, outcome.metrics.rate_limited),
+                outcome.store_path.display(),
+            )));
+        }
         Some(reason) => {
             out.push(None);
             // El motivo (`max_urls`, `max_duration`) es un identificador de configuración y
@@ -1745,6 +1753,26 @@ mod tests {
             wal_kept: false,
         };
         assert!(truncation_lines(&callado, Lang::En).is_empty());
+    }
+
+    #[test]
+    fn a_rate_limited_crawl_says_how_many_pages_and_how_to_get_them() {
+        // Saying "truncated by rate_limited" would name the cause and leave the user without
+        // the command: the pages are pending on purpose, and `resume` is how they come back.
+        let outcome = CrawlOutcome {
+            crawl_id: "x".into(),
+            store_path: std::path::PathBuf::from("crawl-colorvivo-com.sqlite"),
+            metrics: CrawlMetrics { rate_limited: 1234, ..Default::default() },
+            truncated: Some(TruncationReason::RateLimited),
+            interrupted: false,
+            wal_kept: false,
+        };
+        let en = truncation_lines(&outcome, Lang::En).into_iter().flatten().collect::<Vec<_>>();
+        assert!(en[0].contains("1,234 pages still answered 429"), "{en:?}");
+        assert!(en[0].contains("crawlforge resume crawl-colorvivo-com.sqlite"), "{en:?}");
+        assert!(!en[0].contains("truncated"), "{en:?}");
+        let es = truncation_lines(&outcome, Lang::Es).into_iter().flatten().collect::<Vec<_>>();
+        assert!(es[0].contains("1.234 páginas seguían respondiendo 429"), "{es:?}");
     }
 
     // ── El fichero cuenta su propia completitud (`report`, revisión §1) ──────

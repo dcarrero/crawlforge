@@ -43,6 +43,10 @@ pub struct Respuesta {
     /// Responder 405 a las peticiones `HEAD`, como los servidores que lo rechazan. Es lo
     /// que provoca el `GET` de respaldo de la comprobación de externas.
     pub rechaza_head: bool,
+    /// `(status, n)`: las `n` primeras peticiones a la ruta reciben ese error, y las siguientes
+    /// la respuesta de verdad. Es un límite de peticiones que se levanta, como el de un
+    /// Cloudflare que deja de frenar al cabo de un rato.
+    pub falla_las_primeras: Option<(u16, usize)>,
 }
 
 impl Respuesta {
@@ -54,6 +58,7 @@ impl Respuesta {
             retardo: Duration::ZERO,
             autorizacion_requerida: None,
             rechaza_head: false,
+            falla_las_primeras: None,
         }
     }
 
@@ -127,6 +132,13 @@ impl Respuesta {
     #[allow(dead_code)]
     pub fn rechazando_head(mut self) -> Self {
         self.rechaza_head = true;
+        self
+    }
+
+    /// La misma respuesta, pero las `n` primeras peticiones reciben `status`.
+    #[allow(dead_code)]
+    pub fn fallando_las_primeras(mut self, status: u16, n: usize) -> Self {
+        self.falla_las_primeras = Some((status, n));
         self
     }
 
@@ -441,9 +453,14 @@ async fn atender(
         return;
     };
 
-    if let Ok(mut contador) = peticiones.lock() {
-        *contador.entry(objetivo.clone()).or_insert(0) += 1;
-    }
+    let numero = match peticiones.lock() {
+        Ok(mut contador) => {
+            let n = contador.entry(objetivo.clone()).or_insert(0);
+            *n += 1;
+            *n
+        }
+        Err(_) => 0,
+    };
     if let Ok(mut registro) = autorizaciones.lock() {
         registro.entry(objetivo.clone()).or_default().push(autorizacion.clone());
     }
@@ -456,6 +473,10 @@ async fn atender(
 
     let es_head = metodo.eq_ignore_ascii_case("HEAD");
     let respuesta = rutas.get(&objetivo).cloned().unwrap_or_else(Respuesta::no_encontrada);
+    let respuesta = match respuesta.falla_las_primeras {
+        Some((status, n)) if numero <= n => Respuesta::error(status),
+        _ => respuesta,
+    };
     // Un servidor que rechaza HEAD responde 405 sin mirar nada más, como los reales.
     let respuesta = if es_head && respuesta.rechaza_head {
         Respuesta::metodo_no_permitido()

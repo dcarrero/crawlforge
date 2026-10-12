@@ -211,6 +211,29 @@ pub mod msg {
             en: "Crawl truncated by {reason}. The findings shown are those found up to that point.",
             es: "Rastreo truncado por {reason}. Los hallazgos mostrados son los encontrados hasta ese punto.",
         }
+        // A 429 is not a page's status: the site asked the crawler to slow down. The pages
+        // were left pending, and the useful thing to say is how to get them.
+        crawl_rate_limited_note(n, path) {
+            en: "The site rate-limited the crawl: {n} pages still answered 429 Too Many Requests \
+                 after the retries and were left pending, not reported as broken. Rules that \
+                 need the whole site are not evaluated until they are fetched. Later, run:\n    \
+                 crawlforge resume {path}\nor crawl again with a lower --concurrency, or let \
+                 the CrawlForge user-agent through the site's firewall.",
+            es: "El sitio limitó el rastreo: {n} páginas seguían respondiendo 429 Too Many \
+                 Requests tras los reintentos y quedaron pendientes, sin darlas por rotas. Las \
+                 reglas que necesitan el sitio entero no se evalúan hasta que se pidan. Más \
+                 tarde, lanza:\n    crawlforge resume {path}\no rastrea de nuevo con menos \
+                 --concurrency, o deja pasar el user-agent de CrawlForge en el cortafuegos del \
+                 sitio.",
+        }
+        report_rate_limited_note(n) {
+            en: "> **The site rate-limited the crawl.** {n} pages answered 429 Too Many Requests \
+                 and were left pending: they are not counted or reported as broken, and rules \
+                 that need the whole site are not evaluated. `crawlforge resume` fetches them.",
+            es: "> **El sitio limitó el rastreo.** {n} páginas respondieron 429 Too Many \
+                 Requests y quedaron pendientes: no se cuentan ni se dan por rotas, y las reglas \
+                 que necesitan el sitio entero no se evalúan. `crawlforge resume` las pide.",
+        }
         // `list_mode` no es un corte: el rastreo hizo exactamente lo que se le pidió, así que
         // decirle al usuario «tu rastreo se truncó» sería mentir. Lo que sí hay que decirle es
         // la consecuencia de auditar un conjunto y no un sitio.

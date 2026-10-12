@@ -70,6 +70,10 @@ pub struct CrawlMetrics {
     /// registraron**. Es un aviso distinto del de arriba —aquellas están en el fichero sin
     /// estado, estas no están— y el resumen tiene que decirlo por el mismo motivo.
     pub externals_unregistered: u64,
+    /// Pages of the site that still answered 429 after the fetcher's retries. They were not
+    /// processed and their rows stay `pending`, so `resume` can fetch them later; see
+    /// [`TruncationReason::RateLimited`].
+    pub rate_limited: u64,
     /// Duración del bucle de rastreo, sin el descubrimiento de sitemaps ni la pasada final.
     ///
     /// La eficiencia de paralelismo se calcula sobre esto y no sobre [`Self::elapsed`]: el suelo
@@ -298,6 +302,15 @@ pub enum TruncationReason {
     MaxDuration,
     /// Modo lista: el grafo está incompleto por construcción, no por un corte.
     ListMode,
+    /// The site rate-limited the crawl: some of its pages still answered 429 after the retries
+    /// and were left `pending`. The graph has holes —those pages' links were never read— so the
+    /// full-graph rules must stay quiet, and `resume` accepts the finished file to fetch them.
+    ///
+    /// Until 0.17.0 the 429 was stored as the page's status, and every rule that reads an
+    /// internal 4xx as "broken" took it at its word: crawling colorvivo.com on 2026-10-12, with
+    /// Cloudflare limiting the crawler, 88 pages that open fine came out as critical
+    /// `HTTP-404-INTERNAL`. A 429 says the server wants us to slow down, not that the page is gone.
+    RateLimited,
 }
 
 impl TruncationReason {
@@ -307,6 +320,7 @@ impl TruncationReason {
             Self::MaxDepth => "max_depth",
             Self::MaxDuration => "max_duration",
             Self::ListMode => "list_mode",
+            Self::RateLimited => "rate_limited",
         }
     }
 }
@@ -486,6 +500,18 @@ pub async fn run_cancellable(
 /// reanuda), un fichero de otra versión de esquema (la mitad vieja y la mitad nueva del
 /// rastreo no serían comparables) ni uno cuya configuración guardada no se pueda leer. En los
 /// tres casos el error es [`crate::CoreError::NotResumable`] con el motivo.
+/// Did this finished crawl stop short because the site rate-limited it? Then it has `pending`
+/// pages that `resume` can still fetch. A file from before `truncated_reason` existed answers no.
+pub fn finished_rate_limited(conn: &Connection) -> bool {
+    conn.query_row("SELECT truncated_reason FROM crawl_meta LIMIT 1", [], |r| {
+        r.get::<_, Option<String>>(0)
+    })
+    .ok()
+    .flatten()
+    .as_deref()
+        == Some(TruncationReason::RateLimited.as_str())
+}
+
 pub async fn resume(store_path: &Path) -> Result<CrawlOutcome> {
     resume_cancellable(store_path, None, None).await
 }
@@ -1343,6 +1369,18 @@ async fn run_with<F: Fetcher + 'static>(
                         ..Default::default()
                     }).await?;
                 }
+                // Still a 429 after the fetcher's retries: the server is asking us to slow down,
+                // which says nothing about the page. Nothing is written, so its row stays the
+                // `pending` it was when discovered and `resume` can fetch it later. The throttle
+                // still hears about it: halving the concurrency is what gives the rest a chance.
+                UrlOutcome::Fetched(fetched) if fetched.doc.status == 429 => {
+                    if let Some(host) = fetched.doc.url.host_str() {
+                        throttle.record(host, fetched.doc.status);
+                    }
+                    metrics.rate_limited += 1;
+                    truncated.get_or_insert(TruncationReason::RateLimited);
+                    tracing::debug!(url = %item.url, "429 tras los reintentos; queda pendiente");
+                }
                 UrlOutcome::Fetched(fetched) => {
                 let FetchedOutcome { doc, page, blocked_by_robots } = *fetched;
                     if let Some(host) = doc.url.host_str() {
@@ -2103,6 +2141,10 @@ fn read_resume_plan(store_path: &Path) -> Result<(CrawlJob, ResumeSetup)> {
         // `running` es un corte brusco (kill, cuelgue); `paused` uno limpio (CancelSignal).
         // Los dos dejan las `pending` escritas, que es lo único que la reanudación necesita.
         "running" | "paused" => {}
+        // A finished crawl that the site rate-limited left pages `pending` on purpose, and
+        // fetching them later is the whole point of leaving them so (`TruncationReason::
+        // RateLimited`). Any other finished crawl is run again, not resumed.
+        "done" if finished_rate_limited(&conn) => {}
         "done" => {
             return Err(not_resumable(
                 store_path,

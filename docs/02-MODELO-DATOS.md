@@ -83,7 +83,7 @@ CREATE TABLE crawl_meta (
     adapter         TEXT,                    -- 'wordpress' | 'astro' | NULL
     tier_at_runtime TEXT NOT NULL,           -- rules applied according to tier
     truncated       INTEGER NOT NULL DEFAULT 0,  -- migration 002
-    truncated_reason TEXT                    -- 'max_urls'|'max_depth'|'max_duration'|'list_mode'
+    truncated_reason TEXT                    -- 'max_urls'|'max_depth'|'max_duration'|'list_mode'|'rate_limited'
 );
 ```
 
@@ -93,7 +93,9 @@ the difference comes from the site or from a configuration/rules change.
 `truncated` says **the crawled set is not the whole site**, and it is load-bearing: the engine uses
 it to silence the rules in `crawlforge_rules::REQUIERE_GRAFO_COMPLETO`, and `diff` uses it to refuse
 to claim that a URL disappeared. `list_mode` is set on every crawl in list mode — not because
-anything was cut short, but because a list only ever sees the URLs it was given.
+anything was cut short, but because a list only ever sees the URLs it was given. `rate_limited`
+(0.17.0) means some pages still answered 429 after the retries and were left `pending`; it is the
+one reason with which `resume` accepts a finished crawl.
 
 ### 3.2 URLs
 

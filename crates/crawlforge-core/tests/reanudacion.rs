@@ -591,3 +591,70 @@ async fn reanudar_un_fichero_sin_metadatos_dice_por_que() {
     let err = engine::resume(&store).await.expect_err("sin metadatos no hay reanudación");
     assert!(matches!(err, CoreError::NotResumable { .. }), "{err:?}");
 }
+
+/// Estado de la fila de una URL del sitio: `(crawl_state, status_code)`.
+fn fila(conn: &Connection, ruta: &str) -> (String, Option<i64>) {
+    conn.query_row(
+        "SELECT crawl_state, status_code FROM urls WHERE is_internal = 1 AND path = ?1",
+        [ruta],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .expect("la fila existe")
+}
+
+#[tokio::test]
+async fn una_pagina_que_sigue_en_429_queda_pendiente_y_la_reanudacion_la_pide() {
+    // Rastreando colorvivo.com el 2026-10-12, Cloudflare frenó al rastreador y el 429 se guardó
+    // como el estado de la página: 88 páginas que abren bien salieron como `HTTP-404-INTERNAL`,
+    // críticas. Un 429 pide que vayamos más despacio; no dice nada de la página.
+    //
+    // Cuatro 429 seguidos son la petición original y los tres reintentos del fetcher
+    // (`fetch::MAX_RETRIES`): la página llega al motor todavía frenada. La quinta ya responde,
+    // como un límite que se levanta al cabo de un rato, y es la que pide la reanudación.
+    let servidor = ServidorDePruebas::arrancar(&[
+        ("/", Respuesta::pagina("Inicio", "<a href=\"/a\">a</a> <a href=\"/frenada\">f</a>")),
+        ("/a", Respuesta::pagina("A", "<p>a</p>")),
+        ("/frenada", Respuesta::pagina("Frenada", "<p>ya</p>").fallando_las_primeras(429, 4)),
+    ])
+    .await;
+    let tmp = Temporal::new("frenada");
+    let store = tmp.path.join("crawl.sqlite");
+    let mut job = CrawlJob::http(servidor.base());
+    job.discover_sitemaps = false;
+
+    let outcome = engine::run(job, &store).await.expect("rastrear");
+    assert_eq!(outcome.truncated, Some(engine::TruncationReason::RateLimited));
+    assert_eq!(outcome.metrics.rate_limited, 1);
+    assert_eq!(servidor.peticiones("/frenada"), 4, "la original y los tres reintentos");
+    {
+        let conn = abrir(&store);
+        assert_eq!(fila(&conn, "/frenada"), ("pending".to_string(), None), "ni rota ni pedida");
+        assert_eq!(fila(&conn, "/a"), ("done".to_string(), Some(200)));
+        let rotas: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM issues WHERE rule_id = 'HTTP-404-INTERNAL'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("contar");
+        assert_eq!(rotas, 0, "un 429 no es un enlace roto");
+        let (estado, motivo): (String, Option<String>) = conn
+            .query_row("SELECT status, truncated_reason FROM crawl_meta", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .expect("meta");
+        assert_eq!((estado.as_str(), motivo.as_deref()), ("done", Some("rate_limited")));
+    }
+
+    // Un rastreo terminado no se reanuda… salvo este, que dejó páginas pendientes a propósito.
+    let reanudado = engine::resume(&store).await.expect("reanudar un rastreo frenado");
+    assert_eq!(reanudado.truncated, None, "ya no queda nada frenado");
+    let conn = abrir(&store);
+    assert_eq!(fila(&conn, "/frenada"), ("done".to_string(), Some(200)));
+    let (truncado, motivo): (i64, Option<String>) = conn
+        .query_row("SELECT truncated, truncated_reason FROM crawl_meta", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .expect("meta");
+    assert_eq!((truncado, motivo), (0, None), "el fichero deja de decirse incompleto");
+}

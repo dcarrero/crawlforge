@@ -222,6 +222,13 @@ crawlforge resume crawl-tumedio-com.sqlite
 Sigue exactamente donde se quedó, con la configuración guardada en el propio fichero. No repite lo
 ya rastreado. Un rastreo terminado no se puede reanudar: para eso se relanza.
 
+Con una excepción: **un rastreo que el sitio frenó.** Si hay páginas que tras los reintentos
+siguen respondiendo `429 Too Many Requests` (un Cloudflare o un cortafuegos pidiendo al rastreador
+que vaya más despacio), no se dan por rotas. Quedan pendientes, el resumen dice cuántas y las
+reglas que necesitan el sitio entero no se evalúan. `resume` sobre ese fichero terminado pide solo
+esas páginas, cuando el límite se haya levantado. Si se repite, rastrea con menos `--concurrency` o
+deja pasar el user-agent de CrawlForge en el cortafuegos del sitio.
+
 ### Rastreos que se repiten: guarda la configuración
 
 ```bash

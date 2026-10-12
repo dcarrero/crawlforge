@@ -85,14 +85,16 @@ CREATE TABLE crawl_meta (
     adapter         TEXT,                    -- 'wordpress' | 'astro' | NULL
     tier_at_runtime TEXT NOT NULL,           -- reglas aplicadas según nivel
     truncated       INTEGER NOT NULL DEFAULT 0,  -- migración 002
-    truncated_reason TEXT                    -- 'max_urls'|'max_depth'|'max_duration'|'list_mode'
+    truncated_reason TEXT                    -- 'max_urls'|'max_depth'|'max_duration'|'list_mode'|'rate_limited'
 );
 ```
 
 `truncated` dice que **el conjunto rastreado no es el sitio entero**, y no es decorativo: el motor
 lo usa para callar las reglas de `crawlforge_rules::REQUIERE_GRAFO_COMPLETO`, y `diff` para negarse
 a afirmar que una URL ha desaparecido. `list_mode` se marca en todo rastreo en modo lista — no
-porque nada se haya cortado, sino porque una lista solo ve las URLs que le diste.
+porque nada se haya cortado, sino porque una lista solo ve las URLs que le diste. `rate_limited`
+(0.17.0) dice que algunas páginas seguían respondiendo 429 tras los reintentos y quedaron
+`pending`; es el único motivo con el que `resume` acepta un rastreo terminado.
 
 `config_json` y `rules_version` son imprescindibles para que un diff entre dos rastreos sepa si la
 diferencia viene del sitio o de un cambio de configuración/reglas.

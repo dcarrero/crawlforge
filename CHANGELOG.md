@@ -19,6 +19,30 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.17.0] — 2026-10-12
+
+A page the site rate-limited is no longer reported as broken. Minor bump: what the rules report
+changes, and the crawl file gains a `truncated_reason`.
+
+### Fixed
+
+- **A 429 was stored as the page's status, and read as a broken page.** When a site rate-limits
+  the crawler —Cloudflare does it to bots it doesn't know— pages that still answered
+  `429 Too Many Requests` after the retries were written with that status, and every rule that
+  takes an internal 4xx as "broken" believed it. Crawling colorvivo.com on 2026-10-12, with
+  Cloudflare limiting the crawl, 88 pages that open fine came out as critical
+  `HTTP-404-INTERNAL`. In August the same site, crawled at the same concurrency, answered 200.
+
+  Those pages are now left `pending`: not processed, not counted and not reported. The crawl is
+  marked incomplete with `truncated_reason = 'rate_limited'`, so the rules that need the whole
+  site stay quiet, and the summary and the report say how many pages were left and how to get
+  them. A 429 that clears within the retries is processed as always.
+
+### Changed
+
+- **`resume` accepts a finished crawl that the site rate-limited**, and fetches only its pending
+  pages. Any other finished crawl is still run again, not resumed.
+
 ## [0.16.0] — 2026-10-12
 
 A new rule, and a fix to how title and description widths are measured. Both change what the
