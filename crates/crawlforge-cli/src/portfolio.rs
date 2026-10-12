@@ -436,7 +436,7 @@ fn read_site(path: &Path, lang: crawlforge_rules::Lang) -> Result<SiteSummary> {
     // `truncated` arrived with migration 002; a year-old crawl must still open.
     let truncated_col = has_column(&conn, "crawl_meta", "truncated")?;
     let sql = format!(
-        "SELECT base_url, started_at, status, core_version, rules_version, {}, {}
+        "SELECT base_url, started_at, status, core_version, rules_version, {}, {}, mode
          FROM crawl_meta LIMIT 1",
         if truncated_col { "truncated" } else { "0" },
         if truncated_col { "truncated_reason" } else { "NULL" },
@@ -452,6 +452,7 @@ fn read_site(path: &Path, lang: crawlforge_rules::Lang) -> Result<SiteSummary> {
         rules_version: String,
         truncated: bool,
         truncated_reason: Option<String>,
+        mode: String,
     }
     let meta = conn.query_row(&sql, [], |r| {
         Ok(Meta {
@@ -462,8 +463,17 @@ fn read_site(path: &Path, lang: crawlforge_rules::Lang) -> Result<SiteSummary> {
             rules_version: r.get(4)?,
             truncated: r.get::<_, i64>(5)? != 0,
             truncated_reason: r.get(6)?,
+            mode: r.get(7)?,
         })
     })?;
+    // A list that mixed sites is named after all of them, as in the report's title: its first
+    // line alone would hide the others.
+    let sites = crate::audit_report::audited_sites(&conn, &meta.mode)?;
+    let label = if sites.len() > 1 {
+        crate::audit_report::sites_list(lang, &sites)
+    } else {
+        clean(&meta.base_url)
+    };
 
     let urls_total: i64 = conn.query_row(
         "SELECT COUNT(*) FROM urls WHERE is_internal = 1 AND crawl_state <> 'pending'",
@@ -497,7 +507,7 @@ fn read_site(path: &Path, lang: crawlforge_rules::Lang) -> Result<SiteSummary> {
 
     Ok(SiteSummary {
         path: path.to_path_buf(),
-        label: clean(&meta.base_url),
+        label,
         started_at: clean(&meta.started_at),
         status: clean(&meta.status),
         truncated: meta.truncated,
@@ -1470,6 +1480,30 @@ mod tests {
         );
         let outcome = build(&[a, b]).expect("build the panel");
         assert_eq!(outcome.sites[0].label, "https://b.example/");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_list_that_mixed_sites_is_labelled_with_all_of_them() {
+        // The row used to carry the first line's `base_url`, and the panel counted a crawl of
+        // two sites as a crawl of one.
+        let dir = tmpdir("multi-site-label");
+        let path = site_file(&dir, "list.sqlite", &Meta::default(), &[]);
+        {
+            let conn = Connection::open(&path).expect("open");
+            conn.execute("UPDATE crawl_meta SET mode = 'list'", []).expect("mode");
+            conn.execute("UPDATE urls SET depth = 0", []).expect("depth");
+            conn.execute(
+                "INSERT INTO urls (id, url, url_hash, scheme, host, path, depth, is_internal,
+                                   in_sitemap, crawl_state, status_code)
+                 VALUES (2, 'https://other.example/', 2, 'https', 'other.example', '/', 0, 1, 0,
+                         'done', 200)",
+                [],
+            )
+            .expect("second site");
+        }
+        let outcome = build(&[path]).expect("build the panel");
+        assert_eq!(outcome.sites[0].label, "site.example, other.example");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

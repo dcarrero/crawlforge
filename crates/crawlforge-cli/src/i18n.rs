@@ -1300,6 +1300,16 @@ pub mod msg {
             en: "Audit of",
             es: "Auditoría de",
         }
+        // Un rastreo `list` que mezcla sitios: titularlo con el primero decía que los demás
+        // no se habían auditado.
+        report_audit_of_sites(n, sites) {
+            en: "Audit of {n} sites: {sites}",
+            es: "Auditoría de {n} sitios: {sites}",
+        }
+        sites_and_more(sites, n) {
+            en: "{sites} and {n} more",
+            es: "{sites} y {n} más",
+        }
         report_mode_line(mode, started) {
             en: "Mode `{mode}` · started {started}",
             es: "Modo `{mode}` · iniciada {started}",

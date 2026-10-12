@@ -19,6 +19,22 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.14.0] — 2026-10-12
+
+A `list` crawl that mixes sites is named after all of them. It is a minor bump because the report's
+title changes, and something may be reading it.
+
+### Fixed
+
+- **The report of a multi-site list was titled after its first line.** Since 0.11.0 a list can
+  audit several sites, but `report --format md|html` still said `Audit of https://first-site/`,
+  as if the others had not been audited. It now says `Audit of 2 sites: first-site, second-site`,
+  naming up to three and counting the rest (`… and 9 more`). The portfolio panel labelled the
+  file the same way and now uses the same list. The sites are read from the file itself, the
+  listed URLs being the only internal rows at depth 0, so lists crawled with 0.11.0 or later get
+  the new title without being crawled again. A list from before 0.11.0 marked the other sites
+  external, and keeps the title of the one site it audited.
+
 ## [0.13.0] — 2026-10-12
 
 External URLs that are recorded without a status check now say why. It is a minor bump because

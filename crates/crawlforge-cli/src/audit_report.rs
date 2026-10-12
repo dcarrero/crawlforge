@@ -211,6 +211,56 @@ fn header(conn: &Connection) -> Result<Header> {
     Ok(c)
 }
 
+/// Every site a `list` crawl audited, in the order of the list. Empty for any other mode.
+///
+/// `crawl_meta.base_url` only holds the first line's site: since 0.11.0 a list can mix several,
+/// and a report titled after the first one says the others were never audited. The file has no
+/// column with the set, but it doesn't need one: the listed URLs are the only internal rows at
+/// depth 0, and what is internal was decided against every line (`SiteScope`). A list from
+/// before 0.11.0 marked the other sites external, so it gives one site, which is what it audited.
+pub(crate) fn audited_sites(conn: &Connection, mode: &str) -> Result<Vec<String>> {
+    if mode != "list" {
+        return Ok(Vec::new());
+    }
+    let mut stmt =
+        conn.prepare("SELECT url FROM urls WHERE depth = 0 AND is_internal = 1 ORDER BY id")?;
+    let mut sites: Vec<String> = Vec::new();
+    for row in stmt.query_map([], |r| r.get::<_, String>(0))? {
+        let Ok(url) = url::Url::parse(&row?) else { continue };
+        let site = strip_control_chars(&crawlforge_core::normalize::site_authority(&url));
+        if !site.is_empty() && !sites.contains(&site) {
+            sites.push(site);
+        }
+    }
+    Ok(sites)
+}
+
+/// How many sites a title names before it says «and N more». A list can carry hundreds of
+/// domains, and a title nobody can read to the end names none of them.
+const SITES_NAMED: usize = 3;
+
+/// The sites of a multi-site list for a title or a panel row: «a, b, c and 9 more».
+pub(crate) fn sites_list(lang: Lang, sites: &[String]) -> String {
+    let named = sites.iter().take(SITES_NAMED).cloned().collect::<Vec<_>>().join(", ");
+    match sites.len().saturating_sub(SITES_NAMED) {
+        0 => named,
+        rest => msg::sites_and_more(lang, named, i18n::count(lang, rest as i64)),
+    }
+}
+
+/// The report's `#` title: the crawled URL, or every site when a list mixed several.
+fn report_title(lang: Lang, head: &Header, sites: &[String]) -> String {
+    if sites.len() > 1 {
+        msg::report_audit_of_sites(
+            lang,
+            i18n::count(lang, sites.len() as i64),
+            sites_list(lang, sites),
+        )
+    } else {
+        format!("{} {}", msg::report_audit_of(lang), head.base_url)
+    }
+}
+
 /// Lo que el propio fichero dice sobre su completitud: si el rastreo se cortó, si es de modo
 /// lista, si las externas se comprobaron y cuántas quedaron sin comprobar.
 ///
@@ -524,7 +574,8 @@ fn markdown(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
     let n = |v: i64| i18n::count(lang, v);
 
     let mut s = String::new();
-    s.push_str(&format!("# {} {}\n\n", msg::report_audit_of(lang), head.base_url));
+    let sites = audited_sites(conn, &head.mode)?;
+    s.push_str(&format!("# {}\n\n", report_title(lang, &head, &sites)));
     s.push_str(&format!("{}\n\n", msg::report_mode_line(lang, &head.mode, &head.started_at)));
 
     if head.truncated {
@@ -1027,6 +1078,83 @@ mod tests {
         let aviso = md.find("modo lista").expect("must warn about what actually happened");
         let metrica = md.find("| URLs |").expect("metrics table");
         assert!(aviso < metrica, "the notice comes before the numbers it qualifies");
+    }
+
+    /// Turns the test store into a `list` crawl of these URLs: listed ones at depth 0, as the
+    /// engine writes them. `(url, internal)`; the ids follow the order given.
+    fn como_lista(path: &std::path::Path, urls: &[(&str, bool)]) {
+        let conn = Connection::open(path).expect("open");
+        conn.execute(
+            "UPDATE crawl_meta SET mode = 'list', truncated = 1, truncated_reason = 'list_mode'",
+            [],
+        )
+        .expect("meta");
+        for (i, (u, interna)) in urls.iter().enumerate() {
+            let host = url::Url::parse(u).expect("url").host_str().unwrap_or("").to_string();
+            conn.execute(
+                "INSERT INTO urls (id, url, url_hash, scheme, host, path, depth, is_internal,
+                                   in_sitemap, crawl_state, status_code)
+                 VALUES (?1, ?2, ?1, 'https', ?3, '/', 0, ?4, 0, 'done', 200)",
+                rusqlite::params![i as i64 + 10, u, host, *interna as i64],
+            )
+            .expect("url");
+        }
+    }
+
+    #[test]
+    fn una_lista_de_varios_sitios_los_nombra_todos_en_el_titulo() {
+        // Since 0.11.0 a list can mix sites, and the title named only the first line's: a
+        // report about two sites that says it audited one.
+        let (_d, path) = store_de_prueba(false);
+        como_lista(
+            &path,
+            &[
+                ("https://ejemplo.es/a", true),
+                ("https://otro.example/", true),
+                ("https://ejemplo.es/b", true),
+                // A row at depth 0 that the crawl did not audit (an external redirect target)
+                // is not one of its sites.
+                ("https://ajeno.example/", false),
+            ],
+        );
+        let es = render(&path, "md", Lang::Es, None).expect("report");
+        assert!(
+            es.starts_with("# Auditoría de 2 sitios: ejemplo.es, otro.example\n"),
+            "{es:.200}"
+        );
+        let en = render(&path, "md", Lang::En, None).expect("report");
+        assert!(en.starts_with("# Audit of 2 sites: ejemplo.es, otro.example\n"), "{en:.200}");
+    }
+
+    #[test]
+    fn una_lista_larga_nombra_tres_sitios_y_cuenta_el_resto() {
+        let (_d, path) = store_de_prueba(false);
+        let urls: Vec<String> = (1..=5).map(|i| format!("https://s{i}.example/")).collect();
+        let filas: Vec<(&str, bool)> = urls.iter().map(|u| (u.as_str(), true)).collect();
+        como_lista(&path, &filas);
+        let md = render(&path, "md", Lang::Es, None).expect("report");
+        assert!(
+            md.starts_with("# Auditoría de 5 sitios: s1.example, s2.example, s3.example y 2 más\n"),
+            "{md:.200}"
+        );
+    }
+
+    #[test]
+    fn una_lista_de_un_solo_sitio_conserva_el_titulo_de_siempre() {
+        // Same host twice, once with the default port written out: one site, one URL title.
+        let (_d, path) = store_de_prueba(false);
+        como_lista(&path, &[("https://ejemplo.es/a", true), ("https://ejemplo.es:443/b", true)]);
+        let md = render(&path, "md", Lang::Es, None).expect("report");
+        assert!(md.starts_with("# Auditoría de https://ejemplo.es/\n"), "{md:.200}");
+    }
+
+    #[test]
+    fn el_mismo_host_en_otro_puerto_es_otro_sitio() {
+        // The engine's rule since 0.10.0 (`site_authority`): the title can't count otherwise.
+        let (_d, path) = store_de_prueba(false);
+        como_lista(&path, &[("https://ejemplo.es/", true), ("https://ejemplo.es:8443/", true)]);
+        let md = render(&path, "md", Lang::En, None).expect("report");
+        assert!(md.starts_with("# Audit of 2 sites: ejemplo.es, ejemplo.es:8443\n"), "{md:.200}");
     }
 
     #[test]

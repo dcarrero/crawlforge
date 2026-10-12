@@ -207,8 +207,8 @@ A link from one site of the list to another still **leaves** the page's site: it
 towards its internal links, and a `nofollow` on it is not `INDEX-NOFOLLOW-INTERNAL`. Both sites are
 yours, but for a search engine they are two sites.
 
-Two things still come from the first URL: the `CRAWLFORGE_AUTH` credential is only sent to its host,
-and the report is titled after it.
+The `CRAWLFORGE_AUTH` credential still comes from the first URL: it is only sent to its host. The
+report names every site in its title (`Audit of 2 sites: …`), and so does the portfolio panel.
 
 ### The crawl was interrupted
 

@@ -209,8 +209,9 @@ Un enlace de un sitio de la lista a otro sigue **saliendo** del sitio de la pág
 sus enlaces internos, y un `nofollow` en él no es `INDEX-NOFOLLOW-INTERNAL`. Los dos sitios son
 tuyos, pero para un buscador son dos sitios.
 
-Dos cosas siguen saliendo de la primera URL: la credencial de `CRAWLFORGE_AUTH` solo se manda a su
-host, y el informe lleva su nombre en el título.
+La credencial de `CRAWLFORGE_AUTH` sigue saliendo de la primera URL: solo se manda a su host. El
+informe nombra todos los sitios en el título (`Auditoría de 2 sitios: …`), y el panel de cartera
+también.
 
 ### Se ha cortado el rastreo
 
