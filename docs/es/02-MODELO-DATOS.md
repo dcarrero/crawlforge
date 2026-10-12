@@ -113,7 +113,8 @@ CREATE TABLE urls (
     is_internal         INTEGER NOT NULL,      -- 0/1
     in_sitemap          INTEGER NOT NULL DEFAULT 0,
     crawl_state         TEXT    NOT NULL,      -- 'pending'|'done'|'error'|'excluded'|'skipped'
-    exclusion_reason    TEXT,                  -- 'robots'|'nofollow'|'depth'|'pattern'|'limit'
+    exclusion_reason    TEXT,                  -- 'robots'|'nofollow'|'depth'|'pattern'|'limit'|
+                                               -- 'local_network'|'external_check_off'|'no_network'
     status_code         INTEGER,
     redirect_to         INTEGER REFERENCES urls(id),
     redirect_chain_len  INTEGER DEFAULT 0,

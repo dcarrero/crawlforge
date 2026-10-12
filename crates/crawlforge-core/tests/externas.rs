@@ -405,6 +405,40 @@ async fn sin_check_external_las_externas_quedan_registradas_sin_estado() {
         Some(None),
         "la externa queda registrada, sin estado"
     );
+    // Y dice por qué. Sin motivo la fila era idéntica a la de una sonda que no llegó a salir,
+    // y el informe no podía distinguir «se pidió así» de «algo se cortó» (bitácora, 2026-08-01:
+    // 9.446 filas así en un rastreo de diariodelamancha).
+    assert_eq!(
+        estado_y_motivo(&conn, "/fuera"),
+        Some(("skipped".to_string(), Some("external_check_off".to_string())))
+    );
+}
+
+#[tokio::test]
+async fn sin_check_external_el_destino_externo_de_una_redireccion_tambien_dice_por_que() {
+    // La otra rama que registra externas: el destino de una redirección. Tiene su propio
+    // `if external_checks`, y sin cubrirla el motivo podía quedar puesto en los enlaces y
+    // vacío aquí.
+    let ajeno = ServidorDePruebas::arrancar_como_otro_host(&[]).await;
+    let propio = ServidorDePruebas::arrancar(&[
+        ("/", pagina_con("<a href=\"/go/tienda\">la tienda</a>")),
+        ("/go/tienda", Respuesta::redirige(301, &ajeno.url_como_otro_host("/producto"))),
+    ])
+    .await;
+
+    let tmp = Temporal::new("apagado-redireccion");
+    let mut job = CrawlJob::http(propio.base());
+    job.discover_sitemaps = false;
+    job.limits.check_external = false;
+
+    crawlforge_core::engine::run(job, &tmp.store()).await.expect("rastrear");
+    let conn = abrir(&tmp.store());
+
+    assert_eq!(ajeno.peticiones("/producto"), 0, "apagado es apagado");
+    assert_eq!(
+        estado_y_motivo(&conn, "/producto"),
+        Some(("skipped".to_string(), Some("external_check_off".to_string())))
+    );
 }
 
 /// El `(crawl_state, exclusion_reason)` de una URL externa, por su ruta.

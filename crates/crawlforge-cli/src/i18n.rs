@@ -243,6 +243,15 @@ pub mod msg {
             en: "{n} external links were recorded but never checked.",
             es: "{n} enlaces externos quedaron registrados pero sin comprobar.",
         }
+        // Una auditoría de carpeta no tiene red: el motivo no es el tope, y `audit` no acepta
+        // --max-external. Lo que sí sirve es rastrear lo publicado.
+        external_offline(n) {
+            en: "{n} external links were not checked: auditing a folder makes no network \
+                 requests. To check them, crawl the published site with `crawlforge crawl <URL>`.",
+            es: "{n} enlaces externos quedaron sin comprobar: auditar una carpeta no hace \
+                 peticiones de red. Para comprobarlos, rastrea el sitio publicado con \
+                 `crawlforge crawl <URL>`.",
+        }
         // La otra mitad de la honestidad de las externas: cuando la comprobación estaba
         // apagada, «cero enlaces externos rotos» no significa que no los haya.
         external_check_disabled() {
@@ -536,6 +545,10 @@ pub mod msg {
         state_note_external_checked() {
             en: "external URL — status checked, content not audited",
             es: "URL externa — estado comprobado, contenido no auditado",
+        }
+        state_note_external_not_checked(reason) {
+            en: "external URL — status not checked ({reason})",
+            es: "URL externa — estado sin comprobar ({reason})",
         }
         state_note_external_unchecked() {
             en: "external URL — never requested",

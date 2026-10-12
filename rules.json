@@ -1010,5 +1010,5 @@
       "severity": "low"
     }
   ],
-  "rules_version": "0.12.0"
+  "rules_version": "0.13.0"
 }

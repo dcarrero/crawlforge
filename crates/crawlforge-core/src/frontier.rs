@@ -58,6 +58,15 @@ pub enum ExclusionReason {
     /// Es un motivo propio y no la ausencia de motivo: sin él la fila queda indistinguible de
     /// una sonda interrumpida y la reanudación la vuelve a encolar.
     LocalNetwork,
+    /// Una externa registrada con la comprobación de estado apagada (`--no-external-check`).
+    ///
+    /// Sin motivo, la fila era idéntica a la de una sonda que no llegó a salir, y el informe no
+    /// podía decir si no se comprobó porque se pidió así o porque algo se cortó.
+    ExternalCheckOff,
+    /// Una externa registrada en una auditoría sin red: el modo `filesystem` no tiene cliente
+    /// HTTP. Sin este motivo el informe la contaba contra el tope `max_external` y aconsejaba
+    /// subirlo, con un flag que `audit` ni siquiera acepta.
+    NoNetwork,
 }
 
 impl ExclusionReason {
@@ -69,6 +78,8 @@ impl ExclusionReason {
             Self::Pattern => "pattern",
             Self::Limit => "limit",
             Self::LocalNetwork => "local_network",
+            Self::ExternalCheckOff => "external_check_off",
+            Self::NoNetwork => "no_network",
         }
     }
 }

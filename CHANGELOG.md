@@ -19,7 +19,32 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
-## [0.12.0] — 2026-10-12
+## [0.13.0] — 2026-10-12
+
+External URLs that are recorded without a status check now say why. It is a minor bump because
+the crawl file gains two `exclusion_reason` values and the report changes what it says about them.
+
+### Fixed
+
+- **The report of a folder audit blamed the wrong thing.** `crawlforge audit ./dist` makes no
+  network requests, so external links are recorded without a status. The report counted them as
+  links left over by the `max_external` cap and advised raising it with `--max-external`, a flag
+  `audit` does not accept. It now says that auditing a folder makes no network requests and that
+  checking them means crawling the published site. Older `audit` files, which carry no reason,
+  get the right message too: they are recognised by their mode. Found by auditing this project's
+  own website, which reported 314.
+
+### Changed
+
+- **`exclusion_reason` is filled in for external URLs that were never checked.**
+  `external_check_off` with `--no-external-check`, and `no_network` in a folder audit. Until now
+  both were left empty, which made the row identical to a probe that never went out: anyone
+  querying the file could not tell "not asked for" from "cut short". `pattern`, `nofollow` and
+  `local_network` already worked this way.
+- `inspect` shows such a URL as "external URL — status not checked (reason)", not as excluded from
+  the crawl: it was recorded, and what is missing is its status.
+
+
 
 The file `crawlforge diff --out` saves can be opened again. Until now the tool wrote it and did not
 know how to read it: `report` refused it, politely, and the only way in was a SQLite client. It is a

@@ -226,25 +226,35 @@ pub struct StoreNotes {
     /// `config_json` no se puede leer (un fichero antiguo o fabricado): sin dato no se afirma.
     pub check_external: Option<bool>,
     /// Externas registradas y nunca sondeadas: sin código, sin error de sonda y sin motivo
-    /// de exclusión.
+    /// de exclusión. En un `audit` anterior a `no_network` incluye las sin red, pero ahí
+    /// [`StoreNotes::external_note`] ya ha respondido con `externals_offline`.
     pub externals_unchecked: i64,
+    /// Externas sin comprobar porque el rastreo no tenía red (`audit` de una carpeta).
+    ///
+    /// Van aparte porque el motivo es otro: contarlas en `externals_unchecked` hacía que el
+    /// informe de un `dist/` culpara al tope `max_external` y aconsejara `--max-external`, un
+    /// flag que `audit` no acepta. Se reconocen por el modo del rastreo y no solo por
+    /// `exclusion_reason = 'no_network'`, para que los ficheros de antes de ese motivo, con la
+    /// columna vacía, digan también la verdad.
+    pub externals_offline: i64,
 }
 
 pub fn store_notes(conn: &Connection) -> Result<StoreNotes> {
     use rusqlite::OptionalExtension;
-    let meta: Option<(i64, Option<String>, String)> = conn
+    let meta: Option<(i64, Option<String>, String, String)> = conn
         .query_row(
-            "SELECT truncated, truncated_reason, config_json FROM crawl_meta LIMIT 1",
+            "SELECT truncated, truncated_reason, config_json, mode FROM crawl_meta LIMIT 1",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
-    let Some((truncated, reason, config_json)) = meta else {
+    let Some((truncated, reason, config_json, mode)) = meta else {
         return Ok(StoreNotes {
             truncated: false,
             truncated_reason: None,
             check_external: None,
             externals_unchecked: 0,
+            externals_offline: 0,
         });
     };
     let check_external = serde_json::from_str::<crawlforge_core::job::CrawlJob>(&config_json)
@@ -257,24 +267,38 @@ pub fn store_notes(conn: &Connection) -> Result<StoreNotes> {
         [],
         |r| r.get(0),
     )?;
+    let externals_offline: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM urls
+         WHERE is_internal = 0 AND crawl_state = 'skipped'
+           AND status_code IS NULL AND error_kind IS NULL
+           AND (exclusion_reason = 'no_network'
+                OR (exclusion_reason IS NULL AND ?1 = 'filesystem'))",
+        [&mode],
+        |r| r.get(0),
+    )?;
     Ok(StoreNotes {
         truncated: truncated == 1,
         truncated_reason: reason.map(|s| strip_control_chars(&s)),
         check_external,
         externals_unchecked,
+        externals_offline,
     })
 }
 
 impl StoreNotes {
     /// La nota sobre las externas que corresponde a este fichero, si toca alguna.
     ///
-    /// Tres casos y solo tres: la comprobación estaba apagada (y «cero externas rotas» no
-    /// significa nada); estaba encendida, el rastreo terminó entero y aun así quedaron sin
-    /// sondear (el tope `max_external`); o quedaron sin sondear en un rastreo cortado, donde
-    /// culpar al tope sería inventar. Sin dato de configuración no se afirma nada.
+    /// Cuatro casos y solo cuatro: la comprobación estaba apagada (y «cero externas rotas» no
+    /// significa nada); no había red, porque era la auditoría de una carpeta; estaba encendida,
+    /// el rastreo terminó entero y aun así quedaron sin sondear (el tope `max_external`); o
+    /// quedaron sin sondear en un rastreo cortado, donde culpar al tope sería inventar. Sin dato
+    /// de configuración no se afirma nada.
     pub fn external_note(&self, lang: Lang) -> Option<String> {
         match self.check_external {
             Some(false) => Some(msg::external_check_disabled(lang)),
+            _ if self.externals_offline > 0 => {
+                Some(msg::external_offline(lang, i18n::count(lang, self.externals_offline)))
+            }
             Some(true) if self.externals_unchecked > 0 => {
                 let n = i18n::count(lang, self.externals_unchecked);
                 if self.truncated {
@@ -1033,6 +1057,61 @@ mod tests {
 
         let es = render(&path, "md", Lang::Es, None).expect("report");
         assert!(es.contains("no significa que no los haya"), "{es:.600}");
+    }
+
+    /// Una externa registrada y sin estado, con el motivo que se le pase.
+    fn externa_sin_estado(path: &Path, motivo: Option<&str>) {
+        let conn = Connection::open(path).expect("open");
+        conn.execute(
+            "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
+                               crawl_state, exclusion_reason)
+             VALUES (900, 'https://ajeno.example/', 900, 'https', 'ajeno.example', '/', 0, 0,
+                     'skipped', ?1)",
+            [motivo],
+        )
+        .expect("external row");
+    }
+
+    #[test]
+    fn una_auditoria_de_carpeta_no_culpa_al_tope_de_externas() {
+        // El informe de nuestra propia web, el 2026-10-12: «314 enlaces externos quedaron sin
+        // comprobar: se alcanzó el tope max_external. Súbelo con --max-external». Una carpeta
+        // no tiene red, y `audit` no acepta ese flag.
+        let (_d, path) = store_de_prueba(false);
+        externa_sin_estado(&path, Some("no_network"));
+        let md = render(&path, "md", Lang::En, None).expect("report");
+        assert!(md.contains("auditing a folder makes no network requests"), "{md:.800}");
+        assert!(!md.contains("max_external"), "the cap had nothing to do with it: {md:.800}");
+    }
+
+    #[test]
+    fn un_audit_antiguo_sin_motivo_tampoco_culpa_al_tope() {
+        // Los ficheros de `audit` de antes de `no_network` tienen la columna vacía. Se
+        // reconocen por el modo, para que el mismo fichero deje de dar el consejo falso.
+        let (_d, path) = store_de_prueba(false);
+        externa_sin_estado(&path, None);
+        Connection::open(&path)
+            .expect("open")
+            .execute("UPDATE crawl_meta SET mode = 'filesystem'", [])
+            .expect("mode");
+        let md = render(&path, "md", Lang::Es, None).expect("report");
+        assert!(md.contains("auditar una carpeta no hace peticiones de red"), "{md:.800}");
+        assert!(!md.contains("max_external"), "{md:.800}");
+    }
+
+    #[test]
+    fn en_un_rastreo_http_una_externa_sin_motivo_sigue_siendo_el_tope() {
+        // La guarda del otro lado: el modo no puede tapar el caso que sí es el tope.
+        let (_d, path) = store_de_prueba(false);
+        externa_sin_estado(&path, None);
+        let config = serde_json::to_string(&crawlforge_core::job::CrawlJob::http("https://ejemplo.es/"))
+            .expect("serialize");
+        Connection::open(&path)
+            .expect("open")
+            .execute("UPDATE crawl_meta SET config_json = ?1", [config])
+            .expect("meta");
+        let md = render(&path, "md", Lang::En, None).expect("report");
+        assert!(md.contains("max_external"), "{md:.800}");
     }
 
     #[test]

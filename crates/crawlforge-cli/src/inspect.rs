@@ -490,6 +490,14 @@ fn status_section(w: &mut Writer<'_>, row: &UrlRow, lang: Lang) -> Result<()> {
         "excluded" | "skipped" => {
             let probed = row.status_code.is_some() || row.error_kind.is_some();
             let texto = match &row.exclusion_reason {
+                // Una externa que no se comprobó por cómo se lanzó el rastreo no está
+                // «excluida»: se registró, y lo que falta es su estado.
+                Some(reason)
+                    if !row.is_internal
+                        && matches!(reason.as_str(), "external_check_off" | "no_network") =>
+                {
+                    msg::state_note_external_not_checked(lang, sanitize(reason))
+                }
                 // El motivo (`robots`, `pattern`) es un valor de columna y no se traduce.
                 Some(reason) => msg::state_note_excluded(lang, sanitize(reason)),
                 None if !row.is_internal && probed => msg::state_note_external_checked(lang),
@@ -1368,6 +1376,24 @@ mod tests {
         let store = store_de_prueba("externa-sin-sondear");
         let s = ficha(&store, "https://externo.com/");
         assert!(s.contains("external URL — never requested"), "{s}");
+        assert!(!s.contains("excluded from the crawl"), "{s}");
+    }
+
+    #[test]
+    fn una_externa_sin_comprobar_por_el_flag_no_dice_que_fue_excluida() {
+        // Con `--no-external-check` la fila lleva motivo, y el motivo no la convierte en una
+        // exclusión: se registró, y lo que no se pidió fue su estado.
+        let store = store_de_prueba("externa-apagada");
+        Connection::open(&store)
+            .expect("open")
+            .execute(
+                "UPDATE urls SET exclusion_reason = 'external_check_off'
+                  WHERE url = 'https://externo.com/'",
+                [],
+            )
+            .expect("reason");
+        let s = ficha(&store, "https://externo.com/");
+        assert!(s.contains("external URL — status not checked (external_check_off)"), "{s}");
         assert!(!s.contains("excluded from the crawl"), "{s}");
     }
 

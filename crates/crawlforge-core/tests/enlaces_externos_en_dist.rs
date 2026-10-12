@@ -170,3 +170,37 @@ async fn una_ruta_ajena_que_coincide_con_una_del_dist_sigue_siendo_ajena() {
         "el enlace propio se canonicaliza y el ajeno se queda donde estaba",
     );
 }
+
+/// Una auditoría de carpeta no tiene red, y la fila de cada externa lo dice.
+///
+/// Sin motivo, el informe contaba esas filas como «sin comprobar por el tope `max_external`» y
+/// aconsejaba `--max-external`, un flag que `audit` no acepta. Lo encontró auditar nuestra
+/// propia web el 2026-10-12: «314 enlaces externos quedaron sin comprobar: se alcanzó el tope».
+#[tokio::test]
+async fn una_externa_de_un_dist_queda_marcada_como_sin_red() {
+    let tmp = Temporal::new("sin-red");
+    tmp.write(
+        "site/index.html",
+        r#"<!doctype html><html lang="es"><head><meta charset="utf-8">
+        <title>Una página con un enlace que sale de casa</title>
+        <meta name="description" content="Una carpeta no hace peticiones de red."></head>
+        <body><h1>Fuera</h1><p><a href="https://ajeno.example/pagina">fuera</a></p></body></html>"#,
+    );
+
+    // Con la comprobación de externas en su valor por defecto, que es encendida: lo que falta
+    // aquí no es el permiso, es la red.
+    let job = CrawlJob::filesystem(tmp.path.join("site"), "https://propio.local/");
+    assert!(job.limits.check_external, "the default is on, which is the case being tested");
+    engine::run(job, &tmp.store()).await.expect("auditar el dist");
+
+    let conn = abrir(&tmp.store());
+    let fila: (String, Option<String>, Option<i64>) = conn
+        .query_row(
+            "SELECT crawl_state, exclusion_reason, status_code FROM urls
+              WHERE url = 'https://ajeno.example/pagina'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("la externa queda registrada");
+    assert_eq!(fila, ("skipped".to_string(), Some("no_network".to_string()), None));
+}

@@ -1048,6 +1048,16 @@ async fn run_with<F: Fetcher + 'static>(
     // las externas quedan registradas sin estado, como siempre.
     let external_checks =
         job.limits.check_external && !job.limits.follow_external && fetcher.can_check_status();
+    // Por qué una externa queda sin comprobar cuando no hay sondas, para escribirlo en su fila.
+    // `None` con `follow_external`, que tiene su propio caso (el perímetro), y con sondas, donde
+    // el motivo lo da `why_not_probe` fila a fila.
+    let unchecked_reason = if external_checks || job.limits.follow_external {
+        None
+    } else if !job.limits.check_external {
+        Some(ExclusionReason::ExternalCheckOff)
+    } else {
+        Some(ExclusionReason::NoNetwork)
+    };
     let mut externals = ExternalQueue::default();
     // Externas encoladas para comprobar, contra el tope `max_external`. Cuenta encoladas y no
     // comprobadas: así el tope decide en el descubrimiento y las descartadas se cuentan una
@@ -1491,6 +1501,9 @@ async fn run_with<F: Fetcher + 'static>(
                                         url = %n.normalized,
                                         "URL externa fuera del perímetro: no se rastrea"
                                     );
+                                } else {
+                                    // Sin sondas: apagadas a mano o sin red. La fila lo dice.
+                                    row.exclusion_reason = unchecked_reason;
                                 }
                                 writer.send(CrawlResult {
                                     url: Some(row),
@@ -1674,6 +1687,8 @@ async fn run_with<F: Fetcher + 'static>(
                                             metrics.externals_unchecked += 1;
                                             row.exclusion_reason =
                                                 Some(ExclusionReason::LocalNetwork);
+                                        } else {
+                                            row.exclusion_reason = unchecked_reason;
                                         }
                                         writer.send(CrawlResult {
                                             url: Some(row),
@@ -2530,6 +2545,8 @@ fn exclusion_reason_from_db(s: &str) -> Option<ExclusionReason> {
         "pattern" => Some(ExclusionReason::Pattern),
         "limit" => Some(ExclusionReason::Limit),
         "local_network" => Some(ExclusionReason::LocalNetwork),
+        "external_check_off" => Some(ExclusionReason::ExternalCheckOff),
+        "no_network" => Some(ExclusionReason::NoNetwork),
         _ => None,
     }
 }
