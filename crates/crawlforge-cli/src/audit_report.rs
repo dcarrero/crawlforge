@@ -1112,8 +1112,8 @@ mod tests {
                 ("https://ejemplo.es/a", true),
                 ("https://otro.example/", true),
                 ("https://ejemplo.es/b", true),
-                // A row at depth 0 that the crawl did not audit (an external redirect target)
-                // is not one of its sites.
+                // A row at depth 0 that is not internal is not one of its sites. The engine
+                // writes externals with no depth, so this guards the query, not a known case.
                 ("https://ajeno.example/", false),
             ],
         );
