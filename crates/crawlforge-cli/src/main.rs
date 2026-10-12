@@ -284,16 +284,19 @@ enum Command {
         #[arg(short, long, default_value = "csv")]
         format: String,
     },
-    /// Compare two crawls and report what changed.
+    /// Compare two crawls and report what changed, or open a diff saved with --out.
     ///
     /// This is what turns a one-off audit into monitoring: Screaming Frog gives you a
     /// snapshot, this tells you whether the latest deploy made anything worse. With
     /// `--fail-on` it doubles as a CI gate.
+    ///
+    /// Given a single file saved with `--out`, it shows that diff again, as it was. Add
+    /// `--rule` or `--change` to list every row instead of three examples per group.
     Diff {
-        /// The earlier crawl (the reference).
+        /// The earlier crawl (the reference), or a diff file saved with --out.
         before: PathBuf,
-        /// The later crawl (the one being judged).
-        after: PathBuf,
+        /// The later crawl (the one being judged). Leave it out to open a saved diff.
+        after: Option<PathBuf>,
         /// Save the diff as a file, to open it later.
         #[arg(short, long)]
         out: Option<PathBuf>,
@@ -305,6 +308,14 @@ enum Command {
         /// A severity means that one or worse: `--fail-on high` also fails on a `critical`.
         #[arg(long, value_delimiter = ',')]
         fail_on: Vec<String>,
+        /// A rule ID, e.g. HTTP-404-INTERNAL: lists every new and resolved finding of that
+        /// rule, with no cut-off.
+        #[arg(short, long)]
+        rule: Option<String>,
+        /// A change type, e.g. url_removed or status_changed: lists every row of that type,
+        /// with no cut-off. An unknown value lists the available ones.
+        #[arg(long, value_name = "TYPE")]
+        change: Option<String>,
     },
     /// Aggregate panel across many crawl files: what changed since each site's previous
     /// crawl, which rules fail across the whole portfolio, and one line per site.
@@ -611,10 +622,40 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Command::Diff { before, after, out, fail_on, lang: _ } => {
-            let outcome = diff::compare(&before, &after, out.as_deref(), &fail_on)
-                .context("the crawls could not be compared")?;
-            diff::print_report(&outcome);
+        Command::Diff { before, after, out, fail_on, rule, change, lang: _ } => {
+            // Se valida antes de comparar: un `--change` mal escrito no debe costar un diff.
+            let change = change
+                .as_deref()
+                .map(|c| crawlforge_cli::diff_file::parse_change_type(lang, c))
+                .transpose()?;
+            let outcome = match after {
+                Some(after) => diff::compare(&before, &after, out.as_deref(), &fail_on)
+                    .context("the crawls could not be compared")?,
+                None => {
+                    // Un diff guardado solo se lee: ver la documentación de `diff_file`.
+                    anyhow::ensure!(out.is_none(), msg::error_diff_reopen_flag(lang, "--out"));
+                    anyhow::ensure!(
+                        fail_on.is_empty(),
+                        msg::error_diff_reopen_flag(lang, "--fail-on")
+                    );
+                    crawlforge_cli::diff_file::open(&before)?
+                }
+            };
+            if rule.is_some() || change.is_some() {
+                // El listado se calcula antes de imprimir nada: una regla que no existe es un
+                // error limpio, no una cabecera seguida de un error.
+                let listado = crawlforge_cli::diff_file::changes_text(
+                    &outcome,
+                    rule.as_deref(),
+                    change,
+                    lang,
+                )?;
+                diff::print_context(&outcome);
+                println!();
+                print!("{listado}");
+            } else {
+                diff::print_report(&outcome);
+            }
 
             // Salida distinta de cero para que un pipeline se entere, pero sin el prefijo de
             // error de `anyhow`: que una regla vigilada aparezca no es un fallo del programa,

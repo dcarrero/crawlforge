@@ -19,6 +19,43 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.12.0] — 2026-10-12
+
+The file `crawlforge diff --out` saves can be opened again. Until now the tool wrote it and did not
+know how to read it: `report` refused it, politely, and the only way in was a SQLite client. It is a
+minor bump because `diff` gains a form and two flags.
+
+### Added
+
+- **`crawlforge diff <file>` opens a saved diff.** Give it the file written by `--out` and nothing
+  else, and the summary comes back exactly as it was printed that day, in whichever language you
+  ask for now, with a line saying when and by which version it was generated. A saved diff is only
+  read, so `--out` and `--fail-on` are refused there with a message that says to run them on the
+  crawls.
+- **`--rule <ID>` and `--change <type>` list every row**, without the three-example cut-off of the
+  summary — the same idea as `report --rule`. They work on a saved diff and on a live comparison.
+  `--rule` lists the new and resolved findings of one rule; `--change` takes one of the twelve
+  change types (`url_removed`, `status_changed`, `title_changed`…), and a typo lists them all. Title,
+  meta description and canonical changes show the full text before and after; a changed robots.txt
+  shows the lines that went and the lines that came, not both files.
+- When a summary list is cut short, the summary now ends by saying how to see the rest.
+
+### Changed
+
+- **Warnings are stored structured in the diff file.** Each entry of `diff_meta.warnings_json`
+  keeps its English `message` and `breaks_conclusion`, and adds a `kind` with its data, so a
+  reopened diff can say them in Spanish. Files written by 0.11.0 or earlier still open: their
+  warnings come back as the English text they saved, and an inconclusive diff stays inconclusive.
+  The diff file format version does not change — the keys are additive.
+- Passing a single crawl file to `diff` explains that comparing needs two, and if its
+  `.prev.sqlite` is next to it, prints the exact command.
+- `report`, `export` and `inspect` given a diff file now say how to open it.
+
+### Fixed
+
+- The sitemap lines of the diff summary stopped at six with no sign that there were more. On a real
+  20,000-URL crawl there were 1,177. The summary now says "… and 1,171 more".
+
 ## [0.11.0] — 2026-09-24
 
 A list that mixes sites now audits all of them. It is a minor bump because what a crawl reports

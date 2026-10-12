@@ -416,15 +416,17 @@ JOIN a.pages pa ON pa.url_id = ua.id
 WHERE pa.is_indexable = 1 AND pb.is_indexable = 0;
 ```
 
-`crawl_diff()` genera un tercer fichero SQLite con una única tabla `changes`:
+`crawlforge diff --out` escribe un tercer fichero SQLite. Sus filas son la tabla `changes`:
 
 ```sql
 CREATE TABLE changes (
     id          INTEGER PRIMARY KEY,
     change_type TEXT NOT NULL,   -- 'url_added'|'url_removed'|'status_changed'|
-                                 -- 'title_changed'|'canonical_changed'|
+                                 -- 'title_changed'|'meta_description_changed'|
+                                 -- 'canonical_changed'|
                                  -- 'indexability_lost'|'indexability_gained'|
-                                 -- 'issue_appeared'|'issue_resolved'
+                                 -- 'issue_appeared'|'issue_resolved'|
+                                 -- 'robots_txt_changed'|'sitemap_changed'
     url         TEXT,
     field       TEXT,
     value_before TEXT,
@@ -432,6 +434,14 @@ CREATE TABLE changes (
     severity     TEXT
 );
 ```
+
+A su lado, una tabla `diff_meta` de una sola fila dice de qué dos rastreos sale, si es concluyente
+y por qué no: `warnings_json` es un array de objetos con `kind` (`truncated`, `unfinished`,
+`rules_version_changed`, `config_changed`, `scope_changed`, `mode_changed`, `missing_table`,
+`order_inverted`) y sus datos, más el `message` en inglés y `breaks_conclusion`. Los ficheros
+escritos por la 0.11.0 o anteriores solo traen estos dos últimos, y un lector tiene que conformarse
+con ellos. `schema_version` es el formato del propio fichero de diff, distinto del de rastreo.
+`crawlforge diff <fichero>` lo vuelve a abrir.
 
 **Requisito:** antes de diffear, comparar `config_json` y `rules_version` de ambos `crawl_meta`.
 Si difieren en algo que afecte al alcance, avisar en la UI — si no, se atribuirán al sitio cambios

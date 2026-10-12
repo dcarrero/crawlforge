@@ -117,9 +117,115 @@ pub enum Warning {
     /// revés. No es un error —comparar hacia atrás puede ser deliberado— pero sin el aviso,
     /// «Ha empeorado» y «Ha mejorado» se leerían justo al contrario de lo que pasó.
     OrderInverted { before_started: String, after_started: String },
+    /// Un aviso leído de un fichero de diff anterior a que se guardaran estructurados: de él
+    /// solo sobrevive el texto inglés con el que se escribió, y así se enseña, sin traducir.
+    Stored { message: String, breaks_conclusion: bool },
+}
+
+impl Side {
+    /// El identificador que se guarda en el fichero de diff. No se traduce: es un dato.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Before => "before",
+            Self::After => "after",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "before" => Some(Self::Before),
+            "after" => Some(Self::After),
+            _ => None,
+        }
+    }
 }
 
 impl Warning {
+    /// El aviso tal como se guarda en `diff_meta.warnings_json`.
+    ///
+    /// `message` y `breaks_conclusion` son los de siempre y siguen ahí para quien ya los lea. Lo
+    /// que se añade es `kind` y sus datos, que es lo que deja **traducir** el aviso al reabrir el
+    /// fichero: el texto inglés horneado solo sirve en inglés. Las claves nuevas no rompen a un
+    /// lector antiguo, así que el esquema del fichero no cambia de versión.
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        let datos = match self {
+            Self::Truncated { side, reason } => {
+                json!({"kind": "truncated", "side": side.as_str(), "reason": reason})
+            }
+            Self::Unfinished { side, status } => {
+                json!({"kind": "unfinished", "side": side.as_str(), "status": status})
+            }
+            Self::RulesVersionChanged { before, after } => {
+                json!({"kind": "rules_version_changed", "before": before, "after": after})
+            }
+            Self::ConfigChanged { fields } => json!({"kind": "config_changed", "fields": fields}),
+            Self::ScopeChanged { before, after } => {
+                json!({"kind": "scope_changed", "before": before, "after": after})
+            }
+            Self::ModeChanged { before, after } => {
+                json!({"kind": "mode_changed", "before": before, "after": after})
+            }
+            Self::MissingTable { side, table } => {
+                json!({"kind": "missing_table", "side": side.as_str(), "table": table})
+            }
+            Self::OrderInverted { before_started, after_started } => json!({
+                "kind": "order_inverted",
+                "before_started": before_started,
+                "after_started": after_started,
+            }),
+            // Un aviso sin estructura se vuelve a escribir como llegó: sin `kind`.
+            Self::Stored { .. } => json!({}),
+        };
+        let mut obj = datos;
+        obj["message"] = json!(self.message(Lang::En));
+        obj["breaks_conclusion"] = json!(self.breaks_conclusion());
+        obj
+    }
+
+    /// La inversa de [`Warning::to_json`]. Un aviso sin `kind` —de un fichero escrito por la
+    /// 0.11.0 o antes— o con un `kind` que esta versión no conoce no se pierde: se conserva su
+    /// texto como [`Warning::Stored`]. Un aviso que desaparece al reabrir el fichero podría ser
+    /// justo el que decía que el diff no es concluyente.
+    pub fn from_json(v: &serde_json::Value) -> Self {
+        let text = |key: &str| v.get(key).and_then(|x| x.as_str()).map(str::to_string);
+        let side = || v.get("side").and_then(|x| x.as_str()).and_then(Side::parse);
+        let structured = match v.get("kind").and_then(|x| x.as_str()) {
+            Some("truncated") => side().map(|side| Self::Truncated { side, reason: text("reason") }),
+            Some("unfinished") => side()
+                .zip(text("status"))
+                .map(|(side, status)| Self::Unfinished { side, status }),
+            Some("rules_version_changed") => text("before")
+                .zip(text("after"))
+                .map(|(before, after)| Self::RulesVersionChanged { before, after }),
+            Some("config_changed") => v.get("fields").and_then(|x| x.as_array()).map(|fields| {
+                Self::ConfigChanged {
+                    fields: fields.iter().filter_map(|f| f.as_str().map(str::to_string)).collect(),
+                }
+            }),
+            Some("scope_changed") => text("before")
+                .zip(text("after"))
+                .map(|(before, after)| Self::ScopeChanged { before, after }),
+            Some("mode_changed") => text("before")
+                .zip(text("after"))
+                .map(|(before, after)| Self::ModeChanged { before, after }),
+            Some("missing_table") => side()
+                .zip(text("table"))
+                .map(|(side, table)| Self::MissingTable { side, table }),
+            Some("order_inverted") => text("before_started")
+                .zip(text("after_started"))
+                .map(|(before_started, after_started)| Self::OrderInverted {
+                    before_started,
+                    after_started,
+                }),
+            _ => None,
+        };
+        structured.unwrap_or_else(|| Self::Stored {
+            message: text("message").unwrap_or_default(),
+            breaks_conclusion: v.get("breaks_conclusion").and_then(|x| x.as_bool()).unwrap_or(false),
+        })
+    }
+
     /// El texto que se le enseña a quien ejecuta el comando, en el idioma pedido.
     ///
     /// Los motivos de truncado (`max_urls`), los estados (`cancelled`), los modos y los campos
@@ -155,12 +261,16 @@ impl Warning {
             Self::OrderInverted { before_started, after_started } => {
                 msg::warn_order_inverted(lang, before_started, after_started)
             }
+            Self::Stored { message, .. } => message.clone(),
         }
     }
 
     /// Si este aviso impide dar el diff por concluyente.
     pub fn breaks_conclusion(&self) -> bool {
-        matches!(self, Self::Truncated { .. } | Self::Unfinished { .. })
+        match self {
+            Self::Stored { breaks_conclusion, .. } => *breaks_conclusion,
+            _ => matches!(self, Self::Truncated { .. } | Self::Unfinished { .. }),
+        }
     }
 }
 
@@ -234,6 +344,29 @@ impl ChangeType {
             Self::RobotsTxtChanged => "robots_txt_changed",
             Self::SitemapChanged => "sitemap_changed",
         }
+    }
+
+    /// Todos los tipos, en el orden en que se presentan.
+    pub const ALL: [ChangeType; 12] = [
+        Self::UrlAdded,
+        Self::UrlRemoved,
+        Self::StatusChanged,
+        Self::TitleChanged,
+        Self::MetaDescriptionChanged,
+        Self::CanonicalChanged,
+        Self::IndexabilityLost,
+        Self::IndexabilityGained,
+        Self::IssueAppeared,
+        Self::IssueResolved,
+        Self::RobotsTxtChanged,
+        Self::SitemapChanged,
+    ];
+
+    /// La inversa de [`ChangeType::as_str`]. Acepta guiones por subrayados: `url-removed` en la
+    /// línea de comandos es una forma de teclear, no otro tipo.
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim().to_ascii_lowercase().replace('-', "_");
+        Self::ALL.into_iter().find(|t| t.as_str() == s)
     }
 }
 
@@ -327,6 +460,17 @@ pub struct DiffOutcome {
     /// Si `--fail-on` no puede pronunciarse porque los hallazgos nuevos se suprimieron.
     pub fail_on_inconclusive: bool,
     pub out_path: Option<PathBuf>,
+    /// Si el resultado se ha leído de un fichero de `diff --out` y no se acaba de calcular.
+    pub saved: Option<SavedDiff>,
+}
+
+/// De dónde sale un diff reabierto. La cabecera lo dice, porque un diff de hace un mes leído
+/// como si fuera de ahora lleva a arreglar lo que ya estaba arreglado.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedDiff {
+    pub path: PathBuf,
+    pub generated_at: String,
+    pub tool_version: String,
 }
 
 impl DiffOutcome {
@@ -439,6 +583,7 @@ pub fn compare(
         fail_on_requested: tokens.iter().map(FailToken::token).collect(),
         fail_on_inconclusive: !tokens.is_empty() && suppress_additions,
         out_path: None,
+        saved: None,
     };
 
     if let Some(path) = out {
@@ -1161,7 +1306,7 @@ fn parse_fail_on(lang: Lang, tokens: &[String]) -> Result<Vec<FailToken>> {
     Ok(out)
 }
 
-fn severity_rank(name: &str) -> usize {
+pub(crate) fn severity_rank(name: &str) -> usize {
     SEVERITIES.iter().position(|s| s.as_str() == name).unwrap_or(SEVERITIES.len())
 }
 
@@ -1294,17 +1439,10 @@ fn write_diff_file(source: &Connection, outcome: &DiffOutcome, out: &Path) -> Re
     // se leerá meses después, y hornear dentro el idioma del terminal que lo generó haría
     // que el mismo fichero dijera cosas distintas según quién lo hubiera creado. Quien lo
     // presente lo traducirá con su propio catálogo.
+    // Además del texto inglés, cada aviso lleva su `kind` y sus datos (ver
+    // [`Warning::to_json`]): es lo que deja a `crawlforge diff <fichero>` traducirlo.
     let warnings_json = serde_json::to_string(
-        &outcome
-            .warnings
-            .iter()
-            .map(|w| {
-                serde_json::json!({
-                    "message": w.message(Lang::En),
-                    "breaks_conclusion": w.breaks_conclusion(),
-                })
-            })
-            .collect::<Vec<_>>(),
+        &outcome.warnings.iter().map(Warning::to_json).collect::<Vec<_>>(),
     )?;
 
     let (b, a) = (&outcome.before, &outcome.after);
@@ -1388,13 +1526,48 @@ fn write_diff_file(source: &Connection, outcome: &DiffOutcome, out: &Path) -> Re
 /// estado, nombres de campo (`status_code`, `blocks_all`) y las marcas de tiempo — son datos.
 pub fn print_report(outcome: &DiffOutcome) {
     let lang = i18n::current_lang();
-    print_header(outcome, lang);
-    print_warnings(outcome, lang);
+    print_context(outcome);
     print_worse(outcome, lang);
     print_better(outcome, lang);
     print_other(outcome, lang);
     print_suppressed(outcome, lang);
+    print_full_lists_hint(outcome, lang);
     print_gate(outcome, lang);
+}
+
+/// Si algún listado del resumen se cortó, dice cómo ver el resto. Sin la
+/// pista, «… y 412 más» es un callejón: el resto está en el fichero, pero nada dice cómo llegar.
+fn print_full_lists_hint(outcome: &DiffOutcome, lang: Lang) {
+    let worse = |c: &&Change| {
+        status_rank(c.value_after.as_deref()) > status_rank(c.value_before.as_deref())
+    };
+    let better = |c: &&Change| {
+        status_rank(c.value_after.as_deref()) < status_rank(c.value_before.as_deref())
+    };
+    let nuevos: Vec<&Change> = outcome.of(ChangeType::IssueAppeared).collect();
+    let cortado = group_issues(&nuevos, lang).iter().any(|(_, _, urls)| urls.len() > MAX_EXAMPLES)
+        || [ChangeType::IndexabilityLost, ChangeType::UrlAdded, ChangeType::UrlRemoved]
+            .into_iter()
+            .any(|t| outcome.count(t) > MAX_EXAMPLES)
+        || outcome.count(ChangeType::SitemapChanged) > MAX_EXAMPLES * 2
+        || outcome.of(ChangeType::StatusChanged).filter(worse).count() > MAX_EXAMPLES
+        || outcome.of(ChangeType::StatusChanged).filter(better).count() > MAX_EXAMPLES;
+    if !cortado {
+        return;
+    }
+    println!();
+    for linea in msg::hint_diff_full_lists(lang).lines() {
+        println!("  {linea}");
+    }
+}
+
+/// La cabecera y los avisos, sin el resumen. Es lo que precede a un listado de `--rule` o
+/// `--change`: una lista completa de URLs desaparecidas sin el aviso de que el rastreo estaba
+/// truncado se lee como un hecho.
+pub fn print_context(outcome: &DiffOutcome) {
+    let lang = i18n::current_lang();
+    print_header(outcome, lang);
+    print_warnings(outcome, lang);
 }
 
 /// Una línea de recuento con el número pegado a la columna de la derecha, mida lo que mida la
@@ -1432,6 +1605,13 @@ fn print_header(outcome: &DiffOutcome, lang: Lang) {
         msg::label_common(lang),
         msg::diff_common_note(lang, i18n::count(lang, outcome.urls_common))
     );
+    if let Some(saved) = &outcome.saved {
+        println!(
+            "  {:<9} {}",
+            msg::label_saved(lang),
+            msg::diff_saved_note(lang, &saved.generated_at, &saved.tool_version, saved.path.display())
+        );
+    }
 }
 
 fn print_warnings(outcome: &DiffOutcome, lang: Lang) {
@@ -1632,6 +1812,10 @@ fn print_other(outcome: &DiffOutcome, lang: Lang) {
             change.value_after.as_deref().unwrap_or("—")
         );
     }
+    // Sin esta línea, 1.177 cambios de sitemap se leían como seis (diariodelamancha, 2026-10-12).
+    if sitemaps.len() > MAX_EXAMPLES * 2 {
+        println!("  {}", msg::more_examples(lang, n(sitemaps.len() - MAX_EXAMPLES * 2)));
+    }
     if outcome.issues_persisted > 0 {
         println!(
             "{}",
@@ -1737,8 +1921,10 @@ pub(crate) fn status_rank(code: Option<&str>) -> u8 {
 
 // ─────────────────────────────────────────────────────────────────────── Tests
 
+/// `pub(crate)` para que los tests del lector (`diff_file.rs`) partan del mismo escenario que
+/// los de la comparación, en vez de una copia que se desincronice.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use rusqlite::params;
 
@@ -1848,7 +2034,7 @@ mod tests {
 
     /// Directorio temporal propio. La CLI no tiene `tempfile` entre sus dependencias y el stack
     /// está cerrado (`CONVENTIONS.md §3`), así que se hace a mano.
-    fn tmpdir(nombre: &str) -> PathBuf {
+    pub(crate) fn tmpdir(nombre: &str) -> PathBuf {
         let dir = std::env::temp_dir()
             .join(format!("crawlforge-diff-{}-{nombre}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1860,7 +2046,7 @@ mod tests {
     ///
     /// Antes: `/` (200), `/a` (200, indexable, título viejo), `/vieja` (200).
     /// Después: `/` (200), `/a` (404, ya no indexable, título nuevo), `/nueva` (200).
-    fn escenario(dir: &Path, despues_truncado: Option<&str>) -> (PathBuf, PathBuf) {
+    pub(crate) fn escenario(dir: &Path, despues_truncado: Option<&str>) -> (PathBuf, PathBuf) {
         let antes = dir.join("antes.sqlite");
         let despues = dir.join("despues.sqlite");
 

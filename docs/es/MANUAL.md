@@ -148,6 +148,29 @@ crawlforge diff antes.sqlite despues.sqlite --fail-on high
 Sale con código distinto de cero si aparece un hallazgo nuevo de severidad `high` o peor. Un
 `--fail-on INDEX-NOINDEX` vigila una regla concreta.
 
+El resumen enseña tres ejemplos por grupo. Para la lista entera, nombra una regla o un tipo de
+cambio:
+
+```bash
+crawlforge diff antes.sqlite despues.sqlite --rule HTTP-404-INTERNAL   # todos los nuevos y resueltos
+crawlforge diff antes.sqlite despues.sqlite --change url_removed       # todas las URLs que se fueron
+```
+
+Los tipos son `url_added`, `url_removed`, `status_changed`, `title_changed`,
+`meta_description_changed`, `canonical_changed`, `indexability_lost`, `indexability_gained`,
+`issue_appeared`, `issue_resolved`, `robots_txt_changed` y `sitemap_changed`.
+
+Para conservar un diff, guárdalo con `--out cambios.sqlite`. Se vuelve a abrir con el mismo comando
+y solo ese fichero: el resumen sale como era, en el idioma que pidas, y `--rule` y `--change`
+también funcionan sobre él:
+
+```bash
+crawlforge diff cambios.sqlite --lang es
+crawlforge diff cambios.sqlite --change status_changed
+```
+
+Un diff guardado solo se lee: `--fail-on` es para el momento de comparar, no para después.
+
 ### Un sitio protegido con contraseña (staging)
 
 ```bash
@@ -553,7 +576,8 @@ crawlforge list   <FICHERO>   # una lista exacta de URLs
 crawlforge resume <FICHERO>   # continuar un rastreo cortado
 crawlforge report <FICHERO>   # resumen, o --format md|html
 crawlforge export <FICHERO> --format xlsx --out a.xlsx
-crawlforge diff   <ANTES> <DESPUES> [--fail-on high]
+crawlforge diff   <ANTES> <DESPUES> [--fail-on high] [--out d.sqlite]
+crawlforge diff   <DIFF> [--rule ID | --change TIPO]   # abrir un diff guardado
 crawlforge portfolio <RUTA>... [--format md|html --out f]   # panel sobre muchos rastreos
 crawlforge rules  [--category X] [--detail] [--format json]
 ```

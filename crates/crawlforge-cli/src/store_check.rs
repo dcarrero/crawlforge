@@ -156,6 +156,10 @@ mod tests {
         assert!(msg.contains("is a diff file"), "says what it is: {msg}");
         assert!(msg.contains("diff --out"), "and where it came from: {msg}");
         assert!(
+            msg.contains(&format!("crawlforge diff {}", salida.display())),
+            "and the command that does open it: {msg}"
+        );
+        assert!(
             msg.contains("crawl") && msg.contains("audit"),
             "and which commands produce what was needed: {msg}"
         );

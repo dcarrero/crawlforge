@@ -928,6 +928,80 @@ pub mod msg {
             en: "PASS   nothing watched shows up as a new finding.",
             es: "PASS   nada de lo vigilado aparece como hallazgo nuevo.",
         }
+        // ── Reabrir un diff guardado y listar sus filas (`diff_file.rs`) ──────
+        label_saved() {
+            en: "Saved",
+            es: "Guardado",
+        }
+        diff_saved_note(generated_at, version, path) {
+            en: "diff generated {generated_at} by crawlforge {version} · {path}",
+            es: "diff generado el {generated_at} con crawlforge {version} · {path}",
+        }
+        // Multilínea: el punto de llamada imprime cada línea con su sangría.
+        hint_diff_full_lists() {
+            en: "The lists above show only a few examples. For every row, add --rule <ID> or\n\
+                 --change <type> to the same command (e.g. --change url_removed).",
+            es: "Las listas de arriba solo enseñan unos ejemplos. Para ver todas las filas, añade\n\
+                 --rule <ID> o --change <tipo> al mismo comando (p. ej. --change url_removed).",
+        }
+        warn_unknown_change_types(n, types) {
+            en: "{n} change(s) of a type this crawlforge does not know ({types}) were left out. \
+                 The file was written by a newer version.",
+            es: "Se han dejado fuera {n} cambio(s) de un tipo que este crawlforge no conoce \
+                 ({types}). El fichero lo escribió una versión más nueva.",
+        }
+        label_status_changed() {
+            en: "Status codes changed",
+            es: "Códigos de estado cambiados",
+        }
+        diff_no_matching_changes() {
+            en: "No change in this diff matches.",
+            es: "Ningún cambio de este diff coincide.",
+        }
+        error_diff_missing(path) {
+            en: "{path} does not exist. Diff files are saved by \
+                 `crawlforge diff <before> <after> --out <file>`.",
+            es: "{path} no existe. Los ficheros de diff los guarda \
+                 `crawlforge diff <antes> <después> --out <fichero>`.",
+        }
+        error_diff_needs_two(path) {
+            en: "{path} is a crawl file, and comparing needs two: the earlier crawl and the \
+                 later one. A single file is only accepted if it is a diff saved with --out.",
+            es: "{path} es un fichero de rastreo, y para comparar hacen falta dos: el rastreo \
+                 anterior y el posterior. Un fichero solo se acepta si es un diff guardado con --out.",
+        }
+        hint_diff_prev(prev, path) {
+            en: "Its previous crawl is next to it:  crawlforge diff {prev} {path}",
+            es: "Su rastreo anterior está al lado:  crawlforge diff {prev} {path}",
+        }
+        error_diff_unknown_file(path) {
+            en: "{path} is neither a crawl file nor a diff file. Diff files are saved by \
+                 `crawlforge diff <before> <after> --out <file>`.",
+            es: "{path} no es ni un fichero de rastreo ni un fichero de diff. Los ficheros de \
+                 diff los guarda `crawlforge diff <antes> <después> --out <fichero>`.",
+        }
+        error_diff_too_new(path, version, supported) {
+            en: "{path} is a diff file of format {version}, newer than this crawlforge \
+                 understands ({supported}). Update crawlforge to open it.",
+            es: "{path} es un fichero de diff de formato {version}, más nuevo de lo que entiende \
+                 este crawlforge ({supported}). Actualiza crawlforge para abrirlo.",
+        }
+        error_diff_reopen_flag(flag) {
+            en: "{flag} applies when comparing two crawls; a saved diff is only read. \
+                 Run it on the crawls: crawlforge diff <before> <after> {flag} …",
+            es: "{flag} se aplica al comparar dos rastreos; un diff guardado solo se lee. \
+                 Lánzalo sobre los rastreos: crawlforge diff <antes> <después> {flag} …",
+        }
+        error_unknown_change_type(value, available) {
+            en: "{value} is not a change type. Available: {available}.",
+            es: "«{value}» no es un tipo de cambio. Disponibles: {available}.",
+        }
+        error_rule_with_change(change) {
+            en: "--rule matches findings, so it only combines with --change issue_appeared \
+                 or issue_resolved, not with {change}.",
+            es: "--rule busca hallazgos, así que solo se combina con --change issue_appeared \
+                 o issue_resolved, no con {change}.",
+        }
         site_wide_finding() {
             en: "(site-wide finding)",
             es: "(hallazgo de sitio)",
@@ -1185,10 +1259,11 @@ pub mod msg {
     messages! {
         error_store_is_diff(path) {
             en: "{path} is not a crawl file: it is a diff file, the kind `crawlforge diff --out` \
-                 saves.\nCrawl files are produced by `crawlforge crawl` and `crawlforge audit`.",
+                 saves. Open it with `crawlforge diff {path}`.\nCrawl files are produced by \
+                 `crawlforge crawl` and `crawlforge audit`.",
             es: "{path} no es un fichero de rastreo: es un fichero de diff, de los que guarda \
-                 `crawlforge diff --out`.\nLos ficheros de rastreo los generan `crawlforge crawl` \
-                 y `crawlforge audit`.",
+                 `crawlforge diff --out`. Se abre con `crawlforge diff {path}`.\nLos ficheros de \
+                 rastreo los generan `crawlforge crawl` y `crawlforge audit`.",
         }
         error_store_foreign(path) {
             en: "{path} is not a CrawlForge crawl file: it does not have its tables. \

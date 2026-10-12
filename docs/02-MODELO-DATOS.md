@@ -416,15 +416,17 @@ JOIN a.pages pa ON pa.url_id = ua.id
 WHERE pa.is_indexable = 1 AND pb.is_indexable = 0;
 ```
 
-`crawl_diff()` generates a third SQLite file with a single `changes` table:
+`crawlforge diff --out` writes a third SQLite file. Its rows are the `changes` table:
 
 ```sql
 CREATE TABLE changes (
     id          INTEGER PRIMARY KEY,
     change_type TEXT NOT NULL,   -- 'url_added'|'url_removed'|'status_changed'|
-                                 -- 'title_changed'|'canonical_changed'|
+                                 -- 'title_changed'|'meta_description_changed'|
+                                 -- 'canonical_changed'|
                                  -- 'indexability_lost'|'indexability_gained'|
-                                 -- 'issue_appeared'|'issue_resolved'
+                                 -- 'issue_appeared'|'issue_resolved'|
+                                 -- 'robots_txt_changed'|'sitemap_changed'
     url         TEXT,
     field       TEXT,
     value_before TEXT,
@@ -432,6 +434,14 @@ CREATE TABLE changes (
     severity     TEXT
 );
 ```
+
+Next to it, a one-row `diff_meta` table says which two crawls it came from, whether it is
+conclusive, and why not: `warnings_json` is an array of objects with `kind` (`truncated`,
+`unfinished`, `rules_version_changed`, `config_changed`, `scope_changed`, `mode_changed`,
+`missing_table`, `order_inverted`) and its data, plus the English `message` and
+`breaks_conclusion`. Files written by 0.11.0 or earlier carry only the last two; readers must fall
+back to them. `schema_version` is the diff file's own format, separate from the crawl file's.
+`crawlforge diff <file>` opens it again.
 
 **Requirement:** before diffing, compare `config_json` and `rules_version` of both `crawl_meta`
 rows. If they differ in anything that affects scope, warn in the UI — otherwise changes that are

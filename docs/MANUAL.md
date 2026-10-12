@@ -147,6 +147,28 @@ crawlforge diff antes.sqlite despues.sqlite --fail-on high
 It exits non-zero if a new finding of severity `high` or worse appears. A
 `--fail-on INDEX-NOINDEX` watches one specific rule.
 
+The summary shows three examples per group. For the whole list, name a rule or a type of change:
+
+```bash
+crawlforge diff antes.sqlite despues.sqlite --rule HTTP-404-INTERNAL   # every new and resolved one
+crawlforge diff antes.sqlite despues.sqlite --change url_removed       # every URL that went away
+```
+
+The types are `url_added`, `url_removed`, `status_changed`, `title_changed`,
+`meta_description_changed`, `canonical_changed`, `indexability_lost`, `indexability_gained`,
+`issue_appeared`, `issue_resolved`, `robots_txt_changed` and `sitemap_changed`.
+
+To keep a diff, save it with `--out cambios.sqlite`. It opens again with the same command and just
+that file — the summary comes back as it was, in the language you ask for, and `--rule` and
+`--change` work on it too:
+
+```bash
+crawlforge diff cambios.sqlite --lang es
+crawlforge diff cambios.sqlite --change status_changed
+```
+
+A saved diff is only read: `--fail-on` is for the moment of comparing, not afterwards.
+
 ### A password-protected site (staging)
 
 ```bash
@@ -552,7 +574,8 @@ crawlforge list   <FILE>      # an exact list of URLs
 crawlforge resume <FILE>      # continue an interrupted crawl
 crawlforge report <FILE>      # summary, or --format md|html
 crawlforge export <FILE> --format xlsx --out a.xlsx
-crawlforge diff   <BEFORE> <AFTER> [--fail-on high]
+crawlforge diff   <BEFORE> <AFTER> [--fail-on high] [--out d.sqlite]
+crawlforge diff   <DIFF> [--rule ID | --change TYPE]   # open a saved diff
 crawlforge portfolio <PATH>... [--format md|html --out f]   # panel across many crawls
 crawlforge rules  [--category X] [--detail] [--format json]
 ```
