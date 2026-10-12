@@ -19,6 +19,22 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.15.0] — 2026-10-12
+
+The portfolio panel counts sites, not files. It is a minor bump because what the panel reports
+changes, and so does what fits under a tier's site cap.
+
+### Changed
+
+- **A `list` that mixed sites counts as each of its sites.** `crawlforge portfolio` counted one
+  site per crawl file, so a list with fifty domains in one file passed as a single site: in the
+  header, in "fires on N of M sites" and against the tier's cap (`max_portfolio_sites`, 10 in
+  Pro). The file is still one row of the glance table, labelled with all its sites as in 0.14.0,
+  but the counts add up its sites. The findings of a multi-site file are split by the site of
+  their URL, so a rule that fires on two of its three sites counts two; findings on external
+  URLs don't make their host a site, and site-level findings, which carry no URL, count once.
+  On an incomplete crawl, a full-graph rule is inconclusive on each site where it did not fire.
+
 ## [0.14.0] — 2026-10-12
 
 A `list` crawl that mixes sites is named after all of them. It is a minor bump because the report's

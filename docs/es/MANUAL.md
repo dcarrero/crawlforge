@@ -461,6 +461,12 @@ Los `.prev.sqlite` que hay junto a tus rastreos **no** cuentan como sitios: cada
 usa `diff`, producido de la misma manera: repitiendo el rastreo sobre el mismo fichero de
 salida.
 
+El panel cuenta **sitios, no ficheros**. Una lista `list` que auditó varios sitios ocupa una sola
+fila, con todos ellos en la etiqueta, pero suma cada uno de sus sitios al recuento de la cabecera,
+al «salta en N de M sitios» (sus hallazgos se reparten según el sitio de su URL) y al tope de
+sitios del nivel. Hasta la 0.15.0 contaba como uno, y una lista con cincuenta dominios pasaba por
+un solo sitio.
+
 Salida real, recortada (una cartera de prueba de cinco sitios; dos ficheros los rastreó una
 versión anterior, un rastreo quedó truncado y otro es de modo lista):
 

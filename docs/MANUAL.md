@@ -458,6 +458,11 @@ The `.prev.sqlite` files next to your crawls are **not** counted as sites: each 
 "before" of the crawl next to it, and the panel compares the pair automatically. That is the
 same file `diff` uses, produced the same way — by re-crawling onto the same output file.
 
+The panel counts **sites, not files**. A `list` that audited several sites is one row, labelled
+with all of them, but it adds every one of its sites to the count in the header, to "fires on N
+of M sites" (its findings are split by the site of their URL) and to the tier's site cap. Until
+0.15.0 it counted as one, so a list with fifty domains passed as a single site.
+
 Real output, trimmed (a five-site test portfolio; two files were crawled by an older
 version, one crawl was truncated and one is a list crawl):
 

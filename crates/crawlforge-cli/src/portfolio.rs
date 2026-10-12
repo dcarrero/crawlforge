@@ -81,11 +81,22 @@ pub struct SiteSummary {
     pub sev_counts: [i64; 5],
     /// Which rules fired on this site: `rule_id → (worst observed severity, findings)`.
     pub fired: BTreeMap<String, (String, i64)>,
+    /// How many sites the file audited: one, or every site of a `list` that mixed several.
+    /// Since 0.15.0 the panel counts sites, not files, and this is what it adds up.
+    pub site_count: usize,
+    /// On how many of this file's sites each rule of [`SiteSummary::fired`] fired. Always 1 in
+    /// a single-site file; in a multi-site list, the findings are split by the site of their URL.
+    pub fired_sites: BTreeMap<String, usize>,
     /// The `.prev.sqlite` next to this file, if it exists — the "before" of the comparison.
     pub prev: Option<PathBuf>,
 }
 
 impl SiteSummary {
+    /// On how many of this file's sites `rule_id` fired.
+    fn fired_on(&self, rule_id: &str) -> usize {
+        self.fired_sites.get(rule_id).copied().unwrap_or(0)
+    }
+
     /// A crawl from which absences cannot be asserted: truncated (including list mode) or
     /// never finished. For the full-graph rules this site is inconclusive, not clean.
     pub fn incomplete(&self) -> bool {
@@ -151,6 +162,8 @@ pub struct NewFindingGroup {
 #[derive(Debug, Clone)]
 pub struct SiteChanges {
     pub label: String,
+    /// The sites of the file, so the pairs line counts sites as the rest of the panel does.
+    pub site_count: usize,
     pub path: PathBuf,
     pub prev_path: PathBuf,
     /// Whether the diff can assert what it says (no side truncated or unfinished).
@@ -195,6 +208,19 @@ pub struct PortfolioOutcome {
     pub changes: Vec<SiteChanges>,
     pub oldest: String,
     pub newest: String,
+}
+
+impl PortfolioOutcome {
+    /// Sites in the panel. A file is one site unless it is a `list` that mixed several: counting
+    /// files let fifty domains in one list pass as one site, on the panel and against the cap.
+    pub fn site_total(&self) -> usize {
+        self.sites.iter().map(|s| s.site_count).sum()
+    }
+
+    /// Sites with a previous crawl to compare against.
+    fn sites_with_pairs(&self) -> usize {
+        self.changes.iter().map(|c| c.site_count).sum()
+    }
 }
 
 // ───────────────────────────────────────────────────────────────── Entry point
@@ -244,7 +270,7 @@ fn run_impl(
     }
 
     let outcome = build(paths)?;
-    check_site_cap(source, outcome.sites.len(), lang)?;
+    check_site_cap(source, outcome.site_total(), lang)?;
 
     match format {
         Format::Terminal => {
@@ -505,9 +531,17 @@ fn read_site(path: &Path, lang: crawlforge_rules::Lang) -> Result<SiteSummary> {
         entry.1 += count;
     }
 
+    let fired_sites = if sites.len() > 1 {
+        fired_by_site(&conn, &sites, &fired)?
+    } else {
+        fired.keys().map(|rule| (rule.clone(), 1)).collect()
+    };
+
     Ok(SiteSummary {
         path: path.to_path_buf(),
         label,
+        site_count: sites.len().max(1),
+        fired_sites,
         started_at: clean(&meta.started_at),
         status: clean(&meta.status),
         truncated: meta.truncated,
@@ -592,6 +626,48 @@ fn civil_day(day: &str) -> Option<i64> {
     Some(era * 146_097 + doe - 719_468)
 }
 
+/// On how many sites of a multi-site list each fired rule fired, splitting its findings by the
+/// site of their URL.
+///
+/// The site is the URL's authority, host and port as the engine compares them
+/// (`normalize::site_authority`), cut out of the stored URL in SQL: there can be hundreds of
+/// thousands of findings, and parsing each URL in Rust would cost more than the rest of the panel.
+/// Stored URLs are normalised, so a default port is never written out.
+///
+/// Only the audited `sites` count. A finding can hang from an external URL (an outbound link that
+/// is broken), and its host is not a site of the portfolio. A rule whose findings match none of
+/// them —site-level findings have no URL at all— counts once: that can undercount a spread, never
+/// invent one.
+fn fired_by_site(
+    conn: &Connection,
+    sites: &[String],
+    fired: &BTreeMap<String, (String, i64)>,
+) -> Result<BTreeMap<String, usize>> {
+    let mut out: BTreeMap<String, usize> = fired.keys().map(|rule| (rule.clone(), 0)).collect();
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT i.rule_id,
+                substr(substr(u.url, instr(u.url, '://') + 3), 1,
+                       instr(substr(u.url, instr(u.url, '://') + 3) || '/', '/') - 1)
+         FROM issues i JOIN urls u ON u.id = i.url_id",
+    )?;
+    let rows =
+        stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
+    for row in rows {
+        let (rule_id, site) = row?;
+        let rule_id = crate::audit_report::strip_control_chars(&rule_id);
+        let site = site.map(|s| crate::audit_report::strip_control_chars(&s));
+        if let (Some(n), Some(site)) = (out.get_mut(&rule_id), site) {
+            if sites.contains(&site) {
+                *n += 1;
+            }
+        }
+    }
+    for n in out.values_mut() {
+        *n = (*n).max(1);
+    }
+    Ok(out)
+}
+
 // ─────────────────────────────────────────────────────────────── Rule spread
 
 /// On how many sites each rule fires, and on how many it could not be evaluated.
@@ -610,7 +686,7 @@ fn rule_spread(sites: &[SiteSummary]) -> Vec<RuleSpread> {
                 inconclusive: 0,
                 findings: 0,
             });
-            row.fired += 1;
+            row.fired += site.fired_on(rule_id);
             row.findings += count;
             if severity_rank(severity) < severity_rank(&row.severity) {
                 row.severity = severity.clone();
@@ -621,8 +697,9 @@ fn rule_spread(sites: &[SiteSummary]) -> Vec<RuleSpread> {
         if crawlforge_rules::requiere_grafo_completo(&row.rule_id) {
             row.inconclusive = sites
                 .iter()
-                .filter(|s| s.incomplete() && !s.fired.contains_key(&row.rule_id))
-                .count();
+                .filter(|s| s.incomplete())
+                .map(|s| s.site_count - s.fired_on(&row.rule_id))
+                .sum();
         }
     }
     let mut out: Vec<RuleSpread> = map.into_values().collect();
@@ -697,6 +774,7 @@ fn aggregate_changes(
 
     SiteChanges {
         label: site.label.clone(),
+        site_count: site.site_count,
         path: site.path.clone(),
         prev_path: prev.to_path_buf(),
         conclusive: outcome.conclusive(),
@@ -737,7 +815,7 @@ pub fn print_report(outcome: &PortfolioOutcome) {
     println!("{}", i18n::section(&msg::portfolio_title(lang)));
     println!(
         "  {} · {}",
-        msg::portfolio_sites_count(lang, outcome.sites.len()),
+        msg::portfolio_sites_count(lang, outcome.site_total()),
         msg::portfolio_range(lang, &outcome.oldest, &outcome.newest)
     );
 
@@ -770,7 +848,7 @@ pub fn print_report(outcome: &PortfolioOutcome) {
     } else {
         println!(
             "  {}",
-            msg::portfolio_pairs_line(lang, outcome.changes.len(), outcome.sites.len())
+            msg::portfolio_pairs_line(lang, outcome.sites_with_pairs(), outcome.site_total())
         );
         println!();
         println!("  {}:", msg::portfolio_new_critical_high(lang));
@@ -854,7 +932,7 @@ pub fn print_report(outcome: &PortfolioOutcome) {
                 "  {:<9} {:<30} {}{}",
                 i18n::severity_word(lang, &row.severity),
                 row.rule_id,
-                msg::portfolio_sites_of(lang, row.fired, outcome.sites.len()),
+                msg::portfolio_sites_of(lang, row.fired, outcome.site_total()),
                 msg::portfolio_inconclusive_suffix(lang, row.inconclusive),
             );
         }
@@ -904,7 +982,7 @@ pub fn markdown(outcome: &PortfolioOutcome, lang: crawlforge_rules::Lang) -> Str
     s.push_str(&format!("# {}\n\n", msg::portfolio_title(lang)));
     s.push_str(&format!(
         "{} · {}\n\n",
-        msg::portfolio_sites_count(lang, outcome.sites.len()),
+        msg::portfolio_sites_count(lang, outcome.site_total()),
         msg::portfolio_range(lang, &outcome.oldest, &outcome.newest)
     ));
 
@@ -929,7 +1007,7 @@ pub fn markdown(outcome: &PortfolioOutcome, lang: crawlforge_rules::Lang) -> Str
     } else {
         s.push_str(&format!(
             "{}\n\n",
-            msg::portfolio_pairs_line(lang, outcome.changes.len(), outcome.sites.len())
+            msg::portfolio_pairs_line(lang, outcome.sites_with_pairs(), outcome.site_total())
         ));
         s.push_str(&format!("### {}\n\n", msg::portfolio_new_critical_high(lang)));
         let mut any = false;
@@ -1003,7 +1081,7 @@ pub fn markdown(outcome: &PortfolioOutcome, lang: crawlforge_rules::Lang) -> Str
                 "| {} | `{}` | {}{} |\n",
                 i18n::severity_word(lang, &row.severity),
                 row.rule_id,
-                msg::portfolio_sites_of(lang, row.fired, outcome.sites.len()),
+                msg::portfolio_sites_of(lang, row.fired, outcome.site_total()),
                 msg::portfolio_inconclusive_suffix(lang, row.inconclusive),
             ));
         }
@@ -1504,6 +1582,100 @@ mod tests {
         }
         let outcome = build(&[path]).expect("build the panel");
         assert_eq!(outcome.sites[0].label, "site.example, other.example");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `list` file that audited `sites` (one page each, at depth 0), plus one external URL.
+    /// `issues` are `(index into sites, or None for the external URL, rule, severity)`.
+    fn list_file(
+        dir: &Path,
+        name: &str,
+        sites: &[&str],
+        truncated: Option<&str>,
+        issues: &[(Option<usize>, &str, &str)],
+    ) -> PathBuf {
+        let path = dir.join(name);
+        let conn = crawl_file(&path);
+        meta(&conn, &Meta { base_url: sites[0], truncated, ..Meta::default() });
+        conn.execute("UPDATE crawl_meta SET mode = 'list'", []).expect("mode");
+        for (i, site) in sites.iter().enumerate() {
+            let host = site.trim_start_matches("https://").trim_end_matches('/');
+            let id = url(&conn, i as i64 + 1, site, host);
+            conn.execute("UPDATE urls SET depth = 0 WHERE id = ?1", params![id]).expect("depth");
+            page(&conn, id, true);
+        }
+        let external = sites.len() as i64 + 1;
+        conn.execute(
+            "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
+                               crawl_state, status_code)
+             VALUES (?1, 'https://elsewhere.example/x', ?1, 'https', 'elsewhere.example', '/x',
+                     0, 0, 'skipped', 404)",
+            params![external],
+        )
+        .expect("external url");
+        for (site, rule, severity) in issues {
+            let id = site.map_or(external, |i| i as i64 + 1);
+            issue(&conn, id, rule, severity);
+        }
+        path
+    }
+
+    #[test]
+    fn a_list_of_several_sites_counts_each_of_them() {
+        // Counting files let a list with fifty domains pass as one site: on the panel, in the
+        // spread and against the tier's cap.
+        let dir = tmpdir("multi-site-count");
+        let list = list_file(
+            &dir,
+            "list.sqlite",
+            &["https://a.example/", "https://b.example/", "https://c.example/"],
+            None,
+            &[
+                (Some(0), "META-TITLE-TOO-LONG", "medium"),
+                (Some(1), "META-TITLE-TOO-LONG", "medium"),
+                (Some(2), "HTTP-404-INTERNAL", "critical"),
+                // On the external URL: elsewhere.example is not a site of the portfolio.
+                (None, "HTTP-404-INTERNAL", "critical"),
+            ],
+        );
+        let single = site_file(
+            &dir,
+            "single.sqlite",
+            &Meta { base_url: "https://d.example/", ..Meta::default() },
+            &[("META-TITLE-TOO-LONG", "medium")],
+        );
+        let outcome = build(&[list, single]).expect("build the panel");
+        assert_eq!(outcome.site_total(), 4);
+        assert_eq!(spread_row(&outcome, "META-TITLE-TOO-LONG").fired, 3);
+        assert_eq!(spread_row(&outcome, "HTTP-404-INTERNAL").fired, 1);
+
+        let pro = DevSource::new(Tier::Pro);
+        let cap = pro.limits().max_portfolio_sites.expect("Pro has a cap") as usize;
+        let many: Vec<String> = (0..=cap).map(|i| format!("https://s{i}.example/")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        let big = list_file(&dir, "big.sqlite", &many, None, &[]);
+        let outcome = build(&[big]).expect("build the panel");
+        assert!(
+            check_site_cap(&pro, outcome.site_total(), Lang::En).is_err(),
+            "one file with {} sites must not fit a cap of {cap}",
+            cap + 1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_incomplete_list_is_inconclusive_on_each_site_where_the_rule_did_not_fire() {
+        let dir = tmpdir("multi-site-inconclusive");
+        let list = list_file(
+            &dir,
+            "list.sqlite",
+            &["https://a.example/", "https://b.example/", "https://c.example/"],
+            Some("list_mode"),
+            &[(Some(0), "INDEX-ORPHAN-PAGE", "medium")],
+        );
+        let outcome = build(&[list]).expect("build the panel");
+        let orphan = spread_row(&outcome, "INDEX-ORPHAN-PAGE");
+        assert_eq!((orphan.fired, orphan.inconclusive), (1, 2));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
