@@ -1,5 +1,5 @@
 {
-  "count": 64,
+  "count": 65,
   "rules": [
     {
       "category": "asset",
@@ -754,6 +754,22 @@
       "severity": "medium"
     },
     {
+      "category": "duplicate",
+      "description": {
+        "en": "Two or more indexable URLs have almost the same visible text even though their HTML is not identical: a date, a widget or a few sentences change. They are usually tag and category pages listing the same posts, or one post rewritten over another. Google picks one to show and sets the others aside. Merge them, set them apart or canonicalise them to the main one.",
+        "es": "Dos o más URLs indexables tienen casi el mismo texto visible aunque su HTML no sea idéntico: cambian una fecha, un widget o unas pocas frases. Suele tratarse de páginas de etiqueta y de categoría que listan los mismos artículos, o de una entrada reescrita sobre otra. Google elige una para mostrarla y aparta las demás. Conviene fusionarlas, diferenciarlas o canonizarlas hacia la principal."
+      },
+      "id": "DUP-CONTENT-NEAR",
+      "min_tier": "free",
+      "name": {
+        "en": "Near-duplicate content",
+        "es": "Contenido casi idéntico"
+      },
+      "references": [],
+      "scope": "site",
+      "severity": "medium"
+    },
+    {
       "category": "http",
       "description": {
         "en": "The site links to a URL on another domain that is gone: it answers 404 or 410, or its domain does not resolve. It does not hurt like a 404 of your own, but it sends the visitor to an error page and ages the content: a guide full of dead links stops looking maintained.",
@@ -1026,5 +1042,5 @@
       "severity": "low"
     }
   ],
-  "rules_version": "0.17.0"
+  "rules_version": "0.18.0"
 }

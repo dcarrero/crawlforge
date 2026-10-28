@@ -139,6 +139,9 @@ pub struct ParsedPage {
     pub word_count: u32,
     /// Texto visible. Solo se acumula si se pidió (nivel Pro, para FTS5).
     pub body_text: Option<String>,
+    /// MinHash signature of the visible text outside `<aside>`, for `DUP-CONTENT-NEAR`. `None`
+    /// when the text is too short to compare. See [`crate::minhash`].
+    pub text_minhash: Option<Vec<u8>>,
     /// Longitud del HTML en bytes, para `content_ratio`.
     pub html_bytes: u64,
     /// Longitud del texto visible en bytes, para `content_ratio`.
@@ -196,6 +199,7 @@ struct PageAccumulator {
     current_anchor: Option<(usize, String)>,
     link_position: u32,
     collect_body_text: bool,
+    minhash: crate::minhash::MinHasher,
 }
 
 impl PageAccumulator {
@@ -865,6 +869,18 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                             if a.non_content_depth > 0 {
                                 return Ok(());
                             }
+                            // Sidebars are left out of the signature: on a blog the same
+                            // «recent posts» widget sits next to every post, and with short
+                            // posts it would be enough to make them look alike. `nav` and
+                            // `footer` are already out through `non_content_depth`.
+                            if a.current_region() != Region::Aside {
+                                let end = t.last_in_text_node();
+                                if chunk.contains('&') {
+                                    a.minhash.push(&decode_entities(chunk), end);
+                                } else {
+                                    a.minhash.push(chunk, end);
+                                }
+                            }
                             let words = chunk.split_whitespace().count() as u32;
                             if words == 0 {
                                 return Ok(());
@@ -899,10 +915,9 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
         }
     }
 
-    let mut page = Rc::try_unwrap(acc)
-        .map(RefCell::into_inner)
-        .unwrap_or_default()
-        .page;
+    let acc = Rc::try_unwrap(acc).map(RefCell::into_inner).unwrap_or_default();
+    let mut page = acc.page;
+    page.text_minhash = acc.minhash.finish();
 
     page.html_bytes = html_len;
     page.title = page

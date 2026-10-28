@@ -3813,6 +3813,7 @@ fn build_result<F: Fetcher>(
             .body_text
             .as_ref()
             .map(|t| xxhash_rust::xxh3::xxh3_64(t.as_bytes()) as i64),
+        text_minhash: parsed.text_minhash.clone(),
         html_hash: Some(xxhash_rust::xxh3::xxh3_64(&doc.body) as i64),
         content_ratio: parsed.content_ratio(),
         viewport: parsed.viewport.clone(),

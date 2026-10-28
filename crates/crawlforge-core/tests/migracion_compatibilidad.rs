@@ -40,6 +40,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (8, include_str!("../migrations/008_indice_unico_resources.sql")),
     (9, include_str!("../migrations/009_broken_links_sigue_redirecciones.sql")),
     (10, include_str!("../migrations/010_indice_links_element.sql")),
+    (11, include_str!("../migrations/011_text_minhash.sql")),
 ];
 
 struct Dir {

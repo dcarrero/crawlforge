@@ -27,6 +27,9 @@ const MIGRATIONS: &[(i64, &str, ResumeSafety)] = &[
     (9, include_str!("../migrations/009_broken_links_sigue_redirecciones.sql"), ResumeSafety::Safe),
     // Un índice no cambia ni una fila, y el escritor no lo consulta: se puede cruzar a mitad.
     (10, include_str!("../migrations/010_indice_links_element.sql"), ResumeSafety::Safe),
+    // A nullable column: the pages written before it keep NULL and `DUP-CONTENT-NEAR` skips
+    // them, so a resumed crawl can miss a near-duplicate in its older half but never invent one.
+    (11, include_str!("../migrations/011_text_minhash.sql"), ResumeSafety::Safe),
 ];
 
 /// ¿Puede un rastreo a medias cruzar esta migración y seguir reanudándose?

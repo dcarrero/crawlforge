@@ -380,7 +380,7 @@ fn canonical_form(code: &str) -> String {
 /// the engine — and its only job is making sure a relative hreflang does not produce false
 /// findings. Returns `None` when there is nothing to compare (empty href, or a base without a
 /// scheme).
-fn resolve_href(base: &str, href: &str) -> Option<String> {
+pub(crate) fn resolve_href(base: &str, href: &str) -> Option<String> {
     let href = href.trim();
     if href.is_empty() {
         return None;
@@ -464,7 +464,7 @@ fn colapsar_puntos(ruta: &str) -> String {
 /// points at itself spelled another way — at the price of not distinguishing two URLs that some
 /// exotic server might serve differently. That is the right trade: here a false negative costs
 /// far less than a false positive.
-fn url_key(url: &str) -> String {
+pub(crate) fn url_key(url: &str) -> String {
     let sin_fragmento = url.trim().split('#').next().unwrap_or("").trim();
     let (esquema, resto) = match sin_fragmento.split_once("://") {
         Some((e, r)) => (e.to_ascii_lowercase(), r),

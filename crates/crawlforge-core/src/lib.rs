@@ -20,6 +20,7 @@ pub mod normalize;
 pub mod parse;
 pub mod pattern;
 pub mod robots;
+pub mod minhash;
 pub mod sitemap;
 pub mod store;
 pub mod throttle;
@@ -29,6 +30,6 @@ pub use error::CoreError;
 
 /// Version del esquema SQLite que este core escribe.
 /// Debe coincidir con la ultima migracion de `migrations/`.
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");

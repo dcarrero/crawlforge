@@ -19,6 +19,47 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.18.0] — 2026-10-28
+
+A new rule, and a new column in the crawl file to feed it. Minor bump: the catalog reports
+something it did not, and files from 0.17.0 and earlier open, migrate and resume as before. The
+catalog has 65 rules.
+
+### Added
+
+- **`DUP-CONTENT-NEAR`** (medium). Two or more indexable pages whose visible text is at least
+  80 % alike while their HTML differs. `DUP-CONTENT-EXACT` only catches byte-for-byte copies, and
+  on a CMS those are rare: a nonce, a date or a "recent posts" widget is enough to change the
+  hash. The rule compares a 128-byte b-bit MinHash of each page's text (word 3-shingles, without
+  `nav`, `footer` or `aside`), finds candidates by locality-sensitive hashing instead of comparing
+  every pair, and groups pages transitively under one `group_key`. Left out: texts under 50
+  shingles, which `CONTENT-THIN` already covers; groups where every page has the same HTML, which
+  are `DUP-CONTENT-EXACT`; and pages that declare each other as hreflang alternates, which are
+  translations. That last exclusion came from crawling a real site, where the Spanish and English
+  lists of 222 World Cup stadiums were 96 % alike because proper names do not translate.
+
+  80 % and not Screaming Frog's 90 %, because 90 % found nothing real. On the same site, one
+  stadium published under two slugs measured between 72 % and 85 % (exact Jaccard, checked by
+  hand): hundred-word pages that repeat a name the two versions spell differently, where one
+  changed word changes three shingles. Pages built from one template with different data
+  measured 62 %, and distinct posts on a WordPress blog 25 % at most.
+
+  The planned version of this rule was a 64-bit SimHash in the Pro tier. SimHash was dropped
+  because one 64-bit fingerprint is too noisy for a threshold like this: at the distance that
+  catches 90 % alike pages, a 200,000-page crawl already has dozens of unrelated pairs that fall
+  under it by chance. And the rule is free, because the free tier limits scale, not findings.
+
+- **`pages.text_minhash`** (migration 011), the signature the rule reads. 128 bytes per page;
+  NULL for short texts and for pages crawled by earlier versions, so the rule finds nothing in
+  old files and a resumed crawl only compares its newer half. Computed while the HTML streams,
+  in constant memory. It adds about 0.11 ms of parsing to a 2,700-word page.
+
+### Fixed
+
+- **`pages.text_hash` was documented as a SimHash for near-duplicates.** It is an exact hash of
+  the body text, filled only when the Pro full-text index is on, and no rule reads it. The data
+  model now says so; the column is unchanged.
+
 ## [0.17.0] — 2026-10-12
 
 A page the site rate-limited is no longer reported as broken. Minor bump: what the rules report

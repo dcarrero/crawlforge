@@ -184,7 +184,7 @@ characters, and it matters even more in Spanish because the words are longer.
 | `CANON-CHAIN` | high | site | free | A canonicalizes to B, and B canonicalizes to C |
 | `CANON-CROSS-DOMAIN` | medium | page | free | Canonical to another domain |
 | `DUP-CONTENT-EXACT` | high | site | free | Identical HTML hash across 2+ URLs |
-| `DUP-CONTENT-NEAR` | medium | site | pro | Simhash with similarity > 90% |
+| `DUP-CONTENT-NEAR` | medium | site | free | Visible text ≥ 80% alike (MinHash over word 3-shingles) on 2+ indexable URLs whose HTML differs |
 | `DUP-H1` | low | site | pro | Same H1 on 2+ pages |
 
 ## 6. Headings and content (`CONTENT`)
@@ -308,7 +308,7 @@ fn references(&self) -> &[Reference];   // { standard, clause, url }
 | Tier | Rules | Criterion |
 |---|---|---|
 | Free | ~50 | All the fundamental technical SEO. **No finding is hidden within the 1,000-URL limit** |
-| Pro | +25 | Near-duplicates, schema, soft 404s, WordPress, static sites, advanced hreflang, JS rendering |
+| Pro | +25 | Schema, soft 404s, WordPress, static sites, advanced hreflang, JS rendering |
 | Agency | +A11Y and custom rules | The user's own custom rule engine |
 
 Remember the principle: **Free limits scale, not knowledge.** A free user

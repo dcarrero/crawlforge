@@ -50,6 +50,7 @@ pub(crate) const MIGRATIONS: &[(&str, &str)] = &[
         "010_indice_links_element.sql",
         include_str!("../../crawlforge-core/migrations/010_indice_links_element.sql"),
     ),
+    ("011_text_minhash.sql", include_str!("../../crawlforge-core/migrations/011_text_minhash.sql")),
 ];
 
 /// An in-memory database with the complete published schema — **all** the migrations, always.

@@ -178,6 +178,27 @@ pub static DUP_CONTENT_EXACT: RuleMeta = RuleMeta {
     references: &[],
 };
 
+pub static DUP_CONTENT_NEAR: RuleMeta = RuleMeta {
+    id: "DUP-CONTENT-NEAR",
+    severity: Severity::Medium,
+    category: Category::Duplicate,
+    min_tier: Tier::Free,
+    scope: Scope::Site,
+    name_es: "Contenido casi idéntico",
+    name_en: "Near-duplicate content",
+    desc_es: "Dos o más URLs indexables tienen casi el mismo texto visible aunque su HTML no \
+              sea idéntico: cambian una fecha, un widget o unas pocas frases. Suele tratarse de \
+              páginas de etiqueta y de categoría que listan los mismos artículos, o de una \
+              entrada reescrita sobre otra. Google elige una para mostrarla y aparta las demás. \
+              Conviene fusionarlas, diferenciarlas o canonizarlas hacia la principal.",
+    desc_en: "Two or more indexable URLs have almost the same visible text even though their HTML \
+              is not identical: a date, a widget or a few sentences change. They are usually tag \
+              and category pages listing the same posts, or one post rewritten over another. \
+              Google picks one to show and sets the others aside. Merge them, set them apart or \
+              canonicalise them to the main one.",
+    references: &[],
+};
+
 // ---------------------------------------------------------------- URL utilities
 
 /// The host of an absolute URL, without `userinfo` or port.
@@ -580,6 +601,190 @@ impl SiteRule for DupContentExact {
     }
 }
 
+/// Two pages whose texts have at least this estimated Jaccard similarity are near-duplicates.
+///
+/// Measured over word 3-shingles, where one changed word changes three shingles, so short pages
+/// fall fast: **0.9, Screaming Frog's default and the first value tried, found nothing real.**
+/// Crawling especialmundial.com on 2026-10-28, the same stadium published under two slugs
+/// (`estadio-durival-britto` and `estadio-durival-de-britto`, and three more like it) came out
+/// between 0.72 and 0.85, exact Jaccard checked by hand: hundred-word pages that repeat a name
+/// the two versions spell differently. Pages built from one template with different data
+/// (`england-vs-france`, `germany-vs-france`) were 0.62, and distinct posts on a WordPress blog
+/// 0.25 at most. 0.8 catches the clearer duplicates and keeps four standard deviations of the
+/// estimate away from the template pages; the rest are misses, which here cost less than a
+/// false finding.
+pub const NEAR_DUP_MIN_SIMILARITY: f64 = 0.80;
+
+/// Bytes of the signature (`crawlforge_core::minhash::PERMUTATIONS`). The rules crate does not
+/// depend on the core, so the number is repeated; a signature of any other length is ignored.
+const SIGNATURE_LEN: usize = 128;
+
+/// LSH bands: 21 of 6 bytes (the last two bytes are in none). Two signatures are compared only if
+/// they agree on a whole band.
+///
+/// At the 0.8 threshold a byte agrees with probability 0.8 (plus 1/256 by chance), a band of six
+/// with 0.26, and the chance of missing all 21 is 0.2 %; at 0.75 it is 1.6 %. Bands of 8 bytes,
+/// the first choice, missed 5 % at 0.8. A typical pair of distinct blog posts, at 0.25, becomes a
+/// candidate one time in 180, and two unrelated pages agree on a band with probability 256⁻⁶:
+/// they are never compared.
+const ROWS: usize = 6;
+const BANDS: usize = SIGNATURE_LEN / ROWS;
+
+/// Above this many pages in one bucket, each is only compared with the next `NEAR_DUP_WINDOW`
+/// of them, in signature order, instead of with all.
+///
+/// A bucket only grows when thousands of pages are near-copies of each other —a catalogue of
+/// product variants— and there comparing all pairs is quadratic. Those pages are mostly near each
+/// other anyway, so the window still joins them; what it can do is miss a pair, never invent one.
+const NEAR_DUP_WINDOW: usize = 256;
+
+/// Jaccard similarity estimated from two b-bit MinHash signatures.
+///
+/// Two different minima keep the same lowest byte one time in 256, so the raw share of agreeing
+/// positions overstates the similarity by that much; this is the correction from Li and König,
+/// *b-Bit Minwise Hashing* (WWW 2010), for b = 8.
+fn similarity(a: &[u8], b: &[u8]) -> f64 {
+    let agree = a.iter().zip(b).filter(|(x, y)| x == y).count() as f64 / SIGNATURE_LEN as f64;
+    let chance = 1.0 / 256.0;
+    (agree - chance) / (1.0 - chance)
+}
+
+/// Two or more indexable pages whose visible text is nearly the same.
+///
+/// Compares the `text_minhash` signature the parser writes for each page (see
+/// `crawlforge_core::minhash`). Comparing every page against every other is quadratic, so
+/// candidates come from locality-sensitive hashing: each signature is cut into [`BANDS`] bands,
+/// and only signatures that agree on a whole band are compared.
+///
+/// Pages are grouped transitively (if A is near B and B near C, the three are one group), which
+/// is what the user has to fix together. A group in which every page has the same `html_hash` is
+/// left out: that is `DUP-CONTENT-EXACT`, and reporting it twice would double the noise. Two
+/// pages that declare each other as hreflang alternates are never joined.
+///
+/// Files written before 0.18.0 have no signatures, and the rule finds nothing in them.
+pub struct DupContentNear;
+
+impl SiteRule for DupContentNear {
+    fn meta(&self) -> &'static RuleMeta {
+        &DUP_CONTENT_NEAR
+    }
+
+    fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
+        use crate::hreflang::{resolve_href, url_key};
+        use std::collections::{HashMap, HashSet};
+
+        struct Signed {
+            url_hash: i64,
+            url: String,
+            signature: Vec<u8>,
+            html_hash: Option<i64>,
+            hreflang_json: Option<String>,
+        }
+
+        let mut stmt = conn.prepare(
+            "SELECT u.url_hash, u.url, p.text_minhash, p.html_hash, p.hreflang_json
+             FROM pages p
+             JOIN urls u ON u.id = p.url_id
+             WHERE p.is_indexable = 1 AND p.text_minhash IS NOT NULL",
+        )?;
+        let mut pages = stmt
+            .query_map([], |r| {
+                Ok(Signed {
+                    url_hash: r.get(0)?,
+                    url: r.get(1)?,
+                    signature: r.get(2)?,
+                    html_hash: r.get(3)?,
+                    hreflang_json: r.get(4)?,
+                })
+            })?
+            .filter(|row| row.as_ref().map_or(true, |p| p.signature.len() == SIGNATURE_LEN))
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // Sorted by signature: identical ones end up next to each other, which is what the window
+        // over a large bucket relies on, and the order no longer depends on the crawl's.
+        pages.sort_unstable_by(|a, b| a.signature.cmp(&b.signature).then(a.url.cmp(&b.url)));
+
+        // Pages that declare each other as hreflang alternates are translations, not duplicates.
+        // Found crawling especialmundial.com on 2026-10-28: the Spanish and English lists of the
+        // 222 World Cup stadiums are 94 % alike, because a list of proper names does not
+        // translate. Google expects exactly that from a correctly declared alternate.
+        let index_of: HashMap<String, usize> =
+            pages.iter().enumerate().map(|(i, p)| (url_key(&p.url), i)).collect();
+        let mut alternates: HashSet<(usize, usize)> = HashSet::new();
+        for (i, p) in pages.iter().enumerate() {
+            let Some(json) = p.hreflang_json.as_deref() else { continue };
+            let Ok(pairs) = serde_json::from_str::<Vec<(String, String)>>(json) else { continue };
+            for (_, href) in pairs {
+                let Some(target) = resolve_href(&p.url, &href) else { continue };
+                if let Some(&j) = index_of.get(&url_key(&target)) {
+                    if i != j {
+                        alternates.insert((i.min(j), i.max(j)));
+                    }
+                }
+            }
+        }
+
+        let mut parent: Vec<usize> = (0..pages.len()).collect();
+        fn root(parent: &mut [usize], mut i: usize) -> usize {
+            while parent[i] != i {
+                parent[i] = parent[parent[i]];
+                i = parent[i];
+            }
+            i
+        }
+
+        for band in 0..BANDS {
+            let mut buckets: HashMap<&[u8], Vec<usize>> = HashMap::new();
+            for (i, p) in pages.iter().enumerate() {
+                buckets.entry(&p.signature[band * ROWS..(band + 1) * ROWS]).or_default().push(i);
+            }
+            for bucket in buckets.values() {
+                for (k, &a) in bucket.iter().enumerate() {
+                    for &b in bucket.iter().skip(k + 1).take(NEAR_DUP_WINDOW) {
+                        let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+                        if ra != rb
+                            && !alternates.contains(&(a.min(b), a.max(b)))
+                            && similarity(&pages[a].signature, &pages[b].signature)
+                                >= NEAR_DUP_MIN_SIMILARITY
+                        {
+                            parent[ra.max(rb)] = ra.min(rb);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+        for i in 0..pages.len() {
+            groups.entry(root(&mut parent, i)).or_default().push(i);
+        }
+        let mut groups: Vec<(usize, Vec<usize>)> = groups
+            .into_iter()
+            .filter(|(_, members)| {
+                let first = pages[members[0]].html_hash;
+                members.len() > 1
+                    && members.iter().any(|&m| first.is_none() || pages[m].html_hash != first)
+            })
+            .collect();
+        groups.sort_unstable_by_key(|(r, _)| *r);
+
+        let mut out = Vec::new();
+        for (r, members) in groups {
+            // The root is the group's smallest signature, so the key does not depend on the
+            // order in which the pages were crawled.
+            let key: String = pages[r].signature[..8].iter().map(|b| format!("{b:02x}")).collect();
+            for &m in &members {
+                out.push((
+                    Some(pages[m].url_hash),
+                    Issue::new(&DUP_CONTENT_NEAR)
+                        .with_detail(serde_json::json!({ "pages": members.len() }))
+                        .with_group(format!("text:{key}")),
+                ));
+            }
+        }
+        Ok(out)
+    }
+}
+
 pub(crate) fn page_rules() -> Vec<Box<dyn PageRule>> {
     vec![
         Box::new(CanonMissing),
@@ -603,6 +808,7 @@ pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
         Box::new(CanonChain),
         Box::new(CanonToRedirect),
         Box::new(DupContentExact),
+        Box::new(DupContentNear),
     ]
 }
 
@@ -1258,6 +1464,159 @@ mod tests {
         page(&conn, 2, None, "https://fixture.local/b", None, true);
         conn.execute("UPDATE pages SET html_hash = NULL", []).expect("clear the hashes");
         assert!(DupContentExact.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    /// A signature that agrees with `base` everywhere except in the first `changed` bytes.
+    fn signature(base: u8, changed: usize) -> Vec<u8> {
+        (0..SIGNATURE_LEN).map(|i| if i < changed { base.wrapping_add(1) } else { base }).collect()
+    }
+
+    /// An indexable page with a distinct `html_hash` (the `page` helper derives it from the
+    /// `url_id`) and the given signature.
+    fn signed_page(conn: &Connection, id: i64, sig: &[u8]) {
+        let u = format!("https://fixture.local/{id}");
+        url(conn, id, &u, Some(200));
+        page(conn, id, None, &u, None, true);
+        conn.execute(
+            "UPDATE pages SET text_minhash = ?2 WHERE url_id = ?1",
+            rusqlite::params![id, sig],
+        )
+        .expect("set the signature");
+    }
+
+    #[test]
+    fn the_estimate_is_corrected_for_chance_agreement() {
+        assert_eq!(similarity(&signature(0, 0), &signature(0, 0)), 1.0);
+        // 103 of 128 agree: 0.8047 raw, 0.8039 corrected. 102 is 0.7969 raw, 0.7961 corrected.
+        assert!(similarity(&signature(0, 0), &signature(0, 25)) >= NEAR_DUP_MIN_SIMILARITY);
+        assert!(similarity(&signature(0, 0), &signature(0, 26)) < NEAR_DUP_MIN_SIMILARITY);
+    }
+
+    #[test]
+    fn pages_above_the_threshold_are_near_duplicates() {
+        let conn = db();
+        signed_page(&conn, 1, &signature(0, 0));
+        signed_page(&conn, 2, &signature(0, 25));
+        let hallazgos = DupContentNear.evaluate(&conn).expect("evaluate");
+        assert_eq!(ids(&hallazgos), vec![1, 2], "the finding is recorded on both pages");
+        assert_eq!(hallazgos[0].1.severity, Severity::Medium);
+        assert_eq!(hallazgos[0].1.group_key, hallazgos[1].1.group_key);
+        assert!(hallazgos[0].1.detail_json.as_deref().unwrap_or("").contains("\"pages\":2"));
+    }
+
+    #[test]
+    fn pages_below_the_threshold_are_not() {
+        let conn = db();
+        signed_page(&conn, 1, &signature(0, 0));
+        signed_page(&conn, 2, &signature(0, 26));
+        assert!(DupContentNear.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn a_pair_that_differs_in_every_band_but_one_is_still_found() {
+        // Candidates come from bands: two signatures are only compared if they agree on every
+        // byte of at least one. Here one byte changes in each band but the last (20 of 128,
+        // similarity 0.84), so only that one is whole.
+        let conn = db();
+        let a = signature(0, 0);
+        let mut b = a.clone();
+        for band in 0..BANDS - 1 {
+            b[band * ROWS] = 1;
+        }
+        signed_page(&conn, 1, &a);
+        signed_page(&conn, 2, &b);
+        assert_eq!(ids(&DupContentNear.evaluate(&conn).expect("evaluate")), vec![1, 2]);
+    }
+
+    #[test]
+    fn identical_html_is_left_to_the_exact_rule() {
+        let conn = db();
+        signed_page(&conn, 1, &signature(0, 0));
+        signed_page(&conn, 2, &signature(0, 0));
+        conn.execute("UPDATE pages SET html_hash = 42", []).expect("equalise the hashes");
+        assert!(DupContentNear.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn same_text_with_different_html_is_a_near_duplicate() {
+        // The WordPress case: a nonce or a date changes the HTML and nothing a reader sees.
+        let conn = db();
+        signed_page(&conn, 1, &signature(0, 0));
+        signed_page(&conn, 2, &signature(0, 0));
+        assert_eq!(ids(&DupContentNear.evaluate(&conn).expect("evaluate")), vec![1, 2]);
+    }
+
+    #[test]
+    fn hreflang_alternates_are_translations_not_duplicates() {
+        // especialmundial.com, 2026-10-28: the Spanish and English lists of World Cup stadiums
+        // are 94 % alike because proper names do not translate. One direction of the hreflang is
+        // enough, and the `href` is stored as written in the HTML, relative here.
+        let conn = db();
+        signed_page(&conn, 1, &signature(0, 0));
+        signed_page(&conn, 2, &signature(0, 0));
+        conn.execute("UPDATE pages SET hreflang_json = '[[\"en\",\"/2\"]]' WHERE url_id = 1", [])
+            .expect("declare the alternate");
+        assert!(DupContentNear.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn an_alternate_does_not_shield_a_third_copy() {
+        // Pages 1 and 2 are each other's translation; page 3 is a plain copy of page 1.
+        let conn = db();
+        signed_page(&conn, 1, &signature(0, 0));
+        signed_page(&conn, 2, &signature(0, 0));
+        signed_page(&conn, 3, &signature(0, 0));
+        conn.execute("UPDATE pages SET hreflang_json = '[[\"en\",\"/2\"]]' WHERE url_id = 1", [])
+            .expect("declare the alternate");
+        let hallazgos = DupContentNear.evaluate(&conn).expect("evaluate");
+        assert!(ids(&hallazgos).contains(&3), "{:?}", ids(&hallazgos));
+    }
+
+    #[test]
+    fn a_non_indexable_page_does_not_count() {
+        let conn = db();
+        signed_page(&conn, 1, &signature(0, 0));
+        signed_page(&conn, 2, &signature(0, 0));
+        conn.execute("UPDATE pages SET is_indexable = 0 WHERE url_id = 2", []).expect("noindex");
+        assert!(DupContentNear.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn a_page_without_a_signature_is_no_ones_near_duplicate() {
+        // Too short a text, or a file written before 0.18.0.
+        let conn = db();
+        signed_page(&conn, 1, &signature(0, 0));
+        signed_page(&conn, 2, &signature(0, 0));
+        conn.execute("UPDATE pages SET text_minhash = NULL", []).expect("clear");
+        assert!(DupContentNear.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn a_signature_of_the_wrong_length_is_ignored() {
+        let conn = db();
+        signed_page(&conn, 1, &signature(0, 0));
+        signed_page(&conn, 2, &signature(0, 0)[..64]);
+        assert!(DupContentNear.evaluate(&conn).expect("evaluate").is_empty());
+    }
+
+    #[test]
+    fn near_duplicates_group_transitively() {
+        // A and B differ in bytes 0-19, B and C in bytes 20-39, so A and C differ in forty:
+        // each pair of neighbours is above the line and A-C is not. One group of three.
+        let conn = db();
+        let b = signature(0, 0);
+        let mut a = b.clone();
+        let mut c = b.clone();
+        a[..20].fill(1);
+        c[20..40].fill(1);
+        signed_page(&conn, 1, &a);
+        signed_page(&conn, 2, &b);
+        signed_page(&conn, 3, &c);
+        assert!(similarity(&a, &c) < NEAR_DUP_MIN_SIMILARITY);
+        let hallazgos = DupContentNear.evaluate(&conn).expect("evaluate");
+        assert_eq!(ids(&hallazgos).len(), 3);
+        assert!(hallazgos.iter().all(|(_, i)| i.group_key == hallazgos[0].1.group_key));
+        assert!(hallazgos[0].1.detail_json.as_deref().unwrap_or("").contains("\"pages\":3"));
     }
 
     #[test]

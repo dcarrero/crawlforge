@@ -151,7 +151,7 @@ y en español importa más aún porque las palabras son más largas.
 | `CANON-CHAIN` | high | site | free | A canoniza a B, y B canoniza a C |
 | `CANON-CROSS-DOMAIN` | medium | page | free | Canonical a otro dominio |
 | `DUP-CONTENT-EXACT` | high | site | free | Hash de HTML idéntico entre 2+ URLs |
-| `DUP-CONTENT-NEAR` | medium | site | pro | Simhash con similitud > 90% |
+| `DUP-CONTENT-NEAR` | medium | site | free | Texto visible parecido en un 80 % o más (MinHash sobre tríos de palabras) en 2+ URLs indexables con distinto HTML |
 | `DUP-H1` | low | site | pro | Mismo H1 en 2+ páginas |
 
 ## 6. Encabezados y contenido (`CONTENT`)
@@ -257,7 +257,7 @@ fn references(&self) -> &[Reference];   // { standard, clause, url }
 | Nivel | Reglas | Criterio |
 |---|---|---|
 | Free | ~50 | Todo el SEO técnico fundamental. **No se oculta ningún hallazgo dentro del límite de 1.000 URLs** |
-| Pro | +25 | Casi-duplicados, schema, soft-404, WordPress, estáticos, hreflang avanzado, render JS |
+| Pro | +25 | Schema, soft-404, WordPress, estáticos, hreflang avanzado, render JS |
 | Agency | +A11Y y reglas propias | Motor de reglas personalizadas del usuario |
 
 Recuerda el principio: **el Free limita la escala, no el conocimiento.** Un

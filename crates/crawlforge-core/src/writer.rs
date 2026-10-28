@@ -91,6 +91,8 @@ pub struct PageRow {
     pub hreflang_json: Option<String>,
     pub word_count: u32,
     pub text_hash: Option<i64>,
+    /// MinHash signature of the visible text, for `DUP-CONTENT-NEAR` (migration 011).
+    pub text_minhash: Option<Vec<u8>>,
     pub html_hash: Option<i64>,
     pub content_ratio: f64,
     pub viewport: Option<String>,
@@ -360,9 +362,9 @@ fn insert_pages(tx: &Transaction<'_>, rows: &[PageRow], index: &IdIndex) -> Resu
              h1, h1_count, h2_count, heading_json, canonical, canonical_is_self, meta_robots,
              x_robots_tag, is_indexable, indexability_reason, lang, hreflang_json, word_count,
              text_hash, html_hash, content_ratio, viewport, og_json, twitter_json, schema_types,
-             amp_url, internal_links_out, internal_links_in, crawl_depth_source)
+             amp_url, internal_links_out, internal_links_in, crawl_depth_source, text_minhash)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,
-                 ?21,?22,?23,?24,?25,?26,?27,?28,?29, NULL, ?30)",
+                 ?21,?22,?23,?24,?25,?26,?27,?28,?29, NULL, ?30, ?31)",
     )?;
 
     for r in rows {
@@ -408,6 +410,7 @@ fn insert_pages(tx: &Transaction<'_>, rows: &[PageRow], index: &IdIndex) -> Resu
             r.amp_url,
             r.internal_links_out,
             r.crawl_depth_source.as_str(),
+            r.text_minhash,
         ])?;
     }
     Ok(())
@@ -825,6 +828,7 @@ mod tests {
             hreflang_json: None,
             word_count: 100,
             text_hash: None,
+            text_minhash: None,
             html_hash: None,
             content_ratio: 0.2,
             viewport: None,

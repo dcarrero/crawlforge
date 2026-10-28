@@ -164,7 +164,7 @@ CREATE TABLE pages (
     lang                TEXT,
     hreflang_json       TEXT,
     word_count          INTEGER,
-    text_hash           INTEGER,      -- simhash del texto, para casi-duplicados
+    text_hash           INTEGER,      -- xxh3 exacto del texto, solo con la búsqueda Pro (ver abajo)
     html_hash           INTEGER,      -- xxh3 exacto
     content_ratio       REAL,         -- texto / html
     viewport            TEXT,
@@ -174,7 +174,8 @@ CREATE TABLE pages (
     amp_url             TEXT,
     internal_links_out  INTEGER,
     internal_links_in   INTEGER,      -- se rellena en la pasada final
-    crawl_depth_source  TEXT          -- 'link'|'sitemap'|'list'|'adapter'
+    crawl_depth_source  TEXT,         -- 'link'|'sitemap'|'list'|'adapter'
+    text_minhash        BLOB          -- migración 011: MinHash b-bit de 128 bytes, para casi-duplicados
 );
 
 CREATE INDEX idx_pages_title_len  ON pages(title_len);
@@ -182,6 +183,13 @@ CREATE INDEX idx_pages_indexable  ON pages(is_indexable);
 CREATE INDEX idx_pages_text_hash  ON pages(text_hash);
 CREATE INDEX idx_pages_links_in   ON pages(internal_links_in);
 ```
+
+**`text_minhash` y `text_hash`:** `text_minhash` es lo que compara `DUP-CONTENT-NEAR`: un MinHash
+b-bit del texto visible (tríos de palabras, sin `nav`, `footer` ni `aside`), de 128 bytes, NULL
+cuando el texto no llega a 50 tríos o el fichero es anterior a la 0.18.0
+(`crawlforge-core/src/minhash.rs`). `text_hash` se pensó para lo mismo y se describía como simhash
+hasta la 0.18.0, pero nunca lo fue: es un hash exacto del texto, solo se rellena con la búsqueda de
+texto completo de Pro y no lo lee ninguna regla.
 
 **`title_px` y `meta_desc_px`:** Google trunca por ancho en píxeles, no por número de caracteres.
 Calcularlo con las métricas de Arial 20px/14px da un aviso mucho más útil que "más de 60 caracteres".

@@ -162,7 +162,7 @@ CREATE TABLE pages (
     lang                TEXT,
     hreflang_json       TEXT,
     word_count          INTEGER,
-    text_hash           INTEGER,      -- simhash of the text, for near-duplicates
+    text_hash           INTEGER,      -- exact xxh3 of the body text, Pro full-text only (see below)
     html_hash           INTEGER,      -- exact xxh3
     content_ratio       REAL,         -- text / html
     viewport            TEXT,
@@ -172,7 +172,8 @@ CREATE TABLE pages (
     amp_url             TEXT,
     internal_links_out  INTEGER,
     internal_links_in   INTEGER,      -- filled in during the final pass
-    crawl_depth_source  TEXT          -- 'link'|'sitemap'|'list'|'adapter'
+    crawl_depth_source  TEXT,         -- 'link'|'sitemap'|'list'|'adapter'
+    text_minhash        BLOB          -- migration 011: 128-byte b-bit MinHash, for near-duplicates
 );
 
 CREATE INDEX idx_pages_title_len  ON pages(title_len);
@@ -180,6 +181,13 @@ CREATE INDEX idx_pages_indexable  ON pages(is_indexable);
 CREATE INDEX idx_pages_text_hash  ON pages(text_hash);
 CREATE INDEX idx_pages_links_in   ON pages(internal_links_in);
 ```
+
+**`text_minhash` and `text_hash`:** `text_minhash` is what `DUP-CONTENT-NEAR` compares: a
+b-bit MinHash of the visible text (word 3-shingles, without `nav`, `footer` or `aside`), 128
+bytes, NULL when the text has fewer than 50 shingles or the file predates 0.18.0
+(`crawlforge-core/src/minhash.rs`). `text_hash` was meant for the same job and described as a
+simhash until 0.18.0, but never was one: it is an exact hash of the body text, filled only when
+the Pro full-text index is on, and no rule reads it.
 
 **`title_px` and `meta_desc_px`:** Google truncates by pixel width, not by character count.
 Computing it with the Arial 20px/14px metrics gives a much more useful warning than "over 60

@@ -1,0 +1,19 @@
+-- 011 · `pages.text_minhash`, the signature `DUP-CONTENT-NEAR` compares.
+--
+-- A 128-byte b-bit MinHash of the page's visible text (see `crawlforge-core/src/minhash.rs`),
+-- NULL when the text is too short to say anything or the page was crawled by a binary older than
+-- 0.18.0.
+--
+-- A new column and not `text_hash`, which `001_initial.sql` describes as «simhash del texto, para
+-- casi-duplicados». It never was: the engine fills it with an exact xxh3 of the body text, and
+-- only when the Pro full-text index is on. Reusing it would have made the same column mean two
+-- different things depending on the binary that wrote it.
+--
+-- No index. The rule reads every signature once, filtered by `is_indexable`, which
+-- `idx_pages_indexable` already serves; there is no equality lookup on the value itself, since
+-- near-duplicates are by definition not equal.
+--
+-- Safe to cross when resuming: the pages written before it keep NULL, and the rule only compares
+-- pages that have a signature. A resumed crawl can miss near-duplicates among its older half; it
+-- cannot report a false one.
+ALTER TABLE pages ADD COLUMN text_minhash BLOB;
