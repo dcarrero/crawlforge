@@ -19,6 +19,31 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.19.0] — 2026-10-28
+
+A new rule. Minor bump: the catalog reports something it did not. No schema change; the rule
+reads what the parser sees while the page streams. The catalog has 66 rules.
+
+### Added
+
+- **`META-OUTSIDE-HEAD`** (high). The canonical, meta robots, hreflang, title or meta
+  description ends up outside the `<head>`, so Google ignores it although it is still in the
+  source. An element that does not belong in the head —a tracking `<img>`, a `<div>`, an
+  `<iframe>`, stray text— makes the HTML parser close the head right there and open the body;
+  Google documents the same behaviour ("Google ignores any elements that appear after the
+  invalid element"). A PHP warning printed before the document has the same effect on every tag
+  of the page, and is caught too. The finding says what closed the head, with the attribute that
+  identifies it (`<img src="https://…">`), because that is the fix. It also fires on pages we
+  see as `noindex`: the `noindex` itself may be one of the lost tags.
+
+  The parser follows the HTML standard's rules for the head, not a tag list: `<noscript>`
+  content is skipped as a browser with scripting does, so the Meta Pixel's
+  `<noscript><img></noscript>` is not a finding, and a `<link>` between `</head>` and `<body>`
+  goes back to the head. Checked against parse5, a full WHATWG parser, on 26 hand-written cases
+  and the home pages of 81 real sites: they agree on all but one, a stray `</br>` in the head, which the
+  standard turns into `<br>` and this parser does not see. None of the 81 real sites had the
+  defect. It adds 3-7 % to the parse of a real home page, about 0.03 ms.
+
 ## [0.18.0] — 2026-10-28
 
 A new rule, and a new column in the crawl file to feed it. Minor bump: the catalog reports

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<!-- META-OUTSIDE-HEAD: un plugin de seguimiento imprime un <img> en mitad del <head>. El
+     navegador cierra el head ahí y abre el body, así que el canonical, el meta robots y el
+     hreflang que vienen detrás quedan fuera, aunque el </head> siga más abajo. Google los ignora.
+     El píxel de dentro del <noscript> no cierra nada: está ahí para demostrarlo. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Una página con el head cortado por un píxel</title>
+<meta name="description" content="Una descripción correcta, de longitud suficiente para no llamar la atención de otras reglas.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<noscript><img height="1" width="1" src="/pixel-noscript.gif" alt=""></noscript>
+<img height="1" width="1" src="/pixel.gif" alt="">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="robots" content="index, follow">
+<link rel="alternate" hreflang="es" href="https://fixture.local/">
+</head>
+<body>
+<main><h1>Un encabezado correcto</h1>
+<p>El canonical sigue en el código fuente y ha dejado de valer, sin que nadie lo vea.</p></main>
+</body>
+</html>

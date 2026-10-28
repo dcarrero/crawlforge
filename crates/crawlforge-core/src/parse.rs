@@ -142,6 +142,15 @@ pub struct ParsedPage {
     /// MinHash signature of the visible text outside `<aside>`, for `DUP-CONTENT-NEAR`. `None`
     /// when the text is too short to compare. See [`crate::minhash`].
     pub text_minhash: Option<Vec<u8>>,
+    /// SEO metadata that a browser —and Google— places outside the `<head>`, in order of first
+    /// appearance: `"title"`, `"meta description"`, `"meta robots"`, `"canonical"`,
+    /// `"hreflang"`. Google stops reading the head at the first element that does not belong
+    /// there, so these are ignored. See [`HEAD_ELEMENTS`].
+    pub outside_head: Vec<&'static str>,
+    /// What closed the `<head>`: the first start tag that does not belong there (with an
+    /// attribute that identifies it, `<img src="…">`) or the first visible text. `None` if the
+    /// document never left the head.
+    pub head_closed_by: Option<String>,
     /// Longitud del HTML en bytes, para `content_ratio`.
     pub html_bytes: u64,
     /// Longitud del texto visible en bytes, para `content_ratio`.
@@ -200,11 +209,117 @@ struct PageAccumulator {
     link_position: u32,
     collect_body_text: bool,
     minhash: crate::minhash::MinHasher,
+    /// `true` once the parser would have left the `<head>`. See [`HEAD_ELEMENTS`].
+    body_started: bool,
+    /// Depth inside head elements whose content is not markup for this purpose (`<title>`,
+    /// `<script>`, `<noscript>`…): neither their text nor their children close the head.
+    head_raw_depth: u32,
 }
 
 impl PageAccumulator {
     fn current_region(&self) -> Region {
         self.region_stack.last().copied().unwrap_or_default()
+    }
+
+    /// Notes a piece of SEO metadata if it came after the `<head>` was closed.
+    fn note_if_outside_head(&mut self, kind: &'static str) {
+        if self.body_started && !self.page.outside_head.contains(&kind) {
+            self.page.outside_head.push(kind);
+        }
+    }
+}
+
+/// Start tags the HTML parser keeps inside the `<head>`.
+///
+/// Any other start tag, or any text that is not whitespace, makes a browser close the head and
+/// open the body right there, even if the source still has `</head>` further down. That is the
+/// HTML standard's "in head" insertion mode, and it is also what Google does: «If you use an
+/// invalid element in the `<head>` element, Google ignores any elements that appear after the
+/// invalid element» (developers.google.com/search/docs/crawling-indexing/valid-page-metadata).
+/// The typical case is a WordPress plugin printing a tracking `<img>` or a `<div>` before the
+/// SEO plugin: the canonical stays in the source and stops counting.
+///
+/// Google's list is `title`, `meta`, `link`, `script`, `style`, `base`, `noscript` and
+/// `template`; the standard also keeps the obsolete `basefont`, `bgsound` and `noframes`, and
+/// they are kept here so that a rule about lost metadata never fires on a page a browser reads
+/// correctly. `<noscript>` content is skipped whole, as a browser with scripting does: the
+/// Meta Pixel's `<noscript><img></noscript>` in the head does not close it.
+const HEAD_ELEMENTS: &[&str] = &[
+    "html", "head", "base", "basefont", "bgsound", "link", "meta", "title", "script", "style",
+    "noscript", "template", "noframes",
+];
+
+/// Head elements whose content does not close the head: their text is not page text and their
+/// children, if the tokenizer reports any, are not head children.
+const HEAD_OPAQUE_ELEMENTS: &[&str] =
+    &["title", "script", "style", "noscript", "template", "noframes"];
+
+/// HTML whitespace, plus the byte order mark, which a decoder drops and must not count as text.
+fn is_head_whitespace(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{000c}' | '\u{feff}')
+}
+
+/// Content before the first `<html` or `<head`, which no selector reaches.
+///
+/// The case it exists for is WordPress printing a PHP warning before the document
+/// (`<br />\n<b>Warning</b>: Undefined variable…`): the head never opens, and every piece of
+/// metadata in the page lands in the body. It walks from the start skipping whitespace, the
+/// doctype, `<?xml?>` and comments —including IE's conditional ones, which carry an `<html` of
+/// their own inside— and returns the first other thing, or `None` if that is `<html` or
+/// `<head`. Only the first 64 KB are looked at.
+fn content_before_html(html: &[u8]) -> Option<String> {
+    let window = &html[..html.len().min(64 * 1024)];
+    // The cut can split a character in two; what comes before it is enough, and keeping it
+    // borrowed avoids copying 64 KB per page.
+    let mut rest = match std::str::from_utf8(window) {
+        Ok(text) => text,
+        Err(e) => std::str::from_utf8(&window[..e.valid_up_to()]).unwrap_or(""),
+    };
+    loop {
+        rest = rest.trim_start_matches(is_head_whitespace);
+        let skipped = if rest.starts_with("<!--") {
+            rest.find("-->").map(|i| i + 3)
+        } else if rest.starts_with("<!") || rest.starts_with("<?") {
+            rest.find('>').map(|i| i + 1)
+        } else {
+            break;
+        };
+        rest = &rest[skipped?..];
+    }
+    if rest.is_empty() {
+        return None;
+    }
+    if let Some(tag) = rest.strip_prefix('<') {
+        let name = tag
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if name == "html" || name == "head" {
+            return None;
+        }
+        if !name.is_empty() {
+            return Some(format!("<{name}>"));
+        }
+    }
+    let text = rest.split('<').next().unwrap_or(rest);
+    let snippet: String = text.chars().take(40).collect();
+    Some(format!("#text \"{}\"", snippet.trim_end()))
+}
+
+/// Short description of the element that closed the head, with the first attribute that tells
+/// where it comes from: `<img src="https://www.facebook.com/tr?id=1">`.
+fn describe_head_closer(el: &lol_html::html_content::Element<'_, '_>, tag: &str) -> String {
+    const MAX: usize = 80;
+    let attr = ["src", "href", "id", "class", "name"]
+        .iter()
+        .find_map(|name| el.get_attribute(name).map(|v| (*name, v)));
+    match attr {
+        Some((name, value)) => {
+            let value: String = value.chars().take(MAX).collect();
+            format!("<{tag} {name}=\"{value}\">")
+        }
+        None => format!("<{tag}>"),
     }
 }
 
@@ -359,6 +474,11 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
         collect_body_text,
         ..Default::default()
     }));
+    if let Some(closer) = content_before_html(html) {
+        let mut a = acc.borrow_mut();
+        a.body_started = true;
+        a.page.head_closed_by = Some(closer);
+    }
 
     // Los manejadores se ejecutan en el orden en que el documento los va encontrando,
     // que es justo lo que necesita el acumulador.
@@ -368,6 +488,53 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
         let mut rewriter = HtmlRewriter::new(
             Settings {
                 element_content_handlers: vec![
+                    // --- Where the <head> ends, for a browser. See `HEAD_ELEMENTS` ---
+                    //
+                    // Only the head's descendants and `<html>`'s children can close the head.
+                    // `*` would be simpler, and it cost 8-13% of the parse of a real home page
+                    // by calling this handler once per element of the body.
+                    element!("head *, html > *", {
+                        let acc = Rc::clone(&acc);
+                        move |el| {
+                            let mut a = acc.borrow_mut();
+                            if a.body_started || a.head_raw_depth > 0 {
+                                return Ok(());
+                            }
+                            let tag = el.tag_name();
+                            if HEAD_OPAQUE_ELEMENTS.contains(&tag.as_str()) {
+                                a.head_raw_depth += 1;
+                                let acc = Rc::clone(&acc);
+                                let _ = el.on_end_tag(on_end(move |_| {
+                                    let mut a = acc.borrow_mut();
+                                    a.head_raw_depth = a.head_raw_depth.saturating_sub(1);
+                                    Ok(())
+                                }));
+                            } else if !HEAD_ELEMENTS.contains(&tag.as_str()) {
+                                a.body_started = true;
+                                a.page.head_closed_by = Some(describe_head_closer(el, &tag));
+                            }
+                            Ok(())
+                        }
+                    }),
+                    // Visible text closes the head just like a foreign tag does: a stray word left
+                    // by a plugin between two `<meta>` is enough. Only the text inside the
+                    // source's `<head>` is looked at, for the same reason as above.
+                    text!("head", {
+                        let acc = Rc::clone(&acc);
+                        move |t| {
+                            let mut a = acc.borrow_mut();
+                            if a.body_started || a.head_raw_depth > 0 {
+                                return Ok(());
+                            }
+                            let visible = t.as_str().trim_matches(is_head_whitespace);
+                            if !visible.is_empty() {
+                                let snippet: String = visible.chars().take(40).collect();
+                                a.body_started = true;
+                                a.page.head_closed_by = Some(format!("#text \"{snippet}\""));
+                            }
+                            Ok(())
+                        }
+                    }),
                     // --- Regiones semánticas: pila abierta/cerrada ---
                     element!("nav, main, footer, aside", {
                         let acc = Rc::clone(&acc);
@@ -427,6 +594,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 return Ok(());
                             }
                             acc.borrow_mut().page.title_count += 1;
+                            acc.borrow_mut().note_if_outside_head("title");
                             // El valor es el del primero, que es con el que se queda Google.
                             if acc.borrow().page.title.is_none() {
                                 acc.borrow_mut().in_title = true;
@@ -482,6 +650,16 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                             }
 
                             match name.as_str() {
+                                "description" | "robots" | "googlebot" => {
+                                    a.note_if_outside_head(if name == "description" {
+                                        "meta description"
+                                    } else {
+                                        "meta robots"
+                                    });
+                                }
+                                _ => {}
+                            }
+                            match name.as_str() {
                                 "description" => a.page.meta_description = content,
                                 "robots" => a.page.meta_robots = content,
                                 "viewport" => a.page.viewport = content,
@@ -513,6 +691,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                             let mut a = acc.borrow_mut();
                             match rel.as_str() {
                                 "canonical" => {
+                                    a.note_if_outside_head("canonical");
                                     a.page.canonical_count += 1;
                                     // Se conserva el primero, que es con el que se queda Google
                                     // cuando hay varios.
@@ -523,6 +702,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 "amphtml" => a.page.amp_url = Some(href),
                                 "alternate" => {
                                     if let Some(lang) = el.get_attribute("hreflang") {
+                                        a.note_if_outside_head("hreflang");
                                         a.page.hreflang.push((lang, href));
                                     }
                                 }
@@ -1706,5 +1886,155 @@ mod tests {
                </head>"#,
         );
         assert_eq!(p.schema_types, vec!["Article".to_string(), "Person".to_string()]);
+    }
+
+    // --- Where the <head> ends ---
+
+    #[test]
+    fn a_clean_head_leaves_nothing_outside() {
+        let p = parse(
+            r#"<!DOCTYPE html><html lang="es"><head>
+                 <meta charset="utf-8">
+                 <title>T</title>
+                 <script>var a = "<div>";</script>
+                 <style>p { color: red }</style>
+                 <meta name="robots" content="index">
+                 <link rel="canonical" href="https://ejemplo.es/">
+                 <link rel="alternate" hreflang="en" href="https://ejemplo.es/en/">
+               </head><body><p>Texto</p></body></html>"#,
+        );
+        assert!(p.outside_head.is_empty(), "{:?}", p.outside_head);
+        assert_eq!(p.head_closed_by.as_deref(), Some("<body>"));
+    }
+
+    #[test]
+    fn an_img_in_the_head_leaves_the_tags_after_it_outside() {
+        let p = parse(
+            r#"<html><head>
+                 <title>T</title>
+                 <img src="https://pixel.ejemplo/tr?id=1" height="1">
+                 <meta name="description" content="D">
+                 <meta name="robots" content="noindex">
+                 <link rel="canonical" href="https://ejemplo.es/">
+                 <link rel="alternate" hreflang="en" href="https://ejemplo.es/en/">
+                 <link rel="alternate" hreflang="fr" href="https://ejemplo.es/fr/">
+               </head><body></body></html>"#,
+        );
+        assert_eq!(
+            p.outside_head,
+            ["meta description", "meta robots", "canonical", "hreflang"],
+            "the title came before the img and still counts; hreflang is listed once"
+        );
+        assert_eq!(
+            p.head_closed_by.as_deref(),
+            Some(r#"<img src="https://pixel.ejemplo/tr?id=1">"#)
+        );
+        // The values are still extracted: other rules keep seeing them as before.
+        assert_eq!(p.canonical.as_deref(), Some("https://ejemplo.es/"));
+    }
+
+    #[test]
+    fn the_meta_pixel_inside_noscript_does_not_close_the_head() {
+        let p = parse(
+            r#"<html><head>
+                 <noscript><img height="1" width="1" src="https://www.facebook.com/tr?id=1&ev=PageView"></noscript>
+                 <link rel="canonical" href="https://ejemplo.es/">
+               </head><body></body></html>"#,
+        );
+        assert!(p.outside_head.is_empty(), "{:?}", p.outside_head);
+    }
+
+    #[test]
+    fn stray_text_closes_the_head() {
+        let p = parse(
+            r#"<html><head>
+                 <meta charset="utf-8">
+                 Hola
+                 <link rel="canonical" href="https://ejemplo.es/">
+               </head><body></body></html>"#,
+        );
+        assert_eq!(p.outside_head, ["canonical"]);
+        assert_eq!(p.head_closed_by.as_deref(), Some("#text \"Hola\""));
+    }
+
+    #[test]
+    fn whitespace_comments_and_a_byte_order_mark_do_not_close_the_head() {
+        let p = parse(
+            "\u{feff}<!DOCTYPE html>\n<html>\n<head>\n\t<!-- un comentario <div> -->\n\
+             <link rel=\"canonical\" href=\"https://ejemplo.es/\">\n</head><body></body></html>",
+        );
+        assert!(p.outside_head.is_empty(), "{:?}", p.outside_head);
+    }
+
+    #[test]
+    fn a_link_between_head_and_body_goes_back_to_the_head() {
+        // The standard's "after head" mode puts a `<link>` or `<meta>` found there back in the
+        // head. Only an element that is not head content opens the body.
+        let p = parse(
+            r#"<html><head><title>T</title></head>
+               <link rel="canonical" href="https://ejemplo.es/">
+               <body></body></html>"#,
+        );
+        assert!(p.outside_head.is_empty(), "{:?}", p.outside_head);
+    }
+
+    #[test]
+    fn a_canonical_written_inside_the_body_is_outside() {
+        let p = parse(
+            r#"<html><head><title>T</title></head>
+               <body><main><link rel="canonical" href="https://ejemplo.es/"></main></body></html>"#,
+        );
+        assert_eq!(p.outside_head, ["canonical"]);
+        assert_eq!(p.head_closed_by.as_deref(), Some("<body>"));
+    }
+
+    #[test]
+    fn a_php_warning_before_the_document_leaves_everything_outside() {
+        let p = parse(
+            "<br />\n<b>Warning</b>:  Undefined variable $x in /var/www/functions.php on line 3<br />\n\
+             <!DOCTYPE html><html><head><title>T</title>\
+             <link rel=\"canonical\" href=\"https://ejemplo.es/\"></head><body></body></html>",
+        );
+        assert_eq!(p.outside_head, ["title", "canonical"]);
+        assert_eq!(p.head_closed_by.as_deref(), Some("<br>"));
+    }
+
+    #[test]
+    fn stray_text_before_the_document_closes_the_head() {
+        let p = parse(
+            "hola<!DOCTYPE html><html><head><link rel=\"canonical\" href=\"https://ejemplo.es/\">\
+             </head><body></body></html>",
+        );
+        assert_eq!(p.outside_head, ["canonical"]);
+        assert_eq!(p.head_closed_by.as_deref(), Some("#text \"hola\""));
+    }
+
+    #[test]
+    fn ie_conditional_comments_before_html_are_harmless() {
+        // Real, from a WordPress theme: the first `<html` of the file is inside a comment.
+        let p = parse(
+            "<!doctype html >\n<!--[if IE 8]><html class=\"ie8\" lang=\"en\"> <![endif]-->\n\
+             <!--[if gt IE 8]><!--><html lang=\"es\"> <!--<![endif]--><head>\
+             <link rel=\"canonical\" href=\"https://ejemplo.es/\"></head><body></body></html>",
+        );
+        assert!(p.outside_head.is_empty(), "{:?}", p.head_closed_by);
+    }
+
+    #[test]
+    fn a_doctype_comments_and_an_xml_prolog_before_html_are_harmless() {
+        let p = parse(
+            "\u{feff}<?xml version=\"1.0\"?>\n<!-- generado -->\n<!DOCTYPE html>\n\
+             <html><head><link rel=\"canonical\" href=\"https://ejemplo.es/\"></head></html>",
+        );
+        assert!(p.outside_head.is_empty(), "{:?}", p.head_closed_by);
+    }
+
+    #[test]
+    fn a_title_inside_an_svg_in_the_body_is_not_page_metadata() {
+        let p = parse(
+            r#"<html><head><title>T</title></head>
+               <body><svg><title>Icono</title></svg></body></html>"#,
+        );
+        assert!(p.outside_head.is_empty(), "{:?}", p.outside_head);
     }
 }

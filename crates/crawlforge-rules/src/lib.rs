@@ -370,6 +370,10 @@ pub struct PageContext<'a> {
     pub hreflang: &'a [(&'a str, &'a str)],
     /// Open Graph keys present: `og:title`, `og:image`…
     pub og_keys: &'a [&'a str],
+    /// SEO metadata a browser places outside the `<head>`: `"canonical"`, `"meta robots"`…
+    pub outside_head: &'a [&'a str],
+    /// What closed the `<head>`, such as `<img src="…">`. Only meaningful with `outside_head`.
+    pub head_closed_by: Option<&'a str>,
 }
 
 impl<'a> PageContext<'a> {

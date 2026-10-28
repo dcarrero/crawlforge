@@ -3906,6 +3906,8 @@ fn build_result<F: Fetcher>(
         links: &links,
         hreflang: &hreflang,
         og_keys: &og_keys,
+        outside_head: &parsed.outside_head,
+        head_closed_by: parsed.head_closed_by.as_deref(),
     };
 
     let issues: Vec<IssueRow> = rules

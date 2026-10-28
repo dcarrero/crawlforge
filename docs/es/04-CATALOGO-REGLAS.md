@@ -133,6 +133,7 @@ rastrea el motor para que encaje el alcance de una regla.
 | `META-DESC-TOO-SHORT` | low | page | free | < 70 caracteres |
 | `META-VIEWPORT-MISSING` | high | page | free | Sin `meta viewport` |
 | `META-REFRESH` | high | page | free | Uso de `meta http-equiv=refresh` |
+| `META-OUTSIDE-HEAD` | high | page | free | Canonical, meta robots, hreflang, título o descripción fuera del `<head>`: algo anterior lo cerró |
 
 **Nota de implementación:** el ancho en píxeles se calcula con las métricas de Arial 20px (títulos)
 y 14px (descripciones), que es como Google trunca. Es un aviso mucho más útil que contar caracteres,

@@ -166,6 +166,7 @@ smaller gap.
 | `META-DESC-TOO-SHORT` | low | page | free | < 70 characters |
 | `META-VIEWPORT-MISSING` | high | page | free | No `meta viewport` |
 | `META-REFRESH` | high | page | free | Uses `meta http-equiv=refresh` |
+| `META-OUTSIDE-HEAD` | high | page | free | Canonical, meta robots, hreflang, title or description outside the `<head>`: something before them closed it |
 
 **Implementation note:** the pixel width is computed with Arial metrics at 20px (titles) and 14px
 (descriptions), which is how Google truncates. It is a far more useful warning than counting

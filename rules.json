@@ -1,5 +1,5 @@
 {
-  "count": 65,
+  "count": 66,
   "rules": [
     {
       "category": "asset",
@@ -580,6 +580,22 @@
     {
       "category": "meta",
       "description": {
+        "en": "The canonical, meta robots, hreflang, title or description end up outside the <head>. An element that does not belong in the head —a tracking <img>, a <div>, stray text left by a plugin— closes it at that point, and Google ignores everything after it even though it is still in the source. The effect is the same as not having them.",
+        "es": "El canonical, el meta robots, el hreflang, el título o la descripción quedan fuera del <head>. Un elemento que no pertenece al head —un <img> de seguimiento, un <div>, un texto suelto que deja un plugin— lo cierra en ese punto, y Google ignora todo lo que venga después aunque siga en el código fuente. El efecto es el de no tenerlos."
+      },
+      "id": "META-OUTSIDE-HEAD",
+      "min_tier": "free",
+      "name": {
+        "en": "Metadata outside the head",
+        "es": "Metadatos fuera del head"
+      },
+      "references": [],
+      "scope": "page",
+      "severity": "high"
+    },
+    {
+      "category": "meta",
+      "description": {
         "en": "The page redirects with <meta http-equiv=refresh> instead of a 301. Google reads it with reservations, does not pass authority as reliably, and the user sees an abrupt jump; with a non-zero delay it also traps the browser's back button.",
         "es": "La página redirige con <meta http-equiv=refresh> en lugar de con un 301. Google lo interpreta con reservas, no traslada la autoridad con la misma fiabilidad y el usuario ve un salto brusco; con un retardo distinto de cero, además, atrapa el botón de volver del navegador."
       },
@@ -1042,5 +1058,5 @@
       "severity": "low"
     }
   ],
-  "rules_version": "0.18.0"
+  "rules_version": "0.19.0"
 }

@@ -186,6 +186,27 @@ pub static META_VIEWPORT_MISSING: RuleMeta = RuleMeta {
     references: &[],
 };
 
+pub static META_OUTSIDE_HEAD: RuleMeta = RuleMeta {
+    id: "META-OUTSIDE-HEAD",
+    severity: Severity::High,
+    category: Category::Meta,
+    min_tier: Tier::Free,
+    scope: Scope::Page,
+    name_es: "Metadatos fuera del head",
+    name_en: "Metadata outside the head",
+    desc_es: "El canonical, el meta robots, el hreflang, el título o la descripción quedan fuera \
+              del <head>. Un elemento que no pertenece al head —un <img> de seguimiento, un \
+              <div>, un texto suelto que deja un plugin— lo cierra en ese punto, y Google ignora \
+              todo lo que venga después aunque siga en el código fuente. El efecto es el de no \
+              tenerlos.",
+    desc_en: "The canonical, meta robots, hreflang, title or description end up outside the \
+              <head>. An element that does not belong in the head —a tracking <img>, a <div>, \
+              stray text left by a plugin— closes it at that point, and Google ignores \
+              everything after it even though it is still in the source. The effect is the same \
+              as not having them.",
+    references: &[],
+};
+
 pub static META_REFRESH: RuleMeta = RuleMeta {
     id: "META-REFRESH",
     severity: Severity::High,
@@ -609,6 +630,38 @@ impl PageRule for MetaRefresh {
     }
 }
 
+/// SEO metadata that the HTML parser places outside the `<head>`.
+///
+/// The parser does the work (see `HEAD_ELEMENTS` in `crawlforge-core/src/parse.rs`); the rule
+/// only decides on which pages it matters. It does **not** filter on `is_indexable`: a
+/// `noindex` that ended up in the body is one of the tags Google ignores, so the page we see as
+/// excluded may well be indexed.
+///
+/// The detail carries what closed the head, because that is the fix: on a WordPress site it is
+/// almost always one plugin, and its `<img src>` or `<div id>` says which. The group key leaves
+/// out the attribute value, which can change per page, and keeps the tag and what was lost.
+pub struct MetaOutsideHead;
+
+impl PageRule for MetaOutsideHead {
+    fn meta(&self) -> &'static RuleMeta {
+        &META_OUTSIDE_HEAD
+    }
+
+    fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
+        if !ctx.is_html || !ctx.is_success() || ctx.outside_head.is_empty() {
+            return Vec::new();
+        }
+        let closed_by = ctx.head_closed_by.unwrap_or("");
+        let closer = closed_by.trim_start_matches('<').split([' ', '>']).next().unwrap_or("");
+        vec![Issue::new(&META_OUTSIDE_HEAD)
+            .with_detail(serde_json::json!({
+                "closed_by": closed_by,
+                "tags": ctx.outside_head,
+            }))
+            .with_group(format!("outside-head:{closer}:{}", ctx.outside_head.join(",")))]
+    }
+}
+
 /// Two or more indexable pages share the same meta description.
 ///
 /// Deliberately modeled on [`MetaTitleDuplicate`]: the same query over another column. The
@@ -691,6 +744,7 @@ pub(crate) fn page_rules() -> Vec<Box<dyn PageRule>> {
         Box::new(MetaDescTooShort),
         Box::new(MetaViewportMissing),
         Box::new(MetaRefresh),
+        Box::new(MetaOutsideHead),
     ]
 }
 
@@ -1104,6 +1158,56 @@ mod tests {
     }
 
     // ------------------------------------------------------------ META-REFRESH
+
+    #[test]
+    fn metadata_outside_the_head_produces_one_finding_with_what_closed_it() {
+        let mut c = ctx();
+        c.outside_head = &["canonical", "hreflang"];
+        c.head_closed_by = Some(r#"<img src="https://pixel.ejemplo/tr?id=7">"#);
+        let issues = MetaOutsideHead.evaluate(&c);
+        assert_eq!(issues.len(), 1);
+        let detail: serde_json::Value =
+            serde_json::from_str(issues[0].detail_json.as_deref().unwrap_or("")).expect("json");
+        assert_eq!(detail["closed_by"], r#"<img src="https://pixel.ejemplo/tr?id=7">"#);
+        assert_eq!(detail["tags"], serde_json::json!(["canonical", "hreflang"]));
+        // The pixel id changes per site, the cause does not: the key keeps only the tag.
+        assert_eq!(issues[0].group_key.as_deref(), Some("outside-head:img:canonical,hreflang"));
+    }
+
+    #[test]
+    fn stray_text_groups_under_its_own_key() {
+        let mut c = ctx();
+        c.outside_head = &["canonical"];
+        c.head_closed_by = Some("#text \"Hola\"");
+        let issues = MetaOutsideHead.evaluate(&c);
+        assert_eq!(issues[0].group_key.as_deref(), Some("outside-head:#text:canonical"));
+    }
+
+    #[test]
+    fn a_clean_head_produces_no_finding() {
+        let mut c = ctx();
+        c.head_closed_by = Some("<body>");
+        assert!(MetaOutsideHead.evaluate(&c).is_empty());
+    }
+
+    #[test]
+    fn a_noindex_page_is_still_judged() {
+        // The noindex may be one of the lost tags: then Google does not see it, and the page we
+        // call excluded can be indexed.
+        let mut c = ctx();
+        c.is_indexable = false;
+        c.outside_head = &["meta robots"];
+        c.head_closed_by = Some("<div>");
+        assert_eq!(MetaOutsideHead.evaluate(&c).len(), 1);
+    }
+
+    #[test]
+    fn an_error_page_is_not_judged() {
+        let mut c = ctx();
+        c.status = 404;
+        c.outside_head = &["canonical"];
+        assert!(MetaOutsideHead.evaluate(&c).is_empty());
+    }
 
     #[test]
     fn a_page_without_meta_refresh_produces_no_finding() {
