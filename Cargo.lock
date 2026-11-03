@@ -337,6 +337,7 @@ dependencies = [
  "csv",
  "fluent-bundle",
  "indicatif",
+ "libc",
  "rusqlite",
  "rust_xlsxwriter",
  "serde",
