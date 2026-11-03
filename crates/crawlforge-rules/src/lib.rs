@@ -174,7 +174,7 @@ pub struct RuleMeta {
 }
 
 /// `locales/<lang>/rules.ftl`, embedded.
-pub static RULE_TEXTS: l10n::Catalog = l10n::Catalog::new(locale_sources!("rules.ftl"));
+pub static RULE_TEXTS: l10n::Catalog = l10n::Catalog::new(l10n::RULES_SOURCES);
 
 /// Name and description of every rule in one language, formatted once per process.
 ///
@@ -768,8 +768,9 @@ mod tests {
         ids.sort();
         let mut esperados: Vec<String> = catalog().iter().map(|m| m.id.to_string()).collect();
         esperados.sort();
-        assert_eq!(ids, esperados, "locales/en/rules.ftl must have exactly one message per rule");
-        let problemas = l10n::check_translation("locales/en/rules.ftl", en, en);
+        let file = format!("{}/en/rules.ftl", l10n::LOCALES_DIR);
+        assert_eq!(ids, esperados, "{file} must have exactly one message per rule");
+        let problemas = l10n::check_translation(&file, en, en);
         assert!(problemas.is_empty(), "{}", problemas.join("\n"));
     }
 
@@ -783,7 +784,7 @@ mod tests {
         for lang in Lang::ALL.into_iter().filter(|l| *l != Lang::En) {
             let src = RULE_TEXTS.source(lang);
             if l10n::has_messages(src) {
-                let file = format!("locales/{}/rules.ftl", lang.code());
+                let file = format!("{}/{}/rules.ftl", l10n::LOCALES_DIR, lang.code());
                 problemas.extend(l10n::check_translation(&file, en, src));
             }
         }

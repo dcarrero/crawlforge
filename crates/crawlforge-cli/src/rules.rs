@@ -2,8 +2,8 @@
 //!
 //! Sirve para tres cosas: saber qué comprueba la herramienta antes de rastrear nada, tener los
 //! IDs a mano para `--fail-on` en un pipeline de CI, y comprobar que las traducciones existen.
-//! Los textos vienen de `locales/<idioma>/rules.ftl` a través del crate de reglas, no de aquí:
-//! si estuvieran en la CLI, la app de macOS diría otra cosa.
+//! Los textos vienen de `crawlforge-rules/locales/<idioma>/rules.ftl` a través del crate de
+//! reglas, no de aquí: si estuvieran en la CLI, la app de macOS diría otra cosa.
 
 use anyhow::{bail, Result};
 use crawlforge_cli::i18n::{self, msg};

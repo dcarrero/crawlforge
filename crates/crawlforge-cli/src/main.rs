@@ -10,8 +10,8 @@
 //! (`CONVENTIONS.md §4`: los demás idiomas son traducciones, no la fuente). Los otros idiomas
 //! están donde existe un canal real de localización: los subcomandos que leen un rastreo
 //! (`report`, `inspect`, `diff`, `portfolio`, `rules`) aceptan `--lang`, y todo lo demás sigue a
-//! `CRAWLFORGE_LANG`. Los textos salen de `locales/<idioma>/*.ftl`, nunca de literales sueltos;
-//! ver `i18n.rs`. La ayuda de `clap` y los errores de argumentos se quedan en inglés.
+//! `CRAWLFORGE_LANG`. Los textos salen de `crawlforge-rules/locales/<idioma>/*.ftl`, nunca de
+//! literales sueltos; ver `i18n.rs`. La ayuda de `clap` y los errores de argumentos se quedan en inglés.
 
 mod export;
 mod report;
