@@ -19,6 +19,34 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [Unreleased]
+
+### Added
+
+- **`crawlforge config schema`** prints the JSON Schema (draft 2020-12) of the `--config` YAML:
+  every key with its type, default and description, and the rule IDs and severities `rules:`
+  accepts, taken from the catalog. It is also published as `docs/crawl-config.schema.json`, and
+  `docs/crawl-config.example.yaml` now starts with a `# yaml-language-server: $schema=…` line, so
+  an editor with a YAML language server completes keys and underlines typos while the file is
+  written. Built by hand, without a new dependency; tests fail if it drifts from `JobConfig`, from
+  the engine defaults or from the example. `tools/gen-artefactos-web.sh` regenerates it and
+  `tools/verificar.sh` fails while it is stale.
+
+### Changed
+
+- **Exclusion reasons are shown translated.** The "Excluded" table of `report` and the crawl-state
+  line of `inspect` printed the stored identifier (`external_check_off`, `no_network`,
+  `pattern`…); they now read "external check off", "folder audit, no network", "URL pattern", in
+  all ten languages. The crawl file, `stats` and the CSV/XLSX exports keep the identifier.
+
+### Fixed
+
+- **`crawlforge rules | head` no longer panics.** A command whose output went to a pipe that
+  closed early (`head`, `less` quit early) died with "failed printing to stdout: Broken pipe" and
+  exit status 101. Commands that never open a network connection now end quietly, like any Unix
+  filter. `crawl`, `list` and `resume` keep the previous behaviour on purpose: a server closing a
+  connection mid-write must stay a per-URL error, never a signal that ends the crawl.
+
 ## [0.20.0] — 2026-11-03
 
 Five new rules, all `free`, per-site rule configuration, and the whole output in ten languages.

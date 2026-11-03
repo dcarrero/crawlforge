@@ -9,6 +9,9 @@
 #   rules.json   el catálogo entero — la salida literal de `crawlforge rules --format json`
 #   meta.json    versión, User-Agent y recuento de reglas
 #
+# And one in docs/: crawl-config.schema.json, the JSON Schema of the `--config` YAML — the
+# literal output of `crawlforge config schema`.
+#
 # **Existen porque la web vive en otro repositorio.** Antes leía el catálogo ejecutando el CLI y
 # sacaba el User-Agent del propio `fetch.rs` con `sed`, lo cual solo funciona teniendo el código
 # Rust al lado y una cadena de herramientas de Rust instalada. Un sitio Astro que se compila en
@@ -48,5 +51,12 @@ cat > meta.json <<JSON
 }
 JSON
 
+# ── The --config schema ───────────────────────────────────────────────────────
+#
+# Generated from `JobConfig`, the catalog and the engine defaults. Published next to the example
+# YAML, whose first line points editors at it; a new rule or default reaches it here.
+$BIN config schema > docs/crawl-config.schema.json
+
 printf '\033[32m✓\033[0m rules.json  (%s reglas, versión %s)\n' "$N" "$V"
 printf '\033[32m✓\033[0m meta.json   (%s)\n' "$UA"
+printf '\033[32m✓\033[0m docs/crawl-config.schema.json\n'

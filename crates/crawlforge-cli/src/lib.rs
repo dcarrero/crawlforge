@@ -11,6 +11,7 @@
 //! `clippy -D warnings` rompe la compilación.
 
 pub mod audit_report;
+pub mod config_schema;
 pub mod diff;
 pub mod diff_file;
 pub mod i18n;

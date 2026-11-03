@@ -391,6 +391,22 @@ enum Command {
         #[arg(short, long, default_value = "table")]
         format: String,
     },
+    /// Tools for the `--config` YAML file.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Print the JSON Schema of the `--config` YAML (draft 2020-12).
+    ///
+    /// For editors and assistants writing a config: every key, its type, its default, and
+    /// the rule IDs and severities `rules:` accepts. The same file is published as
+    /// docs/crawl-config.schema.json; point a YAML language server at it with a first line
+    /// `# yaml-language-server: $schema=<URL or path>`.
+    Schema,
 }
 
 impl Command {
@@ -408,7 +424,8 @@ impl Command {
             | Self::Export { .. }
             | Self::Diff { .. }
             | Self::Portfolio { .. }
-            | Self::Rules { .. } => false,
+            | Self::Rules { .. }
+            | Self::Config { .. } => false,
         }
     }
 }
@@ -772,6 +789,10 @@ async fn main() -> Result<()> {
             let source = DevSource::from_env().context("invalid CRAWLFORGE_TIER")?;
             crawlforge_cli::portfolio::run(&source, &paths, &format, out.as_deref(), &rules)
                 .context("the portfolio panel could not be generated")
+        }
+        Command::Config { action: ConfigAction::Schema } => {
+            print!("{}", crawlforge_cli::config_schema::render());
+            Ok(())
         }
         Command::Rules { id, category, detail, format, .. } => match format.as_str() {
             // JSON carries every translated language at once — the consumer picks. `--lang` governs the
@@ -1830,6 +1851,7 @@ mod tests {
         assert!(!opens(&["rules"]));
         assert!(!opens(&["report", "c.sqlite"]));
         assert!(!opens(&["audit", "dist", "--base", "https://ejemplo.es/"]));
+        assert!(!opens(&["config", "schema"]));
     }
 
     #[test]
