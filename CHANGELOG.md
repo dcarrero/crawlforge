@@ -19,6 +19,34 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [0.21.1] — 2026-11-03
+
+The first release with prebuilt binaries. The engine does not change: same rules, same crawl
+file, same output.
+
+### Added
+
+- **Binaries for every release**, built by the release workflow (generated with `dist`): macOS
+  (Apple Silicon and Intel), Linux (x86_64 and ARM64) and Windows (x86_64), with checksums.
+- **Install without Rust**: `brew install dcarrero/tap/crawlforge` on macOS and Linux, and
+  one-line installers for a shell (`crawlforge-cli-installer.sh`) and PowerShell
+  (`crawlforge-cli-installer.ps1`) attached to each release. The macOS binaries are not notarized
+  yet: Homebrew installs them without a warning, but one downloaded by hand needs the quarantine
+  attribute removed before Gatekeeper lets it run.
+- **Continuous checks on GitHub**: `cargo-deny` with `deny.toml` on every pull request, every push
+  to `main` and weekly, and a performance A/B on every pull request that touches code (base and
+  branch built on the same runner, six alternating rounds, a table in the job summary).
+
+### Fixed
+
+- **A test compared the published JSON Schema byte for byte**, so a Windows checkout with CRLF
+  line endings failed it. It now compares the content.
+- **A timing test could fail on a slow runner.** The sitemap-discovery test separated batch and
+  continuous refill with a 1.5 s threshold that a loaded macOS runner exceeded (2.1 s, twice). Its
+  slow sitemap now takes 1.5 s instead of 0.6 s, so the two behaviours sit ≥ 4.5 s and ~1.5 s apart
+  and the threshold is 3.5 s.
+- **The manual** had a table split by a blank line and still said 59 of 60 rules were implemented.
+
 ## [0.21.0] — 2026-11-03
 
 A new rule, a gentler crawler and a dependency audit. Minor bump: the catalog reports something it
