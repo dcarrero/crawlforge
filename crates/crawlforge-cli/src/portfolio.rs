@@ -37,6 +37,7 @@
 //! per-rule matrix is a pass over per-site aggregate maps of at most catalog size.
 
 use crate::i18n::{self, msg};
+use crate::rule_config::{self, RulesChoice};
 use anyhow::{bail, Context, Result};
 use crawlforge_core::entitlement::{EntitlementSource, Feature};
 use rusqlite::{Connection, OpenFlags};
@@ -89,6 +90,9 @@ pub struct SiteSummary {
     pub fired_sites: BTreeMap<String, usize>,
     /// The `.prev.sqlite` next to this file, if it exists — the "before" of the comparison.
     pub prev: Option<PathBuf>,
+    /// The rule configuration this site was read with: its own stored block, unless the
+    /// command was given `--config`. Every count above is already the configured one.
+    pub rules: rule_config::Applied,
 }
 
 impl SiteSummary {
@@ -120,6 +124,12 @@ pub enum PortfolioWarning {
     MixedCoreVersions(Vec<String>),
     /// Trap 3.3: the crawls span too many days to be one snapshot.
     DateSpread { oldest: String, newest: String, days: i64 },
+    /// Sites read with their own stored rule configuration: `(label, disabled, changed)`.
+    /// That is the point of storing it per site, and also why their counts are not comparable
+    /// rule by rule with the rest — so the panel says which ones.
+    SiteRulesConfig(Vec<(String, usize, usize)>),
+    /// Every site read with the `rules:` of a `--config` file instead of its own.
+    RulesConfigFile { path: String, disabled: usize, changed: usize },
 }
 
 impl PortfolioWarning {
@@ -130,6 +140,19 @@ impl PortfolioWarning {
             Self::DateSpread { oldest, newest, days } => {
                 msg::warn_portfolio_date_spread(lang, days, oldest, newest)
             }
+            Self::SiteRulesConfig(sites) => {
+                let list: Vec<String> = sites
+                    .iter()
+                    .map(|(label, disabled, changed)| format!("{label} ({disabled}/{changed})"))
+                    .collect();
+                msg::warn_portfolio_rules_config(lang, list.join(", "))
+            }
+            Self::RulesConfigFile { path, disabled, changed } => msg::rules_config_note(
+                lang,
+                msg::rules_config_source_file(lang, path),
+                *disabled,
+                *changed,
+            ),
         }
     }
 }
@@ -231,9 +254,10 @@ pub fn run(
     paths: &[PathBuf],
     format: &str,
     out: Option<&Path>,
+    rules: &RulesChoice,
 ) -> Result<()> {
     use std::io::IsTerminal;
-    run_impl(source, paths, format, out, std::io::stdout().is_terminal())
+    run_impl(source, paths, format, out, rules, std::io::stdout().is_terminal())
 }
 
 /// [`run`] with the terminal as a parameter, to test both cases.
@@ -242,6 +266,7 @@ fn run_impl(
     paths: &[PathBuf],
     format: &str,
     out: Option<&Path>,
+    rules: &RulesChoice,
     stdout_is_tty: bool,
 ) -> Result<()> {
     let lang = i18n::current_lang();
@@ -269,7 +294,7 @@ fn run_impl(
         );
     }
 
-    let outcome = build(paths)?;
+    let outcome = build_with_rules(paths, rules)?;
     check_site_cap(source, outcome.site_total(), lang)?;
 
     match format {
@@ -333,6 +358,13 @@ pub fn check_site_cap(
 /// Computes the whole panel from files and directories. Pure of presentation: rendering is
 /// [`print_report`] and [`markdown`].
 pub fn build(paths: &[PathBuf]) -> Result<PortfolioOutcome> {
+    build_with_rules(paths, &RulesChoice::Stored)
+}
+
+/// [`build`] with an explicit rule configuration: [`RulesChoice::Stored`] reads each site
+/// with its own stored block, which is the default and the point; a `--config` file applies
+/// one block to every site and to every site's diff.
+pub fn build_with_rules(paths: &[PathBuf], rules: &RulesChoice) -> Result<PortfolioOutcome> {
     let lang = i18n::current_lang();
     let (candidates, mut skipped) = collect_inputs(paths, lang);
 
@@ -340,7 +372,7 @@ pub fn build(paths: &[PathBuf]) -> Result<PortfolioOutcome> {
     for path in candidates {
         // One bad file must not take down the panel: the reason is kept and shown, and the
         // rest of the portfolio is still computed.
-        match read_site(&path, lang) {
+        match read_site(&path, lang, rules) {
             Ok(site) => sites.push(site),
             Err(e) => skipped.push(Skipped { path, reason: format!("{e:#}") }),
         }
@@ -349,10 +381,11 @@ pub fn build(paths: &[PathBuf]) -> Result<PortfolioOutcome> {
         bail!(msg::error_portfolio_no_sites(lang));
     }
 
-    let warnings = collect_warnings(&sites);
+    let mut warnings = collect_warnings(&sites);
+    warnings.extend(rules_warning(&sites, rules));
     let (oldest, newest) = date_range(&sites);
     let spread = rule_spread(&sites);
-    let changes = collect_changes(&sites, &mut skipped, lang);
+    let changes = collect_changes(&sites, &mut skipped, lang, rules);
 
     // Worst site first: the glance table exists to say which site is worst.
     sites.sort_by(|a, b| b.sev_counts.cmp(&a.sev_counts).then_with(|| a.label.cmp(&b.label)));
@@ -437,7 +470,11 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
 
 /// Reads one crawl file's aggregates. Opens read-only, queries aggregates, closes — the file
 /// never loads into memory whole, whatever its size.
-fn read_site(path: &Path, lang: crawlforge_rules::Lang) -> Result<SiteSummary> {
+fn read_site(
+    path: &Path,
+    lang: crawlforge_rules::Lang,
+    rules: &RulesChoice,
+) -> Result<SiteSummary> {
     // Identify before working: the error must talk about files and commands, not tables.
     crate::store_check::ensure_crawl_store(path)?;
 
@@ -447,6 +484,8 @@ fn read_site(path: &Path, lang: crawlforge_rules::Lang) -> Result<SiteSummary> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
     )
     .with_context(|| format!("open {} read-only", path.display()))?;
+    // From here on `issues` is this site's configured view (`rule_config`).
+    let applied = rule_config::apply(&conn, rules)?;
 
     // A schema newer than this build cannot be trusted to mean what our queries assume.
     let schema_version: i64 =
@@ -553,6 +592,7 @@ fn read_site(path: &Path, lang: crawlforge_rules::Lang) -> Result<SiteSummary> {
         sev_counts,
         fired,
         prev: prev_of(path),
+        rules: applied,
     })
 }
 
@@ -583,6 +623,27 @@ fn collect_warnings(sites: &[SiteSummary]) -> Vec<PortfolioWarning> {
         }
     }
     warnings
+}
+
+/// What the panel says about rule configurations. With `--config`, one line for all; without
+/// it, the sites whose stored block is not empty, named, so a "0 findings of X" on one of
+/// them is not read as a site that does not have the problem.
+fn rules_warning(sites: &[SiteSummary], rules: &RulesChoice) -> Option<PortfolioWarning> {
+    if let RulesChoice::File { path, overrides } = rules {
+        return (!overrides.is_empty()).then(|| PortfolioWarning::RulesConfigFile {
+            path: path.display().to_string(),
+            disabled: overrides.disable.len(),
+            changed: overrides.severity.len(),
+        });
+    }
+    let configured: Vec<(String, usize, usize)> = sites
+        .iter()
+        .filter(|s| !s.rules.overrides.is_empty())
+        .map(|s| {
+            (s.label.clone(), s.rules.overrides.disable.len(), s.rules.overrides.severity.len())
+        })
+        .collect();
+    (!configured.is_empty()).then_some(PortfolioWarning::SiteRulesConfig(configured))
 }
 
 /// Oldest and newest `started_at`. ISO 8601 from the engine, so text order is time order.
@@ -720,11 +781,14 @@ fn collect_changes(
     sites: &[SiteSummary],
     skipped: &mut Vec<Skipped>,
     lang: crawlforge_rules::Lang,
+    rules: &RulesChoice,
 ) -> Vec<SiteChanges> {
     let mut changes = Vec::new();
     for site in sites {
         let Some(prev) = &site.prev else { continue };
-        match crate::diff::compare(prev, &site.path, None, &[]) {
+        // Same criteria as the site's own line: the diff applies the later file's stored
+        // block (or the `--config`) to both sides.
+        match crate::diff::compare_with_rules(prev, &site.path, None, &[], rules) {
             Ok(outcome) => changes.push(aggregate_changes(site, prev, &outcome)),
             Err(e) => skipped.push(Skipped {
                 path: site.path.clone(),
@@ -1844,5 +1908,61 @@ mod tests {
         assert_eq!(days_between("2024-02-28", "2024-03-01"), Some(2), "2024 is a leap year");
         assert_eq!(days_between("2025-12-31", "2026-01-01"), Some(1));
         assert_eq!(days_between("garbage", "2026-01-01"), None, "a fabricated date asserts nothing");
+    }
+
+    // ── Per-site rule configuration ────────────────────────────────────────────
+
+    #[test]
+    fn each_site_is_read_with_its_own_stored_rule_config() {
+        let dir = tmpdir("rules-per-site");
+        let findings = [("META-TITLE-TOO-LONG", "medium"), ("HTTP-404-EXTERNAL", "high")];
+        let strict = site_file(
+            &dir,
+            "strict.sqlite",
+            &Meta { base_url: "https://strict.example/", ..Meta::default() },
+            &findings,
+        );
+        let lax = site_file(
+            &dir,
+            "lax.sqlite",
+            &Meta { base_url: "https://lax.example/", ..Meta::default() },
+            &findings,
+        );
+        Connection::open(&lax)
+            .expect("open")
+            .execute(
+                "UPDATE crawl_meta SET config_json = ?1",
+                [r#"{"rules": {"disable": ["META-TITLE-TOO-LONG"],
+                               "severity": {"HTTP-404-EXTERNAL": "low"}}}"#],
+            )
+            .expect("store rules");
+
+        let outcome = build(&[strict, lax]).expect("build the panel");
+        let site = |label: &str| {
+            outcome.sites.iter().find(|s| s.label.contains(label)).expect("the site is there")
+        };
+        // [critical, high, medium, low, info]
+        assert_eq!(site("strict").sev_counts, [0, 1, 1, 0, 0]);
+        assert_eq!(site("lax").sev_counts, [0, 0, 0, 1, 0]);
+        assert_eq!(spread_row(&outcome, "META-TITLE-TOO-LONG").fired, 1, "only on the strict one");
+        assert!(
+            outcome.warnings.iter().any(|w| matches!(
+                w,
+                PortfolioWarning::SiteRulesConfig(sites)
+                    if sites.len() == 1 && sites[0].0.contains("lax") && sites[0].1 == 1
+            )),
+            "the panel names the site read through a filter: {:?}",
+            outcome.warnings
+        );
+
+        // A `--config` replaces every site's own block.
+        let rules = RulesChoice::File {
+            path: PathBuf::from("all.yaml"),
+            overrides: crawlforge_core::job::RuleOverrides::default(),
+        };
+        let outcome = build_with_rules(&[dir.join("strict.sqlite"), dir.join("lax.sqlite")], &rules)
+            .expect("build the panel");
+        assert!(outcome.sites.iter().all(|s| s.sev_counts == [0, 1, 1, 0, 0]));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

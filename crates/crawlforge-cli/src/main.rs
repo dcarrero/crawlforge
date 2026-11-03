@@ -28,7 +28,9 @@ mod test_schema;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use crawlforge_cli::i18n::msg;
+use crawlforge_cli::rule_config::RulesChoice;
 use crawlforge_cli::{audit_report, diff, xlsx};
+use crawlforge_rules::Lang;
 use crawlforge_core::engine::{self, CrawlPhase, CrawlProgress};
 use crawlforge_core::entitlement::{DevSource, EntitlementSource};
 use crawlforge_core::job::{CrawlJob, CrawlMode, JobConfig};
@@ -241,6 +243,11 @@ enum Command {
         /// File to write the report to. Without it, the report is printed.
         #[arg(short, long)]
         out: Option<PathBuf>,
+        /// A site config YAML whose `rules:` block (rules to disable, severities to change)
+        /// replaces the one stored in the crawl file, for this run only. A file without
+        /// `rules:` shows every finding. See docs/crawl-config.example.yaml.
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
         /// Report language. English is the original; `es` is available. Falls back to
         /// CRAWLFORGE_LANG, then to English.
         #[arg(long)]
@@ -268,6 +275,12 @@ enum Command {
         /// File to write the card to. Without it, the card is printed.
         #[arg(short, long)]
         out: Option<PathBuf>,
+        /// A site config YAML whose `rules:` block (rules to disable, severities to change)
+        /// replaces the one stored in the crawl file, for this run only. A file without
+        /// `rules:` shows every finding. See docs/crawl-config.example.yaml.
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
         /// Card language. English is the original; `es` is available. Falls back to
         /// CRAWLFORGE_LANG, then to English.
         #[arg(long)]
@@ -283,6 +296,11 @@ enum Command {
         /// Output format: csv or xlsx.
         #[arg(short, long, default_value = "csv")]
         format: String,
+        /// A site config YAML whose `rules:` block (rules to disable, severities to change)
+        /// replaces the one stored in the crawl file, for this run only. A file without
+        /// `rules:` shows every finding. See docs/crawl-config.example.yaml.
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
     },
     /// Compare two crawls and report what changed, or open a diff saved with --out.
     ///
@@ -316,6 +334,11 @@ enum Command {
         /// with no cut-off. An unknown value lists the available ones.
         #[arg(long, value_name = "TYPE")]
         change: Option<String>,
+        /// A site config YAML whose `rules:` block is applied to **both** crawls, instead of
+        /// the one stored in the later crawl (the default). Both sides always share one
+        /// configuration, so editing it never shows up as new or resolved findings.
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
     },
     /// Aggregate panel across many crawl files: what changed since each site's previous
     /// crawl, which rules fail across the whole portfolio, and one line per site.
@@ -334,6 +357,10 @@ enum Command {
         /// File to write the panel to. Without it, it is printed.
         #[arg(short, long)]
         out: Option<PathBuf>,
+        /// A site config YAML whose `rules:` block is applied to every site, instead of each
+        /// site's own stored one (the default).
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
         /// Panel language. English is the original; `es` is available. Falls back to
         /// CRAWLFORGE_LANG, then to English.
         #[arg(long)]
@@ -544,7 +571,9 @@ async fn main() -> Result<()> {
             Ok(())
         }
 
-        Command::Report { store, format, rule, out, .. } => {
+        Command::Report { store, format, rule, out, config, .. } => {
+            // Before touching the crawl file: a typo in the config is the user's first problem.
+            let rules = RulesChoice::from_flag(config.as_deref())?;
             // El manual §5 promete que todo error de fichero dice qué comando lo genera.
             anyhow::ensure!(store.is_file(), msg::error_store_missing(lang, store.display()));
             // Antes de imprimir nada: si el fichero no es un rastreo, decirlo con palabras en vez
@@ -562,7 +591,7 @@ async fn main() -> Result<()> {
                     format.trim().eq_ignore_ascii_case("terminal"),
                     "--rule lists plain text: drop --format, and redirect (`> urls.txt`) to save it"
                 );
-                return report::print_rule_urls(&store, &rule, lang)
+                return report::print_rule_urls(&store, &rule, lang, &rules)
                     .context("the rule listing could not be generated");
             }
             if format.trim().eq_ignore_ascii_case("terminal") {
@@ -571,9 +600,10 @@ async fn main() -> Result<()> {
                 // que solo daba el `crawl` moría con la sesión que lo lanzó (revisión §1).
                 report::print_store_notes(&store, lang)
                     .context("the crawl file could not be summarised")?;
-                return report::print_summary(&store, lang).context("the crawl file could not be summarised");
+                return report::print_summary(&store, lang, &rules)
+                    .context("the crawl file could not be summarised");
             }
-            let texto = audit_report::render(&store, &format, lang, out.as_deref())
+            let texto = audit_report::render_with_rules(&store, &format, lang, out.as_deref(), &rules)
                 .context("the report could not be generated")?;
             match out {
                 Some(path) => println!("Report written to {}", path.display()),
@@ -582,14 +612,17 @@ async fn main() -> Result<()> {
             Ok(())
         }
 
-        Command::Inspect { store, url, limit, format, out, .. } => {
+        Command::Inspect { store, url, limit, format, out, config, .. } => {
+            let rules = RulesChoice::from_flag(config.as_deref())?;
             anyhow::ensure!(store.is_file(), msg::error_store_missing(lang, store.display()));
             // La misma pareja que `report`: identificar el fichero antes de trabajar con él
             // (que el error hable de ficheros y comandos, no de tablas), y el reintento
             // oportunista de salir de WAL — ver el comentario de `report`.
             crawlforge_cli::store_check::ensure_crawl_store(&store)?;
             let _ = crawlforge_core::store::try_make_portable(&store);
-            let card = crawlforge_cli::inspect::render_card(&store, &url, limit, &format, lang)
+            let card = crawlforge_cli::inspect::render_card_with_rules(
+                &store, &url, limit, &format, lang, &rules,
+            )
                 .context("the URL card could not be generated")?;
             match out {
                 Some(path) => {
@@ -602,17 +635,20 @@ async fn main() -> Result<()> {
             Ok(())
         }
 
-        Command::Export { store, out, format } => {
+        Command::Export { store, out, format, config } => {
+            let rules = RulesChoice::from_flag(config.as_deref())?;
             anyhow::ensure!(store.is_file(), msg::error_store_missing(lang, store.display()));
             // El mismo reintento oportunista que en `report`: ver el comentario de allí.
             let _ = crawlforge_core::store::try_make_portable(&store);
             match format.trim().to_ascii_lowercase().as_str() {
                 "csv" => {
-                    let written = export::to_csv(&store, &out).context("the CSV export failed")?;
+                    let written = export::to_csv_with_rules(&store, &out, &rules)
+                        .context("the CSV export failed")?;
                     println!("Exported {written} CSV files to {}", out.display());
                 }
                 "xlsx" => {
-                    let hojas = xlsx::to_xlsx(&store, &out).context("the XLSX export failed")?;
+                    let hojas = xlsx::to_xlsx_with_rules(&store, &out, &rules)
+                        .context("the XLSX export failed")?;
                     println!("Exported {hojas} sheets to {}", out.display());
                 }
                 // Parquet está previsto y aún no se ha hecho. Decirlo así es
@@ -620,23 +656,36 @@ async fn main() -> Result<()> {
                 "parquet" => bail!("Parquet export is not implemented yet"),
                 otro => bail!("format not recognised: {otro}. Available: csv and xlsx"),
             }
+            // The CSV has nowhere to say it; the terminal does, for both formats.
+            if let Some(note) = rule_config_note(&store, &rules, lang) {
+                println!("{note}");
+            }
             Ok(())
         }
-        Command::Diff { before, after, out, fail_on, rule, change, lang: _ } => {
+        Command::Diff { before, after, out, fail_on, rule, change, config, lang: _ } => {
+            let rules = RulesChoice::from_flag(config.as_deref())?;
             // Se valida antes de comparar: un `--change` mal escrito no debe costar un diff.
             let change = change
                 .as_deref()
                 .map(|c| crawlforge_cli::diff_file::parse_change_type(lang, c))
                 .transpose()?;
             let outcome = match after {
-                Some(after) => diff::compare(&before, &after, out.as_deref(), &fail_on)
-                    .context("the crawls could not be compared")?,
+                Some(after) => {
+                    diff::compare_with_rules(&before, &after, out.as_deref(), &fail_on, &rules)
+                        .context("the crawls could not be compared")?
+                }
                 None => {
                     // Un diff guardado solo se lee: ver la documentación de `diff_file`.
                     anyhow::ensure!(out.is_none(), msg::error_diff_reopen_flag(lang, "--out"));
                     anyhow::ensure!(
                         fail_on.is_empty(),
                         msg::error_diff_reopen_flag(lang, "--fail-on")
+                    );
+                    // A saved diff was evaluated with the configuration of its day, and says
+                    // which in its warnings; re-evaluating needs the two crawls.
+                    anyhow::ensure!(
+                        config.is_none(),
+                        msg::error_diff_reopen_flag(lang, "--config")
                     );
                     crawlforge_cli::diff_file::open(&before)?
                 }
@@ -665,12 +714,13 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Command::Portfolio { paths, format, out, lang: _ } => {
+        Command::Portfolio { paths, format, out, config, lang: _ } => {
+            let rules = RulesChoice::from_flag(config.as_deref())?;
             // El nivel se lee como en el resto de la CLI (`run_and_report`): la variable de
             // entorno de desarrollo, y sin ella la CLI es una función del nivel Agency. La
             // puerta de la funcionalidad y el tope de sitios los aplica el propio módulo.
             let source = DevSource::from_env().context("invalid CRAWLFORGE_TIER")?;
-            crawlforge_cli::portfolio::run(&source, &paths, &format, out.as_deref())
+            crawlforge_cli::portfolio::run(&source, &paths, &format, out.as_deref(), &rules)
                 .context("the portfolio panel could not be generated")
         }
         Command::Rules { id, category, detail, format, .. } => match format.as_str() {
@@ -688,6 +738,14 @@ async fn main() -> Result<()> {
     }
 }
 
+
+/// The transparency line of a read command whose output cannot carry it (CSV). `None` when
+/// no configuration applies, or when the file cannot be read again — the export already
+/// succeeded, and a missing note is not worth turning it into an error.
+fn rule_config_note(store: &Path, rules: &RulesChoice, lang: Lang) -> Option<String> {
+    let (_, applied) = crawlforge_cli::rule_config::open_read_only(store, rules).ok()?;
+    applied.note(lang)
+}
 
 /// Los flags de `crawl` que compiten con el fichero de configuración.
 ///
@@ -862,7 +920,11 @@ async fn run_and_report(mut job: CrawlJob, store: &Path, opts: RunOptions) -> Re
     } else {
         report::print_brief(&outcome);
     }
-    report::print_summary(&outcome.store_path, crawlforge_cli::i18n::current_lang())?;
+    report::print_summary(
+        &outcome.store_path,
+        crawlforge_cli::i18n::current_lang(),
+        &RulesChoice::Stored,
+    )?;
 
     // El aviso del `--base` va después del resumen: se refiere a lo que el resumen acaba
     // de enseñar (cero indexables, todo `canonicalised`).
@@ -994,7 +1056,7 @@ async fn run_resume(store: &Path, csv: Option<PathBuf>) -> Result<()> {
     }
 
     report::print_brief_resumed(&outcome);
-    report::print_summary(&outcome.store_path, lang)?;
+    report::print_summary(&outcome.store_path, lang, &RulesChoice::Stored)?;
 
     if let Some(dir) = csv {
         let written = export::to_csv(&outcome.store_path, &dir)?;
@@ -2242,6 +2304,43 @@ mod tests {
         assert_eq!(job.limits.concurrency_per_host, 8, "what is not overridden comes from the file");
         assert!(job.limits.ignore_robots, "a bool from the file is not reset by omission");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_rules_block_of_the_crawl_config_travels_in_the_job() {
+        // What `run_and_report` serializes into `crawl_meta.config_json` is this job: if the
+        // block reached it, every later read command finds it in the file.
+        let dir = tmpdir("config-rules");
+        let path = dir.join("sitio.yaml");
+        std::fs::write(
+            &path,
+            "rules:\n  disable: [meta-desc-too-long]\n  severity:\n    HTTP-404-EXTERNAL: low\n",
+        )
+        .expect("write the YAML");
+        let mut job = CrawlJob::http("https://ejemplo.es");
+        apply_config_file(&mut job, Some(&path)).expect("load the config");
+        let json = serde_json::to_string(&job).expect("serialize");
+        assert!(json.contains("\"rules\":{\"disable\":[\"META-DESC-TOO-LONG\"]"), "{json}");
+        assert!(json.contains("\"HTTP-404-EXTERNAL\":\"low\""), "{json}");
+
+        std::fs::write(&path, "rules:\n  disable: [META-DESC-TOO-LONGG]\n").expect("write");
+        let err = apply_config_file(&mut CrawlJob::http("https://ejemplo.es"), Some(&path))
+            .expect_err("a typo must hurt before crawling");
+        assert!(format!("{err:#}").contains("META-DESC-TOO-LONGG"), "{err:#}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_read_command_takes_a_rules_config() {
+        for args in [
+            vec!["crawlforge", "report", "c.sqlite", "--config", "s.yaml"],
+            vec!["crawlforge", "inspect", "c.sqlite", "/", "--config", "s.yaml"],
+            vec!["crawlforge", "export", "c.sqlite", "--out", "x", "--config", "s.yaml"],
+            vec!["crawlforge", "diff", "a.sqlite", "b.sqlite", "--config", "s.yaml"],
+            vec!["crawlforge", "portfolio", "dir", "--config", "s.yaml"],
+        ] {
+            assert!(Cli::try_parse_from(&args).is_ok(), "{args:?}");
+        }
     }
 
     #[test]

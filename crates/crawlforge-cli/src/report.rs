@@ -14,6 +14,7 @@
 
 use anyhow::Result;
 use crawlforge_cli::i18n::{self, msg};
+use crawlforge_cli::rule_config::{self, RulesChoice};
 use crawlforge_core::engine::{CrawlMetrics, CrawlOutcome, TruncationReason};
 use crawlforge_rules::Lang;
 use rusqlite::{Connection, OptionalExtension};
@@ -337,11 +338,11 @@ fn response_breakdown(conn: &Connection) -> Result<ResponseBreakdown> {
 /// Lo que se ve son etiquetas del catálogo y números con el millar del idioma; lo que **no** se
 /// traduce son los valores que vienen de la base de datos (`noindex`, `robots`, familias `4xx`)
 /// y los IDs de regla: son identificadores, y además tokens de `--fail-on` y de filtros.
-pub fn print_summary(store: &Path, lang: Lang) -> Result<()> {
-    let conn = Connection::open_with_flags(
-        store,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-    )?;
+///
+/// `rules` is the per-site rule configuration (`rule_config`): every finding count below is
+/// the configured one, and the line that says so goes right above them.
+pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()> {
+    let (conn, applied) = rule_config::open_read_only(store, rules)?;
     let n = |v: i64| i18n::count(lang, v);
 
     println!();
@@ -439,6 +440,10 @@ pub fn print_summary(store: &Path, lang: Lang) -> Result<()> {
     // Hallazgos. El ID de regla es identificador; la severidad se traduce porque aquí es prosa
     // de columna, no token.
     println!();
+    if let Some(note) = applied.note(lang) {
+        println!("  {note}");
+        println!();
+    }
     for linea in findings_lines(&conn, store, lang, pages)? {
         println!("{linea}");
     }
@@ -698,11 +703,12 @@ fn findings_lines(
 /// Es la otra mitad del colapso de plantilla: el informe corta y este comando lista. Sin él, la
 /// única vía para ver las URLs que el corte esconde era abrir el XLSX o hacer SQL a mano
 /// (revisión de UX §5.1), que es exactamente lo que obligaba a volver a Screaming Frog.
-pub fn print_rule_urls(store: &Path, rule: &str, lang: Lang) -> Result<()> {
-    let conn = Connection::open_with_flags(
-        store,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-    )?;
+pub fn print_rule_urls(store: &Path, rule: &str, lang: Lang, rules: &RulesChoice) -> Result<()> {
+    let (conn, applied) = rule_config::open_read_only(store, rules)?;
+    // A disabled rule lists nothing; saying why beats an empty list that looks like a bug.
+    if let Some(note) = applied.note(lang) {
+        eprintln!("{note}");
+    }
     print!("{}", rule_urls_text(&conn, store, rule, lang)?);
     Ok(())
 }

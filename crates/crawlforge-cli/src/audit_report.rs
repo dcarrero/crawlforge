@@ -18,6 +18,7 @@
 //! cuanto se adjunta a un correo o se sube a un artefacto de CI.
 
 use crate::i18n::{self, msg};
+use crate::rule_config::{self, Applied, RulesChoice};
 use anyhow::{bail, Result};
 use crawlforge_rules::{catalog, Lang, RuleMeta, Severity};
 use rusqlite::Connection;
@@ -112,9 +113,22 @@ impl Group {
 }
 
 /// Genera el informe de un fichero de rastreo.
+///
+/// Applies the rule configuration stored in the file; [`render_with_rules`] takes another.
 pub fn render(store: &Path, format: &str, lang: Lang, out: Option<&Path>) -> Result<String> {
+    render_with_rules(store, format, lang, out, &RulesChoice::Stored)
+}
+
+/// [`render`] with an explicit rule configuration (`report --config`).
+pub fn render_with_rules(
+    store: &Path,
+    format: &str,
+    lang: Lang,
+    out: Option<&Path>,
+    rules: &RulesChoice,
+) -> Result<String> {
     use std::io::IsTerminal;
-    render_impl(store, format, lang, out, std::io::stdout().is_terminal())
+    render_impl(store, format, lang, out, rules, std::io::stdout().is_terminal())
 }
 
 /// La lógica de [`render`], con el terminal como parámetro para poder probar los dos casos.
@@ -123,6 +137,7 @@ fn render_impl(
     format: &str,
     lang: Lang,
     out: Option<&Path>,
+    rules: &RulesChoice,
     stdout_is_tty: bool,
 ) -> Result<String> {
     // Estos dos errores se quedan en inglés a propósito: son errores de parseo de flags, el
@@ -152,14 +167,11 @@ fn render_impl(
         );
     }
 
-    let conn = Connection::open_with_flags(
-        store,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-    )?;
+    let (conn, applied) = rule_config::open_read_only(store, rules)?;
 
     let texto = match format {
-        Format::Markdown => markdown(&conn, lang, store)?,
-        Format::Html => html(&conn, lang, store)?,
+        Format::Markdown => markdown(&conn, lang, store, &applied)?,
+        Format::Html => html(&conn, lang, store, &applied)?,
     };
 
     if let Some(path) = out {
@@ -565,7 +577,7 @@ fn rules_index() -> HashMap<&'static str, &'static RuleMeta> {
     catalog().into_iter().map(|m| (m.id, m)).collect()
 }
 
-fn markdown(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
+fn markdown(conn: &Connection, lang: Lang, store: &Path, config: &Applied) -> Result<String> {
     let head = header(conn)?;
     let tot = totals(conn)?;
     let found = groups(conn)?;
@@ -607,6 +619,11 @@ fn markdown(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
         s.push_str(&format!("> {nota}\n\n"));
     }
     if let Some(nota) = notes.external_note(lang) {
+        s.push_str(&format!("> {nota}\n\n"));
+    }
+    // A finding the configuration hides is still in the file: the report says it is reading
+    // through a filter, or "0 findings of X" would be read as "X is fine".
+    if let Some(nota) = config.note(lang) {
         s.push_str(&format!("> {nota}\n\n"));
     }
 
@@ -661,8 +678,8 @@ fn markdown(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
     Ok(s)
 }
 
-fn html(conn: &Connection, lang: Lang, store: &Path) -> Result<String> {
-    let cuerpo = markdown(conn, lang, store)?;
+fn html(conn: &Connection, lang: Lang, store: &Path, rules: &Applied) -> Result<String> {
+    let cuerpo = markdown(conn, lang, store, rules)?;
     Ok(html_document(lang, &msg::html_title(lang), &markdown_body_to_html(&cuerpo)))
 }
 
@@ -902,6 +919,34 @@ mod tests {
         }
         drop(conn);
         (dir, path)
+    }
+
+    #[test]
+    fn the_report_applies_the_stored_rule_config_and_says_so() {
+        let (_d, path) = store_de_prueba(false);
+        let raw = render(&path, "md", Lang::En, None).expect("report");
+        assert!(raw.contains("CONTENT-THIN") && !raw.contains("Rule configuration"), "{raw}");
+
+        rusqlite::Connection::open(&path)
+            .expect("open")
+            .execute(
+                "UPDATE crawl_meta SET config_json = ?1",
+                [r#"{"rules": {"disable": ["CONTENT-THIN"], "severity": {"CANON-MISSING": "info"}}}"#],
+            )
+            .expect("store rules");
+        let md = render(&path, "md", Lang::En, None).expect("report");
+        assert!(!md.contains("CONTENT-THIN"), "a disabled rule is not reported: {md}");
+        assert!(
+            md.contains("Rule configuration (stored in the crawl file): 1 rule disabled, 1 severity changed"),
+            "{md}"
+        );
+        // CANON-MISSING moved from the Medium section to the Info one.
+        let info = md.find("### Info").expect("an Info section");
+        assert!(md[info..].contains("CANON-MISSING"), "{md}");
+        assert!(!md.contains("### Medium"), "{md}");
+
+        let es = render(&path, "md", Lang::Es, None).expect("informe");
+        assert!(es.contains("1 regla desactivada, 1 severidad cambiada"), "{es}");
     }
 
     #[test]
@@ -1338,7 +1383,7 @@ mod tests {
         // con instrucciones; el test de abajo cubre el caso del pipeline.
         let (_d, path) = store_de_prueba(false);
         let err =
-            render_impl(&path, "html", Lang::Es, None, true).expect_err("must not dump to the screen");
+            render_impl(&path, "html", Lang::Es, None, &RulesChoice::Stored, true).expect_err("must not dump to the screen");
         let msg = err.to_string();
         assert!(msg.contains("--out"), "says how to save it: {msg}");
         assert!(msg.contains(">"), "and that redirecting it still works: {msg}");
@@ -1349,7 +1394,7 @@ mod tests {
         // Quien hace `crawlforge report x.sqlite --format html > informe.html` quiere el HTML
         // por la salida estándar, y lo sigue teniendo.
         let (_d, path) = store_de_prueba(false);
-        let html = render_impl(&path, "html", Lang::Es, None, false).expect("with a pipe it prints");
+        let html = render_impl(&path, "html", Lang::Es, None, &RulesChoice::Stored, false).expect("with a pipe it prints");
         assert!(html.starts_with("<!DOCTYPE html>"));
     }
 
@@ -1357,7 +1402,7 @@ mod tests {
     fn html_con_out_funciona_aunque_haya_pantalla() {
         let (d, path) = store_de_prueba(false);
         let salida = d.path().join("informe.html");
-        render_impl(&path, "html", Lang::Es, Some(&salida), true).expect("with --out there is no dump");
+        render_impl(&path, "html", Lang::Es, Some(&salida), &RulesChoice::Stored, true).expect("with --out there is no dump");
         assert!(salida.exists());
     }
 

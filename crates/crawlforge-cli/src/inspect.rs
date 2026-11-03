@@ -34,6 +34,7 @@
 //! cada una en frío, <1 s en caliente). Una página normal responde en milisegundos.
 
 use crate::i18n::{self, msg};
+use crate::rule_config::{self, RulesChoice};
 use anyhow::{bail, Context, Result};
 use crawlforge_rules::Lang;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -103,12 +104,26 @@ enum Format {
 ///
 /// El error de «no encontrada» incluye las URLs más parecidas del fichero: la respuesta a
 /// una errata debe acercar, no solo negar.
+///
+/// Applies the rule configuration stored in the file; [`render_card_with_rules`] takes another.
 pub fn render_card(
     store: &Path,
     input: &str,
     limit: ListLimit,
     format: &str,
     lang: Lang,
+) -> Result<String> {
+    render_card_with_rules(store, input, limit, format, lang, &RulesChoice::Stored)
+}
+
+/// [`render_card`] with an explicit rule configuration (`inspect --config`).
+pub fn render_card_with_rules(
+    store: &Path,
+    input: &str,
+    limit: ListLimit,
+    format: &str,
+    lang: Lang,
+    rules: &RulesChoice,
 ) -> Result<String> {
     let format = match format.trim().to_ascii_lowercase().as_str() {
         "terminal" => Format::Terminal,
@@ -121,6 +136,7 @@ pub fn render_card(
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
     )
     .with_context(|| format!("could not open {}", store.display()))?;
+    let applied = rule_config::apply(&conn, rules)?;
 
     let Some(row) = resolve_url(&conn, input)? else {
         bail!(not_found_error(&conn, input, lang)?);
@@ -128,7 +144,7 @@ pub fn render_card(
     // El comando de «lista completa», con la URL entre comillas: un `?` o un `&` sin
     // comillas se lo comería la shell.
     let full_cmd = format!("crawlforge inspect {} '{}' --limit all", store.display(), row.url);
-    build_card(&conn, &row, limit, format, lang, &full_cmd)
+    build_card(&conn, &row, limit, format, lang, &full_cmd, &applied)
 }
 
 // ────────────────────────────────────────────────────── Identificación de la URL
@@ -393,6 +409,7 @@ fn build_card(
     format: Format,
     lang: Lang,
     full_cmd: &str,
+    rules: &rule_config::Applied,
 ) -> Result<String> {
     let mut s = String::new();
     let mut w = Writer { s: &mut s, format };
@@ -401,7 +418,7 @@ fn build_card(
     status_section(&mut w, row, lang)?;
     redirect_section(&mut w, conn, row, lang)?;
     page_section(&mut w, conn, row, lang)?;
-    findings_section(&mut w, conn, row, lang)?;
+    findings_section(&mut w, conn, row, lang, rules)?;
     inlinks_section(&mut w, conn, row, limit, lang, full_cmd)?;
     outlinks_section(&mut w, conn, row, limit, lang, full_cmd)?;
     images_section(&mut w, conn, row, limit, lang, full_cmd)?;
@@ -627,7 +644,13 @@ fn page_section(w: &mut Writer<'_>, conn: &Connection, row: &UrlRow, lang: Lang)
     Ok(())
 }
 
-fn findings_section(w: &mut Writer<'_>, conn: &Connection, row: &UrlRow, lang: Lang) -> Result<()> {
+fn findings_section(
+    w: &mut Writer<'_>,
+    conn: &Connection,
+    row: &UrlRow,
+    lang: Lang,
+    rules: &rule_config::Applied,
+) -> Result<()> {
     let mut stmt = conn.prepare(
         "SELECT rule_id, severity, COUNT(*) FROM issues WHERE url_id = ?1
          GROUP BY rule_id, severity
@@ -656,6 +679,9 @@ fn findings_section(w: &mut Writer<'_>, conn: &Connection, row: &UrlRow, lang: L
             "{:<9} {rule:<26} {nombre}{veces}",
             i18n::severity_word(lang, &severity)
         ))?;
+    }
+    if let Some(note) = rules.note(lang) {
+        w.note(&note)?;
     }
     Ok(())
 }
@@ -1110,6 +1136,31 @@ mod tests {
         assert!(s.contains("high"), "{s}");
         assert!(s.contains("×2"), "two rows of the same rule are grouped: {s}");
         assert!(!s.contains("SITEMAP-MISSING"), "site-wide findings do not hang off a URL: {s}");
+    }
+
+    #[test]
+    fn the_card_shows_the_configured_findings_and_says_so() {
+        let store = store_de_prueba("rules");
+        let overrides = crawlforge_core::job::RuleOverrides {
+            disable: vec!["META-DESC-MISSING".to_string()],
+            severity: [("ASSET-IMG-EMPTY-ALT-LINK".to_string(), crawlforge_rules::Severity::Info)]
+                .into_iter()
+                .collect(),
+        };
+        let rules = RulesChoice::File { path: "site.yaml".into(), overrides };
+        let s = render_card_with_rules(
+            &store,
+            "https://ejemplo.es/blog/",
+            ListLimit::N(DEFAULT_LIMIT),
+            "terminal",
+            Lang::En,
+            &rules,
+        )
+        .expect("the card must render");
+        assert!(!s.contains("META-DESC-MISSING"), "{s}");
+        assert!(s.contains("Findings (2)"), "the heading counts configured findings: {s}");
+        assert!(s.contains("info      ASSET-IMG-EMPTY-ALT-LINK"), "{s}");
+        assert!(s.contains("Rule configuration (from site.yaml)"), "{s}");
     }
 
     #[test]

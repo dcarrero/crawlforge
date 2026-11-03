@@ -239,6 +239,46 @@ crawlforge crawl https://cliente.com/ --config cliente.yaml
 El fichero describe **el sitio**, la línea de comandos describe **la ejecución**: los flags ganan
 sobre el YAML. Un campo mal escrito es un error, no una opción ignorada en silencio.
 
+### Cada sitio con su criterio: desactivar reglas, cambiar severidades
+
+No todos los clientes tienen el mismo listón. Un blog cuya plantilla escribe meta descriptions
+largas a propósito no necesita oírlo cada semana, y un enlace externo roto puede ser `low` en un
+sitio y `high` en otro. Se dice en el YAML del sitio:
+
+```yaml
+rules:
+  disable: [META-DESC-TOO-LONG, CONTENT-H1-MULTIPLE]
+  severity:
+    HTTP-404-EXTERNAL: low
+```
+
+El rastreo **sigue evaluando todas las reglas y guardando todos los hallazgos** con la severidad
+del catálogo. El bloque se guarda dentro del fichero de rastreo, y `report`, `inspect`, `export`,
+`diff` y `portfolio` lo aplican al leerlo. Cambiar de idea no cuesta nada: se edita el YAML y se
+vuelve a leer el mismo fichero con `--config`, sin rastrear otra vez.
+
+```bash
+crawlforge crawl https://cliente.com/ --config cliente.yaml   # guarda el bloque
+crawlforge report cliente.sqlite                             # lo aplica
+crawlforge report cliente.sqlite --config otro.yaml          # aplica el de otro.yaml
+```
+
+- `--config` en un comando de lectura sustituye al bloque guardado en esa ejecución. Solo se usa
+  `rules:`; el resto del fichero se sigue comprobando por si hay erratas. Un fichero sin `rules:`
+  enseña todos los hallazgos, y así se ve lo que la configuración oculta.
+- Toda salida que aplica una configuración lo dice: «Configuración de reglas (guardada en el
+  fichero de rastreo): 2 reglas desactivadas, 1 severidad cambiada». La hoja `Summary` del XLSX
+  la detalla y el export a CSV la imprime en el terminal. Los exports dejan fuera los hallazgos
+  de las reglas desactivadas y escriben la severidad cambiada.
+- **`diff` evalúa los dos rastreos con la misma configuración**: la de `--config` si se da, y si
+  no la guardada en el rastreo posterior. De lo contrario, desactivar una regla entre dos
+  rastreos haría pasar sus hallazgos por «resueltos». Si los dos ficheros guardan
+  configuraciones distintas, el diff lo dice. `--fail-on` juzga la severidad cambiada.
+- **`portfolio` lee cada sitio con su propia configuración guardada** y nombra los sitios que
+  tienen una: un sitio que desactivó una regla no es un sitio sin ese problema.
+- Un ID de regla o una severidad desconocidos son un error que los nombra. Los IDs se reconocen
+  sin distinguir mayúsculas.
+
 ### Ver qué comprueba la herramienta
 
 ```bash
@@ -595,6 +635,7 @@ crawlforge diff   <ANTES> <DESPUES> [--fail-on high] [--out d.sqlite]
 crawlforge diff   <DIFF> [--rule ID | --change TIPO]   # abrir un diff guardado
 crawlforge portfolio <RUTA>... [--format md|html --out f]   # panel sobre muchos rastreos
 crawlforge rules  [--category X] [--detail] [--format json]
+# report, inspect, export, diff y portfolio aceptan --config <YAML> para aplicar su `rules:`
 ```
 
 Cualquiera de ellos con `--help` da la lista completa de opciones.

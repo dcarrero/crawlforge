@@ -9,6 +9,7 @@
 // (ver el porqué en `lib.rs`), y la función es `xlsx::to_xlsx(&store, &out)`.
 
 use anyhow::{bail, Result};
+use crawlforge_cli::rule_config::{self, RulesChoice};
 use crawlforge_cli::store_check;
 use rusqlite::Connection;
 use std::path::Path;
@@ -77,17 +78,22 @@ const EXPORTS: &[(&str, &str)] = &[
 ];
 
 /// Exporta un fichero de rastreo a CSV. Devuelve cuántos ficheros escribió.
+///
+/// Applies the rule configuration stored in the file: `issues.csv` leaves out the disabled
+/// rules and carries the overridden severities. [`to_csv_with_rules`] takes another one.
 pub fn to_csv(store: &Path, out_dir: &Path) -> Result<usize> {
+    to_csv_with_rules(store, out_dir, &RulesChoice::Stored)
+}
+
+/// [`to_csv`] with an explicit rule configuration (`export --config`).
+pub fn to_csv_with_rules(store: &Path, out_dir: &Path, rules: &RulesChoice) -> Result<usize> {
     // Se comprueba todo antes de escribir nada: un error a medio export deja ficheros a medias
     // que luego alguien abre creyendo que están completos.
     store_check::ensure_crawl_store(store)?;
     ensure_csv_out_dir(out_dir)?;
     std::fs::create_dir_all(out_dir)?;
 
-    let conn = Connection::open_with_flags(
-        store,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-    )?;
+    let (conn, _) = rule_config::open_read_only(store, rules)?;
 
     let mut written = 0;
     for (name, sql) in EXPORTS {

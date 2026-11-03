@@ -5000,6 +5000,7 @@ mod tests {
             collect_body_text: false,
             discover_sitemaps: false,
             tier: crate::entitlement::Tier::Agency,
+            rules: Default::default(),
         }
     }
 

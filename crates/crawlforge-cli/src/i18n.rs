@@ -1249,6 +1249,62 @@ pub mod msg {
         }
     }
 
+    // ── Per-site rule configuration (`rule_config.rs`) ───────────────────────
+    messages! {
+        rules_config_source_stored() {
+            en: "stored in the crawl file",
+            es: "guardada en el fichero de rastreo",
+        }
+        rules_config_source_after() {
+            en: "stored in the later crawl",
+            es: "guardada en el rastreo posterior",
+        }
+        rules_config_source_file(path) {
+            en: "from {path}",
+            es: "de {path}",
+        }
+        warn_rules_config_differs(source) {
+            en: "The two crawls store different rule configurations. Both sides were evaluated \
+                 with the same one ({source}), so a configuration change does not show up as \
+                 new or resolved findings.",
+            es: "Los dos rastreos guardan configuraciones de reglas distintas. Los dos lados se \
+                 evaluaron con la misma ({source}), así que un cambio de configuración no \
+                 aparece como hallazgos nuevos ni resueltos.",
+        }
+        warn_portfolio_rules_config(sites) {
+            en: "Some sites are read with their own rule configuration (rules disabled / \
+                 severities changed): {sites}. Their counts are not comparable rule by rule \
+                 with the rest.",
+            es: "Algunos sitios se leen con su propia configuración de reglas (reglas \
+                 desactivadas / severidades cambiadas): {sites}. Sus recuentos no son \
+                 comparables regla a regla con los del resto.",
+        }
+    }
+
+    /// "Rule configuration (stored in the crawl file): 2 rules disabled, 1 severity changed."
+    /// The plurals are written by hand, like [`outlinks_title`].
+    pub fn rules_config_note(
+        lang: Lang,
+        source: impl std::fmt::Display,
+        disabled: usize,
+        changed: usize,
+    ) -> String {
+        match lang {
+            Lang::En => format!(
+                "Rule configuration ({source}): {disabled} {} disabled, {changed} {} changed. \
+                 The crawl file keeps every finding.",
+                if disabled == 1 { "rule" } else { "rules" },
+                if changed == 1 { "severity" } else { "severities" },
+            ),
+            Lang::Es => format!(
+                "Configuración de reglas ({source}): {disabled} {}, {changed} {}. \
+                 El fichero de rastreo conserva todos los hallazgos.",
+                if disabled == 1 { "regla desactivada" } else { "reglas desactivadas" },
+                if changed == 1 { "severidad cambiada" } else { "severidades cambiadas" },
+            ),
+        }
+    }
+
     /// "9 of 12 sites" — the numerator of the spread table.
     pub fn portfolio_sites_of(lang: Lang, fired: usize, total: usize) -> String {
         match lang {

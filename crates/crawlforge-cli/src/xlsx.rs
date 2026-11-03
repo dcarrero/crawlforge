@@ -42,6 +42,7 @@
 //! SEO exporta subconjuntos. La `Summary` es la única hoja que no usa memoria constante, porque
 //! se rellena al final con los recuentos de las demás; son decenas de filas.
 
+use crate::rule_config::{self, RulesChoice};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use rust_xlsxwriter::{Color, Format, FormatAlign, FormatBorder, Workbook, Worksheet};
@@ -333,18 +334,25 @@ struct SheetStats {
 /// Toda hoja lleva la fila de cabecera congelada, autofiltro y anchos de columna calculados a
 /// partir del contenido. Las celdas que superan el límite de Excel se recortan con una marca
 /// visible en vez de hacer fallar la exportación.
+///
+/// Applies the rule configuration stored in the file: the issue sheets leave out the disabled
+/// rules and carry the overridden severities, and `Summary` says so. [`to_xlsx_with_rules`]
+/// takes another one.
 pub fn to_xlsx(store: &Path, out: &Path) -> Result<usize> {
+    to_xlsx_with_rules(store, out, &RulesChoice::Stored)
+}
+
+/// [`to_xlsx`] with an explicit rule configuration (`export --config`).
+pub fn to_xlsx_with_rules(store: &Path, out: &Path, rules: &RulesChoice) -> Result<usize> {
     // Se comprueba todo antes de trabajar: el libro tarda segundos en escribirse y fallar al
     // guardarlo, al final, con un «Is a directory (os error 21)», era tirar ese trabajo y no
     // decir qué se esperaba.
     crate::store_check::ensure_crawl_store(store)?;
     ensure_xlsx_out_file(out)?;
 
-    let conn = Connection::open_with_flags(
-        store,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-    )
-    .with_context(|| format!("open the crawl file {}", store.display()))?;
+    // The configured `issues` view (`rule_config`) is what every sheet reads from here on;
+    // it changes which rows the constant-memory sheets stream, not how they are written.
+    let (conn, applied) = rule_config::open_read_only(store, rules)?;
 
     if let Some(parent) = out.parent() {
         if !parent.as_os_str().is_empty() {
@@ -383,7 +391,7 @@ pub fn to_xlsx(store: &Path, out: &Path) -> Result<usize> {
     }
 
     let summary = workbook.worksheet_from_index(0)?;
-    write_summary(summary, &conn, &stats, &styles).context("write the Summary sheet")?;
+    write_summary(summary, &conn, &stats, &styles, &applied).context("write the Summary sheet")?;
 
     workbook.save(out).with_context(|| format!("save {}", out.display()))?;
     Ok(specs.len() + 1)
@@ -586,6 +594,7 @@ fn write_summary(
     conn: &Connection,
     stats: &[SheetStats],
     styles: &Styles,
+    rules: &rule_config::Applied,
 ) -> Result<()> {
     let columns = ["Section".to_string(), "Metric".to_string(), "Value".to_string()];
     let mut widths = write_header(worksheet, &columns, styles)?;
@@ -599,6 +608,21 @@ fn write_summary(
             &mut row,
             &mut widths,
             "Crawl",
+            &metric,
+            SummaryValue::Text(value),
+            None,
+        )?;
+    }
+
+    // -------------------------------------------------------------- Configuración de reglas
+    // Right under the crawl data and above every count it changes. In English, like every
+    // header of the workbook; the IDs are identifiers.
+    for (metric, value) in rules_rows(rules) {
+        put_row(
+            worksheet,
+            &mut row,
+            &mut widths,
+            "Rule configuration",
             &metric,
             SummaryValue::Text(value),
             None,
@@ -830,6 +854,33 @@ fn read_meta(conn: &Connection) -> Result<Vec<(String, String)>> {
         }
     }
     Ok(out)
+}
+
+/// The `Rule configuration` rows of `Summary`. None without a configuration.
+fn rules_rows(rules: &rule_config::Applied) -> Vec<(String, String)> {
+    if rules.overrides.is_empty() {
+        return Vec::new();
+    }
+    let source = match &rules.source {
+        rule_config::Source::Stored => "stored in the crawl file".to_string(),
+        rule_config::Source::File(path) => path.display().to_string(),
+    };
+    let mut out = vec![
+        ("Source".to_string(), source),
+        (
+            "Note".to_string(),
+            "Findings of disabled rules are left out and overridden severities are written; \
+             the crawl file keeps every finding as found"
+                .to_string(),
+        ),
+    ];
+    if !rules.overrides.disable.is_empty() {
+        out.push(("Disabled rules".to_string(), rules.overrides.disable.join(", ")));
+    }
+    for (id, severity) in &rules.overrides.severity {
+        out.push((format!("Severity of {id}"), severity.as_str().to_string()));
+    }
+    out
 }
 
 fn scalar_i64(conn: &Connection, sql: &str) -> Result<i64> {
@@ -1084,6 +1135,50 @@ mod tests {
 
         drop(stmt);
         drop(conn);
+        let _ = std::fs::remove_file(&store);
+    }
+
+    #[test]
+    fn the_issue_sheets_read_the_configured_findings_and_summary_says_so() {
+        let store = temp_path("rules.sqlite");
+        {
+            let conn = crawl_file(&store);
+            poblar(&conn);
+            conn.execute(
+                "UPDATE crawl_meta SET config_json = ?1",
+                [r#"{"rules": {"disable": ["INDEX-NOINDEX"],
+                               "severity": {"HTTP-404-INTERNAL": "low"}}}"#],
+            )
+            .expect("store rules");
+        }
+        let (conn, applied) =
+            rule_config::open_read_only(&store, &RulesChoice::Stored).expect("open");
+        for name in ["Issues by rule", "Issues"] {
+            let spec = sheets().into_iter().find(|s| s.name == name).expect("sheet");
+            let sql = spec.sql.replace("{SEV}", SEVERITY_ORDER);
+            let mut stmt = conn.prepare(&sql).expect("the query compiles over the view");
+            let rows: Vec<(String, String)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .expect("query")
+                .map(|r| r.expect("row"))
+                .collect();
+            assert!(rows.iter().all(|(_, rule)| rule != "INDEX-NOINDEX"), "{name}: {rows:?}");
+            assert!(
+                rows.contains(&("low".to_string(), "HTTP-404-INTERNAL".to_string())),
+                "{name}: {rows:?}"
+            );
+        }
+        let summary = rules_rows(&applied);
+        assert!(summary.contains(&("Disabled rules".to_string(), "INDEX-NOINDEX".to_string())));
+        assert!(summary
+            .contains(&("Severity of HTTP-404-INTERNAL".to_string(), "low".to_string())));
+        assert!(rules_rows(&rule_config::Applied::none()).is_empty(), "no rows without a config");
+        drop(conn);
+
+        // And the whole export still goes through, constant-memory sheets included.
+        let out = temp_path("rules.xlsx");
+        assert_eq!(to_xlsx(&store, &out).expect("export"), sheets_esperadas());
+        let _ = std::fs::remove_file(&out);
         let _ = std::fs::remove_file(&store);
     }
 
