@@ -4,7 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = true
+repository.workspace = true
+homepage.workspace = true
+description = "The crawl engine of CrawlForge: HTTP, filesystem and list crawls, HTML extraction and a single-writer SQLite store"
+readme = "README.md"
+keywords = ["seo", "crawler", "audit", "sqlite", "html"]
+categories = ["web-programming", "development-tools"]
 
 [dependencies]
 crawlforge-rules.workspace = true

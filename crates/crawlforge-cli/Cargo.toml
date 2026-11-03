@@ -1,13 +1,28 @@
+# The package is `crawlforge`, so `cargo install crawlforge` and the release archives
+# (`crawlforge-<target>.tar.gz`, `crawlforge-installer.sh`) carry the name of the command. The
+# folder keeps its old name: it is not visible to anyone who installs the tool, and renaming it
+# would break every `crawlforge-cli/src/...` reference in comments and in the history.
 [package]
-name = "crawlforge-cli"
+name = "crawlforge"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = true
 repository.workspace = true
 homepage.workspace = true
-description.workspace = true
+description = "Technical SEO auditor for sites you own: crawl, audit, store in SQLite and diff two crawls"
+documentation = "https://github.com/dcarrero/crawlforge/blob/main/docs/MANUAL.md"
+# The repository README, copied into the package by cargo: it is the page crates.io shows.
+readme = "../../README.md"
+keywords = ["seo", "audit", "crawler", "sqlite", "cli"]
+categories = ["command-line-utilities", "web-programming", "development-tools"]
+
+# The library keeps its old name so `use crawlforge_cli::...` stays as it is in `main.rs` and in
+# the tests; without this line it would follow the package and become `crawlforge`.
+[lib]
+name = "crawlforge_cli"
+path = "src/lib.rs"
 
 [[bin]]
 name = "crawlforge"
@@ -38,4 +53,3 @@ libc.workspace = true
 # Solo la línea de comandos se distribuye como binario (ver dist-workspace.toml).
 [package.metadata.dist]
 dist = true
-formula = "crawlforge"

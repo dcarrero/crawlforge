@@ -51,12 +51,12 @@ Or the prebuilt binary for your system, from the
 
 ```bash
 # macOS and Linux
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-cli-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-installer.sh | sh
 ```
 
 ```powershell
 # Windows
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-cli-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-installer.ps1 | iex"
 ```
 
 Binaries are built by the release workflow for macOS (Apple Silicon and Intel), Linux (x86_64
@@ -64,12 +64,18 @@ and ARM64) and Windows (x86_64). The macOS binaries are not notarized yet: Homeb
 them without a warning, but one downloaded by hand needs `xattr -d com.apple.quarantine
 crawlforge` before Gatekeeper lets it run.
 
-From source, with Rust 1.88 or newer:
+With Rust 1.88 or newer, from [crates.io](https://crates.io/crates/crawlforge):
+
+```bash
+cargo install crawlforge
+```
+
+Or from source:
 
 ```bash
 git clone https://github.com/dcarrero/crawlforge
 cd crawlforge
-cargo build --release -p crawlforge-cli
+cargo build --release -p crawlforge
 cp target/release/crawlforge ~/.cargo/bin/
 ```
 
@@ -128,7 +134,7 @@ concurrency, on different machines, against different sites are not comparisons.
 crates/
   crawlforge-core/      crawler, parser, rule engine, SQLite store
   crawlforge-rules/     the 59 audit rules
-  crawlforge-cli/       the binary
+  crawlforge-cli/       the binary (package `crawlforge`)
   crawlforge-adapters/  WordPress and Astro
   crawlforge-ffi/       C and Swift bindings
 ```

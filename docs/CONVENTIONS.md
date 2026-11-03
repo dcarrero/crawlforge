@@ -62,7 +62,7 @@ inside the core, the design is wrong.
 | Export | `rust_xlsxwriter`, `csv` | |
 | Errors | `thiserror` in the core, `anyhow` in the CLI | |
 | Logs | `tracing` | |
-| Localisation | `fluent-bundle`, `fluent-syntax`; `unicode-width` | Texts in `locales/<lang>/*.ftl`, embedded. CLDR plurals; terminal columns by display width |
+| Localisation | `fluent-bundle`, `fluent-syntax`; `unicode-width` | Texts in `crates/crawlforge-rules/locales/<lang>/*.ftl`, embedded by `crawlforge-rules` (the CLI's too). CLDR plurals; terminal columns by display width |
 
 **The stack is closed.** Adding a dependency for something solved in twenty lines is a decision
 with a cost: every crate is audit surface, compile time and a version to maintain. That is why the
@@ -78,12 +78,12 @@ No exceptions.
 This changed on 2026-08-04, before opening the repository. Until then, decision comments were
 written in Spanish, and the call was made that Spanish in the code is a barrier for anyone who
 wants to contribute. **`crawlforge-rules` is already converted; `crawlforge-core` and
-`crawlforge-cli` are being converted.** While that lasts, a comment in Spanish is not an exception
+`crawlforge-cli` (package `crawlforge`) are being converted.** While that lasts, a comment in Spanish is not an exception
 but pending work.
 
 Spanish survives in two places, and in both it is product text, not engineering text:
 
-- `locales/es/` — the rule catalog (`rules.ftl`) and the CLI messages (`cli.ftl`) requested with
+- `crates/crawlforge-rules/locales/es/` — the rule catalog (`rules.ftl`) and the CLI messages (`cli.ftl`) requested with
   `--lang es`, like every other language folder under `locales/`. That is what the end user reads.
 - The **data** of a test: the string an `assert` compares against, a text that has to exceed
   seventy characters, the accented characters used to measure the width of a typeface. That is not

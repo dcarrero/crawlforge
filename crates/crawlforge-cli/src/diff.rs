@@ -2841,7 +2841,7 @@ pub(crate) mod tests {
     ///
     /// ```text
     /// CRAWLFORGE_DIFF_A=antes.sqlite CRAWLFORGE_DIFF_B=despues.sqlite \
-    ///   cargo test -p crawlforge-cli --lib -- --ignored --nocapture rastreos_reales
+    ///   cargo test -p crawlforge --lib -- --ignored --nocapture rastreos_reales
     /// ```
     #[test]
     #[ignore = "necesita dos ficheros de rastreo reales; se lanza a mano"]

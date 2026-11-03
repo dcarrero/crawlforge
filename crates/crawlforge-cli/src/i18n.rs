@@ -1,5 +1,5 @@
 //! Los mensajes de la CLI: qué funciones hay, con qué argumentos, y cómo se resuelve el idioma.
-//! Los textos no están aquí: viven en `locales/<idioma>/cli.ftl`, en Fluent.
+//! Los textos no están aquí: viven en `crawlforge-rules/locales/<idioma>/cli.ftl`, en Fluent.
 //!
 //! # Por qué así
 //!
@@ -89,8 +89,9 @@ fn resolve_pure(flag: Option<&str>, env: Option<&str>) -> Result<Lang> {
 
 // ─────────────────────────────────────────────────────────── Los textos
 
-/// `locales/<idioma>/cli.ftl`, incrustado en el binario.
-pub static CLI_TEXTS: Catalog = Catalog::new(crawlforge_rules::locale_sources!("cli.ftl"));
+/// `crawlforge-rules/locales/<lang>/cli.ftl`, embedded in the binary. `crawlforge-rules` embeds it,
+/// not this crate: a published crate contains only its own folder (see `l10n::CLI_SOURCES`).
+pub static CLI_TEXTS: Catalog = Catalog::new(crawlforge_rules::l10n::CLI_SOURCES);
 
 /// El idioma en el que de verdad se habla: el pedido si `cli.ftl` tiene su traducción, inglés si
 /// todavía no. Los números siguen a los textos: un mensaje inglés con millares alemanes
@@ -1078,9 +1079,10 @@ mod tests {
             let mut args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
             args.sort();
             match l10n::message_variables(en, key) {
-                None => problems.push(format!("locales/en/cli.ftl: {key}: missing")),
+                None => problems.push(format!("{}/en/cli.ftl: {key}: missing", l10n::LOCALES_DIR)),
                 Some(vars) if vars != args => problems.push(format!(
-                    "locales/en/cli.ftl: {key}: variables {vars:?}, the code passes {args:?}"
+                    "{}/en/cli.ftl: {key}: variables {vars:?}, the code passes {args:?}",
+                    l10n::LOCALES_DIR
                 )),
                 Some(_) => {}
             }
@@ -1096,8 +1098,9 @@ mod tests {
             .into_iter()
             .filter(|id| !declared.contains(&id.as_str()))
             .collect();
-        assert!(sobran.is_empty(), "locales/en/cli.ftl has messages no code uses: {sobran:?}");
-        let problems = l10n::check_translation("locales/en/cli.ftl", CLI_TEXTS.source(Lang::En), CLI_TEXTS.source(Lang::En));
+        assert!(sobran.is_empty(), "{}/en/cli.ftl has messages no code uses: {sobran:?}", l10n::LOCALES_DIR);
+        let file = format!("{}/en/cli.ftl", l10n::LOCALES_DIR);
+        let problems = l10n::check_translation(&file, CLI_TEXTS.source(Lang::En), CLI_TEXTS.source(Lang::En));
         assert!(problems.is_empty(), "{}", problems.join("\n"));
     }
 
@@ -1112,13 +1115,14 @@ mod tests {
         for lang in Lang::ALL.into_iter().filter(|l| *l != Lang::En) {
             let src = CLI_TEXTS.source(lang);
             if l10n::has_messages(src) {
-                problems.extend(l10n::check_translation(&format!("locales/{}/cli.ftl", lang.code()), en, src));
+                problems.extend(l10n::check_translation(&format!("{}/{}/cli.ftl", l10n::LOCALES_DIR, lang.code()), en, src));
             }
             let cli = CLI_TEXTS.is_translated(lang);
             let rules = crawlforge_rules::RULE_TEXTS.is_translated(lang);
             if cli != rules {
                 problems.push(format!(
-                    "locales/{}/: cli.ftl is {}translated but rules.ftl is {}: translate both",
+                    "{}/{}/: cli.ftl is {}translated but rules.ftl is {}: translate both",
+                    l10n::LOCALES_DIR,
                     lang.code(),
                     if cli { "" } else { "not " },
                     if rules { "" } else { "not" },

@@ -11,8 +11,10 @@ ci = "github"
 installers = ["shell", "powershell", "homebrew"]
 # A GitHub repo to push Homebrew formulas to
 tap = "dcarrero/homebrew-tap"
-# Publish jobs to run in CI
-publish-jobs = ["homebrew"]
+# Publish jobs to run in CI. `./publish-crates` is ours (`.github/workflows/publish-crates.yml`):
+# it publishes crawlforge-rules, crawlforge-core and crawlforge to crates.io with Trusted
+# Publishing. See CONTRIBUTING.md, "Cutting a release".
+publish-jobs = ["homebrew", "./publish-crates"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = [
   "aarch64-apple-darwin",
@@ -29,6 +31,11 @@ install-updater = false
 unix-archive = ".tar.gz"
 # Only the command line is distributed; the other crates are libraries
 dist = false
+
+# Trusted Publishing needs the OIDC token; the checkout needs to read the repository. Without this
+# dist grants `id-token` and `packages`, and an explicit list leaves `contents` at none.
+[dist.github-custom-job-permissions]
+publish-crates = { id-token = "write", contents = "read" }
 
 [dist.github-custom-runners]
 aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"

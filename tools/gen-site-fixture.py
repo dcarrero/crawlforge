@@ -136,7 +136,7 @@ def main() -> int:
         f"{args.pages} páginas, {total_links} enlaces, {args.pages * 2} referencias a "
         f"{n_images} imágenes en {out}"
     )
-    print(f"Medir con: cargo build --profile bench-max -p crawlforge-cli && \\")
+    print(f"Medir con: cargo build --profile bench-max -p crawlforge && \\")
     print(f"  ./target/bench-max/crawlforge audit {out} --base {base}/")
     return 0
 

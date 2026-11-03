@@ -1480,7 +1480,7 @@ mod tests {
 mod prueba_manual {
     /// Genera el informe de un rastreo real para mirarlo con los ojos.
     ///
-    /// `cargo test -p crawlforge-cli -- --ignored --nocapture ver_informe_real`
+    /// `cargo test -p crawlforge -- --ignored --nocapture ver_informe_real`
     #[test]
     #[ignore = "necesita un fichero de rastreo real; se lanza a mano"]
     fn ver_informe_real() {

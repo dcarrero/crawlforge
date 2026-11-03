@@ -10,9 +10,10 @@
 //! that; Fluent's selectors over the CLDR plural rules can, and each translation chooses its own
 //! forms without touching code.
 //!
-//! The files live in `locales/<lang>/{cli,rules}.ftl` at the root of the repository and are
-//! compiled in with `include_str!`: one binary, nothing to install, and a translator touches
-//! only their own folder. They are parsed **lazily, once per language and process**: English
+//! The files live in `crates/crawlforge-rules/locales/<lang>/{cli,rules}.ftl` and are compiled
+//! in with `include_str!`: one binary, nothing to install, and a translator touches only their
+//! own folder. Both files are embedded by this crate, the CLI's included, so that every crate
+//! builds from crates.io with only its own folder (see [`CLI_SOURCES`]). They are parsed **lazily, once per language and process**: English
 //! plus the requested language, never the ten.
 //!
 //! # What replaces "an untranslated string does not compile"
@@ -47,7 +48,7 @@ use std::sync::OnceLock;
 ///
 /// **English is the source language** and every other one a translation of it: it is the order
 /// the product ships in, and it decides which text wins when two disagree. The variant order is
-/// the index into the arrays of [`locale_sources!`](crate::locale_sources) and must match it.
+/// the index into [`RULES_SOURCES`] and [`CLI_SOURCES`] and must match it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Lang {
     #[default]
@@ -180,28 +181,40 @@ impl Lang {
 
 // ─────────────────────────────────────────────────────────────────── The files
 
+/// Where the language folders live, from the root of the repository. Only for messages that send
+/// a translator to a file.
+pub const LOCALES_DIR: &str = "crates/crawlforge-rules/locales";
+
 /// The ten embedded copies of one file of `locales/`, in [`Lang::ALL`] order.
 ///
-/// A macro and not a function because `include_str!` resolves at compile time, from the crate
-/// that expands it: `env!("CARGO_MANIFEST_DIR")` is then that crate's folder, and both crates
-/// sit two levels below the root that holds `locales/`.
-#[macro_export]
+/// `locales/` lives inside this crate, and both files are embedded here, the CLI's too, because a
+/// published crate contains only its own folder: an `include_str!` that climbs to the root of the
+/// repository builds in the workspace and fails from crates.io. The CLI takes its texts from
+/// [`CLI_SOURCES`] instead of reading files of its own, and translators still have one folder per
+/// language with both files side by side.
 macro_rules! locale_sources {
     ($file:literal) => {
         [
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/en/", $file)),
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/es/", $file)),
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/de/", $file)),
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/fr/", $file)),
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/it/", $file)),
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/nl/", $file)),
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/tr/", $file)),
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/pt/", $file)),
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/ja/", $file)),
-            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/pl/", $file)),
+            include_str!(concat!("../locales/en/", $file)),
+            include_str!(concat!("../locales/es/", $file)),
+            include_str!(concat!("../locales/de/", $file)),
+            include_str!(concat!("../locales/fr/", $file)),
+            include_str!(concat!("../locales/it/", $file)),
+            include_str!(concat!("../locales/nl/", $file)),
+            include_str!(concat!("../locales/tr/", $file)),
+            include_str!(concat!("../locales/pt/", $file)),
+            include_str!(concat!("../locales/ja/", $file)),
+            include_str!(concat!("../locales/pl/", $file)),
         ]
     };
 }
+
+/// `locales/<lang>/rules.ftl`, embedded: the name and description of every rule.
+pub const RULES_SOURCES: [&str; 10] = locale_sources!("rules.ftl");
+
+/// `locales/<lang>/cli.ftl`, embedded: the messages of the command line. They live here and not
+/// in the CLI crate so the CLI includes no file outside its own folder; this crate does not read them.
+pub const CLI_SOURCES: [&str; 10] = locale_sources!("cli.ftl");
 
 type Bundle = FluentBundle<FluentResource>;
 

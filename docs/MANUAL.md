@@ -21,7 +21,7 @@ If it does not respond, reinstall from the repository:
 
 ```bash
 cd ~/Desarrollos/proyectos/proyectos-mini/crawlforge
-cargo build --release -p crawlforge-cli && cp target/release/crawlforge ~/.cargo/bin/
+cargo build --release -p crawlforge && cp target/release/crawlforge ~/.cargo/bin/
 ```
 
 **The tool's output is in English.** That is the source language; the others are translations,

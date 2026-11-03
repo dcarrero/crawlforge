@@ -66,7 +66,7 @@ fi
 # ---------------------------------------------------------------- 3. Las reglas
 
 paso "Catálogo de reglas"
-cargo build --release -p crawlforge-cli >/dev/null 2>&1
+cargo build --release -p crawlforge >/dev/null 2>&1
 CF="$RAIZ/target/release/crawlforge"
 REGLAS=$("$CF" rules 2>/dev/null | tail -1)
 [ -n "$REGLAS" ] && ok "$REGLAS" || mal "el catálogo no se puede listar"
