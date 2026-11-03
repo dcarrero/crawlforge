@@ -634,7 +634,7 @@ Said upfront, so you do not waste time looking for it:
   already have; producing them on a schedule is still your cron's job.
 - **`HTTP-TEMP-REDIRECT`** does not exist yet: it needs a crawl history that does not exist yet.
 
-Of the free catalog, 59 of 60 rules are implemented.
+Every rule of the catalog is implemented except `HTTP-TEMP-REDIRECT`; `crawlforge rules` lists the ones your build has.
 
 ---
 
@@ -646,7 +646,6 @@ Of the free catalog, 59 of 60 rules are implemented.
 | A `report` mentions findings "not evaluated" | The crawl was truncated and the rules that need the full graph were silenced on purpose. |
 | The site returns 429 or 503 | Lower `--concurrency`. The tool already halves its concurrency on that host after three 429s, 503s, dropped connections or timeouts in a row, waits what a `Retry-After` asks (up to two minutes) before retrying, and respects the `Crawl-delay` in `robots.txt`, but a WAF can be stricter than all of that. When it halved the concurrency, the crawl summary says so and how many times. |
 | "no such file" when running `diff` | The `.prev.sqlite` is missing: it only appears when you **repeat** a crawl onto the same output file. |
-
 | The program seems hung after crawling | It is in the final pass: inlinks and set-wide rules. It says which rule it is on (`final pass · rule 7/29 · …`). On large sites this takes minutes. |
 | An old crawl cannot be resumed | It is only refused if the file is **newer** than the program, or if it still has to cross a migration that changes what the engine writes. It still opens with `report`, `export` and `diff`. |
 | `.sqlite-wal` and `.sqlite-shm` appear next to it | The crawl did not close cleanly. **Do not copy just the `.sqlite`**: you would be missing data. Open it again with `crawlforge report` so it consolidates them. |

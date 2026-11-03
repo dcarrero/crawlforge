@@ -639,7 +639,7 @@ Dicho por delante, para que no pierdas tiempo buscándolo:
   ya tienes; producirlos a un ritmo sigue siendo trabajo de tu cron.
 - **`HTTP-TEMP-REDIRECT`** no existe todavía: necesita un histórico de rastreos que aún no existe.
 
-Del catálogo gratuito están implementadas 59 de 60 reglas.
+Están implementadas todas las reglas del catálogo salvo `HTTP-TEMP-REDIRECT`; `crawlforge rules` lista las que trae tu build.
 
 ---
 
@@ -651,7 +651,6 @@ Del catálogo gratuito están implementadas 59 de 60 reglas.
 | Un `report` menciona hallazgos «no evaluados» | El rastreo se truncó y las reglas que necesitan el grafo completo se han silenciado a propósito. |
 | El sitio devuelve 429 o 503 | Baja `--concurrency`. La herramienta ya reduce a la mitad su concurrencia en ese host tras tres 429, 503, conexiones cortadas o timeouts seguidos, espera lo que pida un `Retry-After` (hasta dos minutos) antes de reintentar y respeta el `Crawl-delay` del `robots.txt`, pero un WAF puede ser más estricto que todo eso. Si redujo la concurrencia, el resumen del rastreo lo dice y cuántas veces. |
 | «no such file» al hacer `diff` | Falta el `.prev.sqlite`: solo aparece al **repetir** un rastreo sobre el mismo fichero de salida. |
-
 | El programa parece colgado tras rastrear | Está en la pasada final: enlaces entrantes y reglas de conjunto. Dice por qué regla va (`final pass · rule 7/29 · …`). En sitios grandes tarda minutos. |
 | Un rastreo antiguo no se puede reanudar | Solo se rechaza si el fichero es **más nuevo** que el programa, o si le falta cruzar una migración que cambia lo que el motor escribe. Se sigue abriendo con `report`, `export` y `diff`. |
 | Aparecen `.sqlite-wal` y `.sqlite-shm` al lado | El rastreo no cerró limpiamente. **No copies solo el `.sqlite`**: te faltarían datos. Vuelve a abrirlo con `crawlforge report` para que los consolide. |

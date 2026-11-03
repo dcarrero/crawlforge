@@ -452,7 +452,9 @@ mod tests {
 
     #[test]
     fn the_published_schema_is_up_to_date() {
-        let published = include_str!("../../../docs/crawl-config.schema.json");
+        // Un checkout de Windows con `core.autocrlf` convierte el fichero a CRLF: se compara el
+        // contenido, no los finales de línea (el CI de Windows lo cazó en la 0.21.0).
+        let published = include_str!("../../../docs/crawl-config.schema.json").replace("\r\n", "\n");
         assert!(
             published == render(),
             "docs/crawl-config.schema.json is stale: run tools/gen-artefactos-web.sh"
