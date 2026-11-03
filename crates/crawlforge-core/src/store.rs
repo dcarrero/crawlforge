@@ -351,7 +351,7 @@ pub fn compact(conn: &Connection) -> Result<()> {
 /// Un cerrojo del sistema operativo no tiene ese dilema: **lo suelta el sistema en el instante
 /// en que el proceso muere**, exactamente la semántica que `resume` necesita («rechaza un
 /// `running` vivo, acepta uno muerto») sin heurística de tiempo. Y en vez de `flock` —que en
-/// Windows es otra API y en Rust estable de este MSRV (1.85) no existe aún— se usa el propio
+/// Windows es otra API y en Rust estable de este MSRV (1.88) no existe aún— se usa el propio
 /// SQLite: un `BEGIN EXCLUSIVE` sobre un fichero lateral `<store>.lock`. Es la misma primitiva
 /// de bloqueo del sistema (fcntl en macOS, LockFileEx en Windows) con el comportamiento ya
 /// homogéneo entre plataformas, sin dependencias nuevas, y con el registro de bloqueos por

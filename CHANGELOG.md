@@ -72,6 +72,37 @@ Rule IDs never change meaning. A historical diff between two crawls depends on i
   filter. `crawl`, `list` and `resume` keep the previous behaviour on purpose: a server closing a
   connection mid-write must stay a per-URL error, never a signal that ends the crawl.
 
+### Security
+
+- **Sitemaps are parsed with `quick-xml` 0.42** (was 0.37), past RUSTSEC-2026-0194 (quadratic
+  duplicate-attribute check) and RUSTSEC-2026-0195 (unbounded namespace allocation in `NsReader`).
+  A sitemap comes from a site that is not ours. The parser never used `NsReader` nor read
+  attributes, so neither path was reachable, and two new tests keep it so: a tag with 100,000
+  duplicate attributes and a file with 100,000 namespace declarations both parse in milliseconds.
+  What a sitemap yields is unchanged, including what a broken one yields: a `<loc>` with a bare
+  `&`, an unknown entity or a byte that is not UTF-8 is dropped and the rest of the file is still
+  read — the new parser would have stopped there, and losing every URL after the first `/café` of
+  an ISO-8859-1 sitemap is not an acceptable price for an upgrade. Two edge cases now read better:
+  a comment inside a `<loc>` no longer splits it in two, and a `<loc>` cut off by the end of a
+  truncated file is no longer taken as a URL.
+- **XLSX export uses `rust_xlsxwriter` 0.102** (was 0.79), which brings `zip` 9 (was 2.4) and with
+  it the fixes for RUSTSEC-2026-0367, -0368, -0369 and -0429. Those are about extracting archives,
+  which CrawlForge never does, but the advisories were in the tree. The exported workbook is
+  identical cell for cell, and the peak memory of a 1-million-row export fell from 1.23 GB to
+  20 MB.
+- **TLS stack updated**: `rustls` 0.23.46 (RUSTSEC-2026-0285, -0346, -0348, -0349),
+  `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382) and `webpki-roots` 1.0.11 (RUSTSEC-2026-0381,
+  distrusted emSign intermediates). Also `tokio` 1.54.1 (unsound `AsyncFd::new`,
+  RUSTSEC-2026-0386), and `quinn-proto` 0.11.19 and `chacha20` 0.10.2 (yanked 0.10.1) in the lock
+  file, although neither is compiled into the binary.
+- **`indicatif` 0.18** (was 0.17) drops the unmaintained `number_prefix` (RUSTSEC-2025-0119).
+  The progress line looks the same.
+- **A `deny.toml`** states the dependency policy: crates.io only, the licenses the tree actually
+  needs, no wildcard versions, advisories and unmaintained crates fail `cargo deny check`.
+- **The crates declare `Apache-2.0`**, as the `LICENSE` file always said; `Cargo.toml` still said
+  `UNLICENSED` from before the repository was opened.
+- **Minimum Rust is now 1.88** (was 1.85), the version `zip` 9 requires.
+
 ## [0.20.0] — 2026-11-03
 
 Five new rules, all `free`, per-site rule configuration, and the whole output in ten languages.
