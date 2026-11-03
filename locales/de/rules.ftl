@@ -1,3 +1,147 @@
-### CrawlForge — rule catalogue. Not translated yet: until this file has messages, this language
-### falls back to English. To translate it, copy locales/en/rules.ftl here and follow
-### CONTRIBUTING.md, "Adding or improving a language".
+### CrawlForge — Regelkatalog: Namen und Beschreibungen (Deutsch).
+###
+### Übersetzung von locales/en/rules.ftl. Englisch ist die Quelle und maßgeblich.
+### CONTRIBUTING.md, "Adding or improving a language", erklärt die Regeln.
+
+ASSET-BROKEN = Defektes CSS oder JS
+    .description = Eine CSS- oder JS-Datei der Website liefert 4xx oder 5xx. Google rendert die Seite, um sie zu indexieren: Durch ein fehlendes Stylesheet kann Google eine Seite ohne Styles – und damit nicht mobilfreundlich – sehen, und ein fehlendes Skript kann clientseitig gerenderte Inhalte leer lassen. Typisch für ein Deployment mit nicht übereinstimmenden Datei-Hashes.
+ASSET-CSS-HEAVY = Zu großes Stylesheet
+    .description = Das Stylesheet ist in der ausgelieferten Form größer als 100 KB. Der Browser zeichnet nichts, bevor er es hat, daher kosten diese Bytes mehr als die eines Skripts: Sie verzögern den gesamten ersten Paint. Deshalb liegt die Grenze niedriger. Fast immer ist es ein komplettes Framework, von dem nur ein Zehntel genutzt wird.
+ASSET-FORM-BROKEN = Formular sendet an defekte URL
+    .description = Die `action` eines Formulars verweist auf eine eigene URL, die 4xx oder 5xx liefert. Das Formular sieht gut aus, lässt sich problemlos ausfüllen und geht beim Absenden verloren: einer der wenigen Fehler, die unmittelbar Kunden kosten, und niemand erfährt davon, weil wer darauf stößt, wortlos geht. Geprüft werden nur per GET gesendete Formulare (ein Suchfeld, ein Katalogfilter): Ein POST zu prüfen hieße, es abzusenden, und dieses Tool sendet keine Formulare ab.
+ASSET-IFRAME-BROKEN = Defekter eingebetteter Frame
+    .description = Ein `<iframe>` auf der Seite verweist auf eine eigene URL, die 4xx oder 5xx liefert, und der Besucher sieht ein leeres Loch, wo die Karte, das Video oder das Formular sein sollte. In der umgebenden Seite hinterlässt es keine Spur – das HTML bleibt gültig –, deshalb fällt es monatelang nicht auf.
+ASSET-IMG-BROKEN = Defektes Bild
+    .description = Ein Bild, auf das die Website verweist, liefert 4xx oder 5xx. Die Lücke ist auf der Seite sichtbar, für die Bildersuche existiert das Bild nicht, und jeder Besuch verschwendet eine Anfrage auf einen Fehler. Fast immer steckt eine Migration dahinter, die den Upload-Ordner zurückgelassen hat, oder ein von Hand geschriebener Pfad.
+ASSET-IMG-EMPTY-ALT-LINK = Link nur mit Bild ohne Alt-Text
+    .description = Ein Link, dessen einziger Inhalt ein Bild mit `alt=""` ist, hat keinen zugänglichen Namen: Wer einen Screenreader nutzt, hört „Link“ und sonst nichts, und die Suchmaschine erhält kein Signal, wohin er führt. Typisch ist das Logo im Header, meist der am häufigsten wiederholte Link der Website. Hier ist das `alt` nicht dekorativ: Es ist der Linktext.
+ASSET-IMG-HEAVY = Zu großes Bild
+    .description = Das Bild ist größer als 200 KB. Es ist die häufigste Ursache für einen schlechten mobilen LCP: Es verzögert das Rendern des Hauptelements und verbraucht die Bandbreite einer langsamen Verbindung. Meist reicht es, das Bild in der tatsächlich angezeigten Größe zu exportieren und als WebP oder AVIF auszuliefern.
+ASSET-IMG-NO-ALT = Bild ohne alt-Attribut
+    .description = Einige Bilder haben kein `alt`-Attribut. Ein Screenreader hat nichts vorzulesen und buchstabiert am Ende den Dateinamen, und Google verliert den einzigen Text, der das Bild beschreibt: Er bestimmt das Ranking in der Bildersuche und wird angezeigt, wenn das Bild nicht lädt. Ein leeres `alt=""` ist zulässig, aber nur für dekorative Bilder.
+ASSET-JS-HEAVY = Zu großes Skript
+    .description = Das Skript ist in der ausgelieferten Form größer als 250 KB. Jede Seite, die es lädt, zahlt für den Download und vor allem für das Parsen und Ausführen im Main Thread – daher kommt die träge Reaktion auf einem gewöhnlichen Smartphone. Meist ist es ein Bundle, das niemand aufgeteilt hat: Ermitteln Sie, was für den ersten Bildschirm nötig ist, und laden Sie den Rest separat.
+CANON-CHAIN = Canonical-Kette
+    .description = A gibt B als Canonical an, und B gibt C an. Canonicals sind für Google nicht transitiv: Findet Google eine Kette, ignoriert es sie und entscheidet selbst, welche URL die Hauptversion ist. Jeder Schritt sollte direkt auf C verweisen.
+CANON-CROSS-DOMAIN = Domainübergreifendes Canonical
+    .description = Das Canonical verweist auf einen anderen Host als den der Seite. Bei syndizierten Inhalten ist das legitim, aber wenn es nicht beabsichtigt ist, überlässt es das Ranking der anderen Domain: Die Seite selbst wird nicht mehr indexiert. Meist stammt es aus einer halbfertigen Migration oder einer kopierten Staging-Umgebung.
+CANON-MISSING = Canonical fehlt
+    .description = Die indexierbare Seite gibt kein rel=canonical an. Für sich genommen nicht gravierend, da Google das Canonical ableitet, aber ohne es kann jeder URL-Parameter – eine Kampagne, ein Filter, eine Sortierung – als eigene Seite im Index landen.
+CANON-MULTIPLE = Mehrere Canonicals
+    .description = Die Seite gibt mehr als ein link rel=canonical an. Google wählt keines aus: Es ignoriert alle, die Wirkung ist also dieselbe wie ohne Canonical. Fast immer geben das Theme und ein SEO-Plugin den Tag jeweils selbst aus.
+CANON-RELATIVE = Relatives Canonical
+    .description = Das Canonical ist als relativer Verweis statt als absolute URL angegeben. Das funktioniert, solange die Seite von einem Ort ausgeliefert wird, aber wenn das HTML unter einem anderen Host wiedergegeben wird – eine Staging-Umgebung, ein Proxy, ein Scraper –, wird das Canonical gegen diesen Host aufgelöst und verweist nicht mehr auf das Original.
+CANON-TO-4XX = Canonical auf Fehler-URL
+    .description = Das Canonical verweist auf eine URL, die mit einem Fehler antwortet. Die Seite erklärt sich zum Duplikat von etwas, das nicht existiert, sodass weder sie noch das Ziel indexiert werden kann: Der Inhalt verschwindet komplett aus den Suchergebnissen.
+CANON-TO-NOINDEX = Canonical auf noindex-Seite
+    .description = Das Canonical verweist auf eine Seite mit noindex. Die beiden Signale widersprechen sich: Das eine sagt „indexiere jene“, und jene sagt „indexiere mich nicht“. Meist gehen am Ende beide URLs verloren.
+CANON-TO-REDIRECT = Canonical auf Weiterleitung
+    .description = Das Canonical verweist auf eine URL, die woandershin weiterleitet. Google muss zwischen dem Canonical-Signal und dem der Weiterleitung wählen und behält meist das endgültige Ziel, was den Tag nutzlos macht. Verweisen Sie direkt auf die URL, die 200 liefert.
+CONTENT-H1-EMPTY = Leere H1
+    .description = Im Markup steht eine H1, aber sie liefert keinen Text: Sie ist leer, oder ihr einziger Inhalt ist ein Bild ohne Aussage. Die Überschrift nimmt den Platz der Headline ein, ohne ihre Aufgabe zu erfüllen, sodass weder die Suchmaschine noch ein Screenreader das Thema der Seite erfährt. Typisch ist ein Logo in der H1.
+CONTENT-H1-MISSING = H1 fehlt
+    .description = Die indexierbare Seite hat keine oder eine leere H1. Die H1 sagt der Suchmaschine in den eigenen Worten des Autors, worum es auf der Seite geht, und sie ist die erste Überschrift, die ein Screenreader beim Betreten des Inhalts ansagt.
+CONTENT-H1-MULTIPLE = Mehrere H1
+    .description = Die Seite hat mehr als eine H1. HTML5 erlaubt das, aber es gibt kein einzelnes Hauptthema mehr: Die Suchmaschine muss raten, worum es auf der Seite geht, und ein Screenreader sagt mehrere Überschriften der ersten Ebene an, als wären es getrennte Dokumente. Meist markiert das Template zusätzlich zur echten Headline das Logo oder den Websitenamen als H1.
+CONTENT-HEADING-SKIP = Überschriftenebene übersprungen
+    .description = Die Überschriftenebenen springen um mehr als eine Stufe nach unten, etwa von H2 auf H4. Die Gliederung des Dokuments bekommt Lücken: Wer per Überschriften navigiert, kann nicht erkennen, ob die H4 zu dieser H2 oder zu einem anderen Abschnitt gehört, und die Suchmaschine verliert die Hierarchie, mit der sie versteht, was wozu gehört. Meist wurde eine Überschrift nach ihrer Schriftgröße statt nach ihrer Ebene gewählt.
+CONTENT-LANG-MISSING = lang-Attribut fehlt
+    .description = Das <html>-Element gibt die Sprache des Inhalts nicht an. Ohne sie spricht ein Screenreader den Text nach den Regeln der Systemsprache aus, der Browser weiß nicht, welches Wörterbuch er beim Übersetzen verwenden soll, und die Sprachsignale der Website bleiben der automatischen Erkennung überlassen. Es ist ein einzeiliges Attribut.
+CONTENT-THIN = Thin Content
+    .description = Eine indexierbare Seite mit weniger als 300 Wörtern sichtbarem Text. Selten hat sie genug Substanz, um eine Suchanfrage zu beantworten, deshalb konkurriert sie schlecht und verwässert in der Masse die durchschnittliche Qualität der Website in den Augen der Suchmaschine. Viele davon sind Archive, Tag-Seiten oder automatisch erzeugte Platzhalterseiten, die man besser von der Indexierung ausschließt, statt sie auszubauen.
+DUP-CONTENT-EXACT = Identischer Inhalt
+    .description = Zwei oder mehr indexierbare URLs liefern Byte für Byte dasselbe HTML. Sie konkurrieren miteinander um dieselben Suchanfragen und teilen sich eingehende Links, statt sie zu bündeln. Behebung: Eine URL indexierbar lassen und die übrigen per Canonical auf sie verweisen.
+DUP-CONTENT-NEAR = Nahezu doppelter Inhalt
+    .description = Zwei oder mehr indexierbare URLs haben fast denselben sichtbaren Text, obwohl ihr HTML nicht identisch ist: Nur ein Datum, ein Widget oder ein paar Sätze unterscheiden sich. Meist sind es Tag- und Kategorieseiten, die dieselben Beiträge auflisten, oder ein Beitrag, der aus einem anderen umgeschrieben wurde. Google wählt einen zur Anzeige aus und stellt die anderen zurück. Führen Sie sie zusammen, grenzen Sie sie klar voneinander ab oder setzen Sie ein Canonical auf die Hauptseite.
+HREFLANG-INVALID-CODE = Ungültiger hreflang-Code
+    .description = Der Attributwert ist weder eine Sprache nach ISO 639-1 mit optionaler Region nach ISO 3166-1 noch das spezielle x-default. Google verwirft eine fehlerhafte Annotation stillschweigend, sodass das Set ohne Warnung unvollständig bleibt: Es ist der häufigste Fehler und der, der mit bloßem Auge am schwersten zu erkennen ist.
+HREFLANG-LANG-MISMATCH = Selbstbezogenes hreflang in anderer Sprache als die Seite
+    .description = Die hreflang-Annotation, die auf die Seite selbst verweist, gibt eine andere Sprache an als ihr `<html lang>`: etwa eine spanische Seite, die sich als englisch ausgibt. Eines von beiden ist falsch, und wenn es das hreflang ist, liefert Google die Seite an Nutzer aus, die in der anderen Sprache suchen. Meist kopiert ein Übersetzungs-Plugin das Set der Originalseite, ohne den Code anzupassen.
+HREFLANG-NO-SELF = Hreflang ohne Selbstreferenz
+    .description = Die Seite gibt Sprachalternativen an, aber keine verweist auf sie selbst. Google verlangt, dass jede Seite im Set sich selbst enthält; fehlt dieser Link, verwirft es die ganze Gruppe, und keine der Übersetzungen profitiert von den anderen.
+HREFLANG-NOT-RECIPROCAL = Hreflang ohne Rückverweis
+    .description = Diese Seite gibt eine Sprachalternative an, die nicht zurückverweist. Hreflang-Annotationen sind Stimmen, die nur zählen, wenn sie gegenseitig sind: Google ignoriert die ganze Beziehung, wenn eine der beiden Seiten die andere nicht bestätigt.
+HREFLANG-SELF-ONLY = Hreflang ohne Alternativen
+    .description = Die Seite gibt hreflang an, aber jede Annotation verweist auf die Seite selbst: Im Set gibt es keine Übersetzung, also bewirkt es nichts. Hat die Seite keine Übersetzung, ist die Annotation überflüssig; hat sie eine, fehlen deren Links, und genau das sollte geprüft werden: Meist ist es eine Übersetzung, die das Plugin nicht mehr verlinkt.
+HREFLANG-TO-4XX = Hreflang auf Fehler-URL
+    .description = Eine Sprachalternative verweist auf eine URL, die 4xx liefert. Die Übersetzung, die die Seite verspricht, existiert nicht: Ein Besucher, der die Sprache wechselt, landet auf einer Fehlerseite, und Google entfernt die verweisende Seite aus dem Set.
+HTTP-404-EXTERNAL = Defekter externer Link
+    .description = Die Website verlinkt auf eine URL einer anderen Domain, die nicht mehr existiert: Sie antwortet mit 404 oder 410, oder ihre Domain wird nicht aufgelöst. Das schadet nicht so wie ein eigener 404, aber es schickt den Besucher auf eine Fehlerseite und lässt den Inhalt veralten: Ein Ratgeber voller toter Links wirkt nicht mehr gepflegt.
+HTTP-404-INTERNAL = Defekter interner Link
+    .description = Eine URL dieser Website liefert 4xx, und es gibt Seiten, die auf sie verlinken. Das verschwendet Crawl-Budget, unterbricht den Fluss interner Links zu dem, was dort früher stand, und lässt den Besucher auf einer Fehlerseite stehen.
+HTTP-5XX = Serverfehler
+    .description = Die URL liefert 5xx: Der Server konnte die Antwort nicht erzeugen. Google entfernt Seiten, die länger so antworten, aus dem Index und verlangsamt das Crawling der gesamten Website, solange der Fehler anhält.
+HTTP-EXTERNAL-UNVERIFIABLE = Nicht überprüfbarer externer Link
+    .description = Die Website verlinkt auf eine URL einer anderen Domain, die die Prüfung abgelehnt hat: Sie antwortete mit 401, 403 oder 429. Meist ist das ein Bot-Schutz, eine Paywall oder ein Rate Limit, und im Browser öffnet sich die Seite fast immer problemlos. Sie gilt nicht als defekt, weil sich das von hier aus nicht feststellen lässt: Öffnen Sie sie, um zu bestätigen, dass sie noch existiert.
+HTTP-LARGE-PAGE = Zu großes HTML
+    .description = Das HTML-Dokument ist größer als 500 KB, ohne Bilder und Skripte. Es verzögert den ersten Paint bei mobilen Verbindungen und bedeutet meist, dass das Template Inhalte ausgibt, die die Seite nie anzeigt, oder dass inline eingebundenes CSS und JS in eigene Dateien gehört.
+HTTP-MIXED-CONTENT = Mixed Content
+    .description = Eine per HTTPS ausgelieferte Seite lädt Bilder, Stylesheets oder Skripte über HTTP. Der Browser blockiert Skripte und Stylesheets stillschweigend und kennzeichnet die Verbindung als nicht sicher: Die Seite wirkt kaputt und verspielt Vertrauen.
+HTTP-NO-HTTPS = Website antwortet über HTTP
+    .description = Einige interne URLs liefern Inhalte über HTTP aus, ohne auf HTTPS weiterzuleiten. Die Website bleibt für dieselbe Seite unter zwei verschiedenen Adressen erreichbar – Duplicate Content –, und der Browser warnt den Besucher, dass die Verbindung nicht sicher ist.
+HTTP-REDIRECT-CHAIN = Weiterleitungskette
+    .description = Das endgültige Ziel wird erst nach zwei oder mehr aufeinanderfolgenden Weiterleitungen erreicht. Jede Weiterleitung kostet den Besucher Latenz und den Crawler Aufwand und bedeutet meist, dass sich zwei Rewrite-Regeln in die Quere kommen. Die Lösung: die erste Weiterleitung direkt auf das Endziel richten.
+HTTP-REDIRECT-LOOP = Weiterleitungsschleife
+    .description = Die Weiterleitungen führen zu einer bereits besuchten URL zurück, sodass das Ziel nie erreicht wird. Der Browser gibt mit einem Fehler auf, und der Crawler sieht keinen Inhalt: Praktisch existiert dieser Teil der Website nicht.
+HTTP-REDIRECT-TO-404 = Weiterleitung auf Fehlerseite
+    .description = Die Weiterleitung endet auf einer URL, die 4xx liefert. Das ist das Schlechteste aus beiden Welten: Die Weiterleitung, die einen Umzug des Inhalts nahelegte, besteht weiter, aber auch das Ziel existiert nicht, sodass der Link und seine Autorität trotzdem verloren gehen.
+HTTP-SLOW-RESPONSE = Langsame Antwort
+    .description = Der Server braucht mehr als eine Sekunde, um das erste Byte zu senden. Diese Zeit geht vollständig in die Ladezeit ein, die Core Web Vitals misst, und begrenzt, wie viele Seiten der Crawler bei jedem Besuch schafft.
+INDEX-BLOCKED-IN-SITEMAP = Blockiert, aber in der Sitemap
+    .description = Die Sitemap führt die URL als Inhalt, der indexiert werden soll, während robots.txt das Crawling verbietet. Die beiden Anweisungen widersprechen sich, die Search Console meldet einen Abdeckungsfehler, und die URL bleibt außerhalb des Index. Fast immer ist es ein Disallow, das für etwas anderes geschrieben wurde und nebenbei einen veröffentlichten Bereich erfasst hat.
+INDEX-DEEP-PAGE = Zu viele Klicks von der Startseite
+    .description = Von der Startseite aus braucht es mehr als vier Klicks bis zu dieser Seite. Je weiter entfernt, desto weniger interne Autorität erhält sie und desto seltener besucht die Suchmaschine sie erneut; in Katalogen und Archiven ist es das Symptom einer Paginierung ohne Abkürzungen, bei der Seite 40 nur über die 39 vorherigen erreichbar ist.
+INDEX-NO-INTERNAL-LINKS-IN = Keine eingehenden internen Links
+    .description = Keine andere Seite der Website verlinkt auf diese, obwohl sie indexierbar und veröffentlicht ist. Ohne eingehende Links erhält sie keine interne Autorität, die Suchmaschine besucht sie viel seltener erneut, und ihre Änderungen bleiben unbemerkt. Das ist das Erste, was man prüfen sollte, wenn eine neue Seite einfach nicht rankt.
+INDEX-NOFOLLOW-INTERNAL = Interner Nofollow-Link
+    .description = Diese Seite verlinkt mit rel=nofollow auf eine andere Seite derselben Website. Der Link gibt keine Autorität weiter und hilft nicht, das Ziel zu entdecken, innerhalb einer Domain ergibt das also selten Sinn: PageRank-Sculpting funktioniert seit 2009 nicht mehr. Meist stammt es von einem Plugin oder Template, das es jedem Link hinzufügt, ohne zwischen intern und extern zu unterscheiden.
+INDEX-NOINDEX = Noindex
+    .description = Die Seite bittet darum, nicht indexiert zu werden, entweder über ihr Meta-Robots-Tag oder den X-Robots-Tag-Header. Google crawlt sie und verwirft sie: Sie erscheint bei keiner Suchanfrage. Bei Archiven, Tags und Hilfsseiten ist es meist eine bewusste Entscheidung des SEO-Plugins, deshalb ist die Warnung moderat; auf der Startseite steigt sie auf kritisch, und der Konflikt mit der Sitemap hat eine eigene Regel.
+INDEX-NOINDEX-IN-SITEMAP = Noindex, aber in der Sitemap
+    .description = Die URL steht in der Sitemap, also in der Liste dessen, was die Website indexiert haben will, und ihr eigener Header oder ihr Meta-Robots-Tag sagt das Gegenteil. Eines von beiden ist falsch: Entweder gehört sie nicht in die Sitemap, oder das noindex ist ein Überbleibsel, das niemand entfernt hat. Solange beides besteht, widerspricht sich die Website gegenüber der Suchmaschine.
+INDEX-ORPHAN-PAGE = Verwaiste Seite
+    .description = Die Website führt diese URL in ihrer Sitemap, aber keine ihrer Seiten verlinkt darauf. Ein Besucher kann sie beim Navigieren nicht erreichen, und die Suchmaschine sieht Inhalt ohne Kontext und ohne interne Autorität. Dieser Befund entsteht aus dem Abgleich zwischen Angegebenem und tatsächlich Erreichtem; keine einzelne Seite kann ihn aufdecken.
+INDEX-ROBOTS-BLOCKED = Durch robots.txt blockiert
+    .description = Die Website verlinkt diese URL von ihren eigenen Seiten und sperrt sie zugleich in robots.txt. Google kann sie nicht lesen, weiß also nicht, was sie enthält, und folgt ihren Links nicht: Der interne Link führt ins Leere, und die weitergegebene Autorität geht verloren. Das ist nicht dasselbe wie noindex, bei dem die Seite weiterhin gelesen werden kann.
+INDEX-ROBOTS-TXT-BLOCKS-ALL = robots.txt blockiert die gesamte Website
+    .description = Die robots.txt verbietet das Crawling des Stammverzeichnisses, sodass keine Seite gelesen oder indexiert werden kann. Es ist der schnellste und leiseste Weg, aus Google zu verschwinden, und fast immer derselbe Unfall: Die robots.txt der Staging-Umgebung mit Disallow: / ist bei einem Deployment in die Produktion gelangt.
+INDEX-ROBOTS-TXT-MISSING = robots.txt fehlt
+    .description = Die Website liefert keine /robots.txt aus. Das verhindert die Indexierung nicht – ohne Datei ist alles crawlbar –, aber es fehlt der Ort, an dem die Sitemap angekündigt wird und an dem man Bereiche ausschließt, die einer Suchmaschine nichts bringen, etwa interne Suchergebnisse oder Warenkorbseiten.
+INDEX-SECTION-DISCONNECTED = Bereich von der internen Verlinkung abgekoppelt
+    .description = Eine Gruppe von Seiten verlinkt untereinander, ist aber von der Startseite aus über normale Links nicht erreichbar: Die Brücke zum Rest der Website ist JavaScript, ein Formular oder fehlt ganz. Suchmaschinen entdecken diese Seiten nur über die Sitemap, und es fließt wenig interne Autorität zu ihnen. Die Ursache ist eine einzige – es fehlt ein crawlbarer Link in den Bereich – und wird einmal behoben, nicht Seite für Seite.
+INDEX-SITEMAP-ERROR = Sitemap mit Fehlern
+    .description = Eine Sitemap antwortet nicht, enthält fehlerhaftes XML oder überschreitet die Grenzen des Protokolls (50.000 URLs oder 50 MB). Suchmaschinen hören beim Fehler auf zu lesen, sodass alles danach auf diesem Weg nie entdeckt wird, und nichts warnt Sie: Die Sitemap ist weiterhin da und scheinbar in Ordnung.
+INDEX-SITEMAP-MISSING = Keine Sitemap
+    .description = Es wurde keine Sitemap gefunden: robots.txt kündigt keine an, unter den üblichen Pfaden liegt keine, und keine gefundene enthält eine URL. Ohne Sitemap erreicht die Suchmaschine nur, was verlinkt ist, in dem Tempo, das die interne Verlinkung zulässt; und es fehlt der Abgleich zwischen dem, was die Website zu veröffentlichen angibt, und dem, was ein Crawl tatsächlich erreicht.
+LINK-ANCHOR-EMPTY = Interner Link ohne Text
+    .description = Einige interne Links haben keinen Text, kein Bild und kein aria-label: ein per CSS gezeichnetes Icon, ein ganzer Block als leerer Link. Die Suchmaschine bekommt keinen Hinweis, wohin er führt, und wer einen Screenreader nutzt, hört „Link“ und sonst nichts. Geben Sie ihm Text, auch wenn er visuell verborgen ist, oder ein aria-label, das sagt, wohin er führt.
+LINK-ANCHOR-GENERIC = Generischer Linktext
+    .description = Einige interne Links bestehen nur aus einer Floskel wie „weiterlesen“, „hier“ oder „hier klicken“. Dieser Text sagt nichts über die Zielseite aus – genau das, was die Suchmaschine darin liest –, und aus dem Kontext gerissen, so wie ein Screenreader sie auflistet, sagt jeder Link dasselbe. Es genügt, wenn der Text das Ziel benennt: „mehr über die Preise lesen“ statt „weiterlesen“.
+META-DESC-DUPLICATE = Doppelte Meta Description
+    .description = Zwei oder mehr indexierbare Seiten wiederholen dieselbe Description, sodass das Suchergebnis sie nicht unterscheidet und keine etwas Bestimmtes verspricht. Meist stammt sie aus einer websiteweiten Voreinstellung, die niemand überschrieben hat.
+META-DESC-MISSING = Meta Description fehlt
+    .description = Die indexierbare Seite gibt keine Description an, also schneidet Google für das Suchergebnis einen beliebigen Ausschnitt aus dem Text. Sie ist kein Rankingfaktor, aber sie ist der Text, der über den Klick entscheidet, und wer sie nicht schreibt, gibt die Kontrolle darüber ab.
+META-DESC-TOO-LONG = Meta Description zu lang
+    .description = Die Description passt nicht ins Suchergebnis und wird abgeschnitten, sodass die Handlungsaufforderung am Ende nie gelesen wird. Gemessen wird in Pixeln, nicht in Zeichen, weil die gerenderte Breite über den Schnitt entscheidet.
+META-DESC-TOO-SHORT = Meta Description zu kurz
+    .description = Die Description ist so knapp, dass Google sie meist ignoriert und das Snippet stattdessen aus dem Text erstellt. Bei so wenig genutztem Platz bleibt weder Raum für das Argument noch für die Variante der Suchanfrage, die den Klick rechtfertigen würde.
+META-OUTSIDE-HEAD = Metadaten außerhalb des Head
+    .description = Canonical, Meta Robots, hreflang, Title oder Description landen außerhalb des <head>. Ein Element, das nicht in den Head gehört – ein Tracking-<img>, ein <div>, verirrter Text eines Plugins –, schließt ihn an dieser Stelle, und Google ignoriert alles danach, obwohl es noch im Quelltext steht. Die Wirkung ist dieselbe, als gäbe es sie nicht.
+META-REFRESH = Meta-Refresh-Weiterleitung
+    .description = Die Seite leitet mit <meta http-equiv=refresh> statt mit einem 301 weiter. Google wertet das nur mit Vorbehalt, gibt Autorität weniger zuverlässig weiter, und der Nutzer sieht einen abrupten Sprung; mit einer Verzögerung größer als null blockiert es außerdem den Zurück-Button des Browsers.
+META-TITLE-DUPLICATE = Doppelter Title
+    .description = Zwei oder mehr indexierbare Seiten haben denselben <title>. Google muss wählen, welche für dieselbe Suchanfrage angezeigt wird, sodass sie miteinander konkurrieren, statt sich zu ergänzen. Es ist das häufigste Symptom einer falsch konfigurierten Paginierung oder falsch konfigurierter Archive.
+META-TITLE-MISSING = Title fehlt
+    .description = Die Seite ist indexierbar und hat keinen oder einen leeren <title>. Er ist der gewichtigste OnPage-Faktor, den Sie direkt steuern, und der blaue Text im Suchergebnis: Ohne ihn erfindet Google einen aus dem, was es findet.
+META-TITLE-MULTIPLE = Mehrere Title-Tags
+    .description = Die Seite enthält mehr als ein <title>. Browser und Google behalten den ersten und verwerfen den Rest stillschweigend, sodass der sorgfältig geschriebene Title womöglich nicht der veröffentlichte ist. Fast immer gibt ein Template ihn doppelt aus, oder ein SEO-Plugin fügt einen eigenen hinzu, ohne den des Themes zu entfernen.
+META-TITLE-TOO-LONG = Title zu lang
+    .description = Der Title passt nicht ins Suchergebnis, und Google kürzt ihn mit Auslassungspunkten, sodass das Ende – oft die Marke oder das zuletzt platzierte Keyword – nie gelesen wird. Gemessen wird in Pixeln, nicht in Zeichen: Die gerenderte Breite entscheidet über den Schnitt.
+META-TITLE-TOO-SHORT = Title zu kurz
+    .description = Der Title lässt den größten Teil des Platzes ungenutzt, den das Suchergebnis bietet. Das ist kein Fehler, aber verschenkter Raum: Es wäre Platz für eine Variante der Suchanfrage oder einen Grund zum Klicken, und oft deutet es auf ein Template hin, das nur den Namen des Bereichs ausgibt.
+META-VIEWPORT-MISSING = Meta Viewport fehlt
+    .description = Ohne <meta name=viewport> stellt ein Smartphone die Seite 980 px breit dar und verkleinert sie, sodass der Text unlesbar wird und gezoomt werden muss. Indexiert wird nach dem Mobile-First-Prinzip: Google bewertet genau diese verkleinerte Version.
+SOCIAL-OG-IMAGE-BROKEN = Defektes Open-Graph-Bild
+    .description = Das in og:image angegebene Bild liefert einen Fehler, direkt oder am Ende seiner Weiterleitungen. Der Tag ist vorhanden, und kein Tool, das nur das HTML liest, bemerkt es, aber wenn die Seite auf WhatsApp, LinkedIn oder Slack geteilt wird, zeigt die Vorschaukarte kein Bild oder einen leeren Rahmen. Meist ist es ein aus der Mediathek gelöschtes Bild oder ein Pfad, der eine Migration nicht überstanden hat.
+SOCIAL-OG-MISSING = Unvollständiges Open Graph
+    .description = og:title, og:description oder og:image fehlt. Wenn jemand die Seite auf WhatsApp, LinkedIn oder Slack teilt, kann das Netzwerk keine Vorschaukarte erstellen, und der Link erscheint als nackte URL: Das wirkt sich nicht auf das Ranking aus, aber der Klick geht verloren.
