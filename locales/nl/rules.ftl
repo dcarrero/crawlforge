@@ -1,3 +1,147 @@
-### CrawlForge — rule catalogue. Not translated yet: until this file has messages, this language
-### falls back to English. To translate it, copy locales/en/rules.ftl here and follow
-### CONTRIBUTING.md, "Adding or improving a language".
+### CrawlForge — regelcatalogus: namen en beschrijvingen (Nederlands).
+###
+### Vertaling van locales/en/rules.ftl. Engels is de bron en is leidend.
+### CONTRIBUTING.md, "Adding or improving a language", legt de regels uit.
+
+ASSET-BROKEN = Kapotte CSS of JS
+    .description = Een CSS- of JS-bestand van de site geeft 4xx of 5xx. Google rendert de pagina om haar te indexeren, dus door een ontbrekende stylesheet kan Google een pagina zonder opmaak zien — en dus niet mobielvriendelijk — en door een ontbrekend script kan client-side gerenderde content leeg blijven. Typisch voor een deploy met niet-overeenkomende bestandshashes.
+ASSET-CSS-HEAVY = Te grote stylesheet
+    .description = De stylesheet is zoals geleverd groter dan 100 KB. De browser tekent niets tot hij hem heeft, dus deze bytes kosten meer dan die van een script: ze vertragen de hele eerste weergave. Daarom ligt de grens lager. Bijna altijd is het een volledig framework waarvan maar een tiende wordt gebruikt.
+ASSET-FORM-BROKEN = Formulier verstuurt naar kapotte URL
+    .description = De `action` van een formulier wijst naar een eigen URL die 4xx of 5xx geeft. Het formulier ziet er goed uit, laat zich prima invullen en gaat verloren bij het versturen: een van de weinige fouten die je direct klanten kost, en niemand komt erachter, want wie erop stuit, vertrekt zonder iets te zeggen. Alleen formulieren die met GET worden verstuurd, worden gecontroleerd (een zoekvak, een catalogusfilter): een POST controleren zou betekenen dat je hem verstuurt, en deze tool verstuurt geen formulieren.
+ASSET-IFRAME-BROKEN = Kapot ingesloten frame
+    .description = Een `<iframe>` op de pagina wijst naar een eigen URL die 4xx of 5xx geeft, dus de bezoeker ziet een leeg gat waar de kaart, de video of het formulier zou moeten staan. Het laat geen spoor na in de omringende pagina — de HTML blijft geldig — en daarom valt het maandenlang niet op.
+ASSET-IMG-BROKEN = Kapotte afbeelding
+    .description = Een afbeelding waarnaar de site verwijst, geeft 4xx of 5xx. Het gat is zichtbaar op de pagina, voor zoeken naar afbeeldingen bestaat de afbeelding niet, en elk bezoek verspilt een verzoek aan een fout. Bijna altijd is het een migratie die de uploadmap heeft achtergelaten, of een met de hand geschreven pad.
+ASSET-IMG-EMPTY-ALT-LINK = Link met alleen een afbeelding met lege alt
+    .description = Een link waarvan de enige inhoud een afbeelding met `alt=""` is, heeft geen toegankelijke naam: wie een schermlezer gebruikt, hoort ‘link’ en verder niets, en de zoekmachine krijgt geen signaal over waar hij heen leidt. Het typische geval is het logo in de header, meestal de vaakst herhaalde link van de site. Hier is de `alt` niet decoratief: het is de linktekst.
+ASSET-IMG-HEAVY = Te grote afbeelding
+    .description = De afbeelding is groter dan 200 KB. Het is de meest voorkomende oorzaak van een slechte mobiele LCP: ze vertraagt het tekenen van het hoofdelement en slurpt de bandbreedte van een trage verbinding op. Meestal is het genoeg om haar te exporteren op het formaat waarop ze echt wordt getoond en WebP of AVIF te serveren.
+ASSET-IMG-NO-ALT = Afbeelding zonder alt-attribuut
+    .description = Sommige afbeeldingen hebben geen `alt`-attribuut. Een schermlezer heeft niets voor te lezen en spelt uiteindelijk de bestandsnaam, en Google verliest de enige tekst die de afbeelding beschrijft: die bepaalt de ranking in Google Afbeeldingen en verschijnt als de afbeelding niet laadt. Een lege `alt=""` is geldig, maar alleen voor decoratieve afbeeldingen.
+ASSET-JS-HEAVY = Te groot script
+    .description = Het script is zoals geleverd groter dan 250 KB. Elke pagina die het laadt, betaalt voor de download en vooral voor het parsen en uitvoeren op de main thread, en daar komt de trage reactie op een gewone telefoon vandaan. Meestal is het een bundle die niemand heeft opgesplitst: zoek uit wat nodig is voor het eerste scherm en laad de rest apart.
+CANON-CHAIN = Canonical-keten
+    .description = A geeft B op als canonical, en B geeft C op. Canonicals zijn voor Google niet transitief: als het een keten vindt, negeert het die en beslist het zelf welke URL de hoofd-URL is. Elke stap moet rechtstreeks naar C wijzen.
+CANON-CROSS-DOMAIN = Cross-domain canonical
+    .description = De canonical wijst naar een andere host dan die van de pagina zelf. Bij gesyndiceerde content is dat legitiem, maar als het niet bewust is, geeft het de ranking weg aan het andere domein: de pagina zelf wordt niet meer geïndexeerd. Meestal komt het van een half afgeronde migratie of een gekopieerde stagingomgeving.
+CANON-MISSING = Ontbrekende canonical
+    .description = De indexeerbare pagina geeft geen rel=canonical op. Op zich niet ernstig, want Google leidt de canonical af, maar zonder canonical kan elke URL-parameter — een campagne, een filter, een sortering — als aparte pagina in de index belanden.
+CANON-MULTIPLE = Meerdere canonicals
+    .description = De pagina geeft meer dan één link rel=canonical op. Google kiest er geen: het negeert ze allemaal, dus het effect is hetzelfde als geen canonical hebben. Bijna altijd voeren het thema en een SEO-plug-in elk zelf de tag uit.
+CANON-RELATIVE = Relatieve canonical
+    .description = De canonical is opgegeven als relatieve verwijzing in plaats van als absolute URL. Dat werkt zolang de pagina vanaf één plek wordt geserveerd, maar als de HTML onder een andere host wordt weergegeven — een stagingomgeving, een proxy, een scraper —, wordt de canonical tegen die host opgelost en wijst hij niet meer naar het origineel.
+CANON-TO-4XX = Canonical naar fout-URL
+    .description = De canonical wijst naar een URL die met een fout antwoordt. De pagina verklaart zichzelf een duplicaat van iets wat niet bestaat, dus noch zij noch het doel kan worden geïndexeerd: de content verdwijnt volledig uit de zoekresultaten.
+CANON-TO-NOINDEX = Canonical naar noindex-pagina
+    .description = De canonical wijst naar een pagina met noindex. De twee signalen spreken elkaar tegen: het ene zegt ‘indexeer die’ en die zegt ‘indexeer mij niet’. Meestal gaan beide URL's verloren.
+CANON-TO-REDIRECT = Canonical naar redirect
+    .description = De canonical wijst naar een URL die ergens anders heen doorverwijst. Google moet kiezen tussen het canonical-signaal en dat van de redirect, en houdt meestal de eindbestemming aan, waardoor de tag zinloos wordt. Laat hem rechtstreeks wijzen naar de URL die 200 geeft.
+CONTENT-H1-EMPTY = Lege H1
+    .description = Er staat een H1 in de markup, maar die levert geen tekst: hij is leeg, of zijn enige inhoud is een afbeelding die niets zegt. De kop neemt de plaats van de hoofdtitel in zonder zijn werk te doen, dus noch de zoekmachine noch een schermlezer krijgt het onderwerp van de pagina mee. Het gebruikelijke geval is een logo in de H1.
+CONTENT-H1-MISSING = Ontbrekende H1
+    .description = De indexeerbare pagina heeft geen H1, of een lege. De H1 vertelt de zoekmachine in de eigen woorden van de auteur waar de pagina over gaat, en het is de eerste kop die een schermlezer aankondigt bij het betreden van de content.
+CONTENT-H1-MULTIPLE = Meerdere H1's
+    .description = De pagina heeft meer dan één H1. HTML5 staat het toe, maar er is geen enkel hoofdonderwerp meer: de zoekmachine moet raden waar de pagina over gaat, en een schermlezer kondigt meerdere koppen van niveau één aan alsof het losse documenten zijn. Meestal markeert de template naast de echte hoofdtitel ook het logo of de sitenaam als H1.
+CONTENT-HEADING-SKIP = Kopniveau overgeslagen
+    .description = De kopniveaus zakken meer dan één stap tegelijk, bijvoorbeeld van H2 naar H4. De documentstructuur krijgt gaten: wie via koppen navigeert, kan niet zien of de H4 bij die H2 hoort of bij een andere sectie, en de zoekmachine verliest de hiërarchie waarmee ze begrijpt wat waarbij hoort. Meestal komt het doordat een kop is gekozen op lettergrootte in plaats van op niveau.
+CONTENT-LANG-MISSING = Ontbrekend lang-attribuut
+    .description = Het <html>-element geeft de taal van de content niet op. Zonder taal spreekt een schermlezer de tekst uit volgens de regels van de systeemtaal, weet de browser niet welk woordenboek hij bij het vertalen moet gebruiken, en worden de taalsignalen van de site overgelaten aan automatische detectie. Het is een attribuut van één regel.
+CONTENT-THIN = Dunne content
+    .description = Een indexeerbare pagina met minder dan 300 woorden zichtbare tekst. Ze heeft zelden genoeg inhoud om een zoekopdracht te beantwoorden, concurreert dus slecht en verwatert in grote aantallen de gemiddelde kwaliteit van de site in de ogen van de zoekmachine. Veel ervan zijn archieven, tagpagina's of automatisch gegenereerde lege pagina's die je beter niet laat indexeren dan uitbreidt.
+DUP-CONTENT-EXACT = Identieke content
+    .description = Twee of meer indexeerbare URL's geven byte voor byte exact dezelfde HTML terug. Ze concurreren met elkaar om dezelfde zoekopdrachten en verdelen inkomende links in plaats van ze op te tellen. Los het op door er één indexeerbaar te houden en de rest daarnaar te canonicaliseren.
+DUP-CONTENT-NEAR = Bijna-dubbele content
+    .description = Twee of meer indexeerbare URL's hebben bijna dezelfde zichtbare tekst, ook al is hun HTML niet identiek: alleen een datum, een widget of een paar zinnen verschillen. Meestal zijn het tag- en categoriepagina's die dezelfde berichten tonen, of een bericht dat uit een ander is herschreven. Google kiest er één om te tonen en zet de andere opzij. Voeg ze samen, maak ze duidelijk verschillend of canonicaliseer ze naar de hoofdpagina.
+HREFLANG-INVALID-CODE = Ongeldige hreflang-code
+    .description = De attribuutwaarde is geen taal volgens ISO 639-1 met een optionele regio volgens ISO 3166-1, en ook niet de speciale x-default. Google negeert een misvormde annotatie stilzwijgend, dus de set blijft zonder waarschuwing onvolledig: het is de meest voorkomende fout en de moeilijkste om met het blote oog te zien.
+HREFLANG-LANG-MISMATCH = Eigen hreflang in andere taal dan de pagina
+    .description = De hreflang-annotatie die naar de pagina zelf wijst, geeft een andere taal op dan haar `<html lang>`: bijvoorbeeld een Spaanse pagina die zich als Engels aankondigt. Een van de twee is fout, en als het de hreflang is, toont Google de pagina aan mensen die in de andere taal zoeken. Meestal is het een vertaalplug-in die de set van de oorspronkelijke pagina kopieert zonder de code aan te passen.
+HREFLANG-NO-SELF = Hreflang zonder zelfverwijzing
+    .description = De pagina geeft taalalternatieven op, maar geen enkele wijst naar zichzelf. Google eist dat elke pagina in de set zichzelf opneemt; ontbreekt die link, dan negeert het de hele groep en heeft geen enkele vertaling iets aan de andere.
+HREFLANG-NOT-RECIPROCAL = Hreflang niet wederzijds
+    .description = Deze pagina geeft een taalalternatief op dat niet terugverwijst. Hreflang-annotaties zijn stemmen die alleen tellen als ze wederzijds zijn: Google negeert de hele relatie als een van de twee kanten de andere niet bevestigt.
+HREFLANG-SELF-ONLY = Hreflang zonder alternatieven
+    .description = De pagina geeft hreflang op, maar elke annotatie wijst naar de pagina zelf: er zit geen vertaling in de set, dus het doet niets. Heeft de pagina geen vertaling, dan is de annotatie overbodig; heeft ze er wel een, dan ontbreken de links ernaar, en dat is wat echt gecontroleerd moet worden: meestal is het een vertaling waar de plug-in niet meer naar linkt.
+HREFLANG-TO-4XX = Hreflang naar fout-URL
+    .description = Een taalalternatief wijst naar een URL die 4xx geeft. De vertaling die de pagina belooft, bestaat niet: een bezoeker die van taal wisselt, komt op een foutpagina terecht en Google haalt de verwijzende pagina uit de set.
+HTTP-404-EXTERNAL = Kapotte externe link
+    .description = De site linkt naar een URL op een ander domein die verdwenen is: die geeft 404 of 410, of het domein wordt niet omgezet. Het doet minder pijn dan een eigen 404, maar het stuurt de bezoeker naar een foutpagina en laat de content verouderen: een gids vol dode links lijkt niet meer onderhouden.
+HTTP-404-INTERNAL = Kapotte interne link
+    .description = Een URL van deze site geeft 4xx en er zijn pagina's die ernaar linken. Dat verspilt crawlbudget, onderbreekt de stroom van interne links naar wat er vroeger stond, en laat de bezoeker achter op een foutpagina.
+HTTP-5XX = Serverfout
+    .description = De URL geeft 5xx: de server kon het antwoord niet opbouwen. Google haalt pagina's die lang zo antwoorden uit de index, en crawlt de hele site trager zolang het duurt.
+HTTP-EXTERNAL-UNVERIFIABLE = Niet te controleren externe link
+    .description = De site linkt naar een URL op een ander domein die de controle weigerde: die antwoordde met 401, 403 of 429. Meestal is dat een botblokkade, een paywall of een rate limit, en in een browser opent de pagina bijna altijd gewoon. Ze wordt niet kapot genoemd omdat dat van hieruit niet te zeggen is: open haar om te bevestigen dat ze er nog is.
+HTTP-LARGE-PAGE = Te grote HTML
+    .description = Het HTML-document is groter dan 500 KB, afbeeldingen en scripts niet meegerekend. Het vertraagt de eerste weergave op mobiele verbindingen en betekent meestal dat de template content uitvoert die de pagina nooit toont, of dat inline CSS en JS in eigen bestanden horen.
+HTTP-MIXED-CONTENT = Gemengde content
+    .description = Een pagina die via HTTPS wordt geserveerd, laadt afbeeldingen, stylesheets of scripts via HTTP. De browser blokkeert scripts en stylesheets stilzwijgend en markeert de verbinding als niet veilig: de pagina ziet er kapot uit en wekt geen vertrouwen meer.
+HTTP-NO-HTTPS = Site antwoordt via HTTP
+    .description = Sommige interne URL's serveren content via HTTP zonder door te verwijzen naar HTTPS. De site blijft voor dezelfde pagina bereikbaar op twee verschillende adressen — dubbele content — en de browser waarschuwt de bezoeker dat de verbinding niet veilig is.
+HTTP-REDIRECT-CHAIN = Redirectketen
+    .description = De eindbestemming wordt pas na twee of meer opeenvolgende redirects bereikt. Elke redirect kost de bezoeker vertraging en de crawler moeite, en betekent meestal dat twee rewrite-regels elkaar in de weg zitten. De oplossing: laat de eerste redirect rechtstreeks naar de eindbestemming wijzen.
+HTTP-REDIRECT-LOOP = Redirectlus
+    .description = De redirects keren terug naar een al bezochte URL, dus de bestemming wordt nooit bereikt. De browser geeft het op met een fout en de crawler ziet geen content: in de praktijk bestaat dat deel van de site niet.
+HTTP-REDIRECT-TO-404 = Redirect naar foutpagina
+    .description = De redirect eindigt op een URL die 4xx geeft. Het is het slechtste van twee werelden: de redirect die suggereerde dat de content verhuisd was, staat er nog, maar ook de bestemming bestaat niet, dus de link en zijn autoriteit gaan toch verloren.
+HTTP-SLOW-RESPONSE = Trage respons
+    .description = De server doet er meer dan een seconde over om de eerste byte te sturen. Die tijd telt volledig mee in de laadtijd die Core Web Vitals meet, en beperkt hoeveel pagina's de crawler per bezoek haalt.
+INDEX-BLOCKED-IN-SITEMAP = Geblokkeerd maar in sitemap
+    .description = De sitemap presenteert de URL als content die je geïndexeerd wilt hebben, terwijl robots.txt het crawlen ervan verbiedt. De twee instructies spreken elkaar tegen, Search Console meldt het als dekkingsfout en de URL blijft buiten de index. Bijna altijd is het een Disallow die voor iets anders is geschreven en onderweg een gepubliceerde sectie heeft meegenomen.
+INDEX-DEEP-PAGE = Te veel klikken vanaf de homepage
+    .description = Er zijn meer dan vier klikken vanaf de homepage nodig om deze pagina te bereiken. Hoe verder weg, hoe minder interne autoriteit ze krijgt en hoe minder vaak de zoekmachine haar opnieuw bezoekt; in catalogi en archieven is het het symptoom van paginering zonder snelkoppelingen, waarbij pagina 40 alleen via de 39 vorige bereikbaar is.
+INDEX-NO-INTERNAL-LINKS-IN = Geen inkomende interne links
+    .description = Geen enkele andere pagina van de site linkt naar deze, ook al is ze indexeerbaar en gepubliceerd. Zonder inkomende links krijgt ze geen interne autoriteit, bezoekt de zoekmachine haar veel minder vaak opnieuw en blijven haar wijzigingen onopgemerkt. Het is het eerste wat je controleert als een nieuwe pagina maar niet wil ranken.
+INDEX-NOFOLLOW-INTERNAL = Interne nofollow-link
+    .description = Deze pagina linkt met rel=nofollow naar een andere pagina van dezelfde site. De link geeft geen autoriteit door en helpt niet om het doel te ontdekken, dus binnen één domein heeft het zelden zin: PageRank-sculpting werkt sinds 2009 niet meer. Meestal komt het van een plug-in of template die het aan elke link toevoegt zonder onderscheid tussen intern en extern.
+INDEX-NOINDEX = Noindex
+    .description = De pagina vraagt om niet geïndexeerd te worden, via haar meta robots-tag of de X-Robots-Tag-header. Google crawlt haar en laat haar vallen: ze verschijnt bij geen enkele zoekopdracht. Bij archieven, tags en hulppagina's is het meestal een bewuste keuze van de SEO-plug-in, daarom is de waarschuwing gematigd; op de homepage wordt ze kritiek, en het conflict met de sitemap heeft een eigen regel.
+INDEX-NOINDEX-IN-SITEMAP = Noindex maar in sitemap
+    .description = De URL staat in de sitemap, de lijst van wat de site geïndexeerd wil hebben, en haar eigen header of meta robots zegt het tegenovergestelde. Een van de twee is fout: ofwel hoort ze niet in de sitemap, ofwel is de noindex een overblijfsel dat niemand heeft weggehaald. Zolang beide naast elkaar bestaan, spreekt de site zichzelf tegen tegenover de zoekmachine.
+INDEX-ORPHAN-PAGE = Weespagina
+    .description = De site geeft deze URL op in haar sitemap, maar geen enkele van haar pagina's linkt ernaar. Een bezoeker kan haar niet bereiken door te navigeren en de zoekmachine ziet content zonder context en zonder interne autoriteit. Deze bevinding volgt uit het vergelijken van wat opgegeven is met wat bereikt wordt; geen enkele losse pagina kan haar onthullen.
+INDEX-ROBOTS-BLOCKED = Geblokkeerd door robots.txt
+    .description = De site linkt vanaf haar eigen pagina's naar deze URL en verbiedt haar tegelijk in robots.txt. Google kan haar niet lezen, weet dus niet wat erin staat en volgt haar links niet: de interne link leidt nergens heen en de autoriteit die hij doorgeeft, gaat verloren. Dit is niet hetzelfde als noindex, waarbij de pagina nog wel gelezen kan worden.
+INDEX-ROBOTS-TXT-BLOCKS-ALL = robots.txt blokkeert de hele site
+    .description = De robots.txt verbiedt het crawlen van de root van de site, dus geen enkele pagina kan worden gelezen of geïndexeerd. Het is de snelste en stilste manier om uit Google te verdwijnen, en bijna altijd hetzelfde ongeluk: de robots.txt van de stagingomgeving, met Disallow: /, is bij een deploy in productie beland.
+INDEX-ROBOTS-TXT-MISSING = Ontbrekende robots.txt
+    .description = De site serveert geen /robots.txt. Dat verhindert indexering niet — zonder bestand is alles crawlbaar —, maar je mist de plek waar de sitemap wordt aangekondigd en waar je delen uitsluit die niets toevoegen voor een zoekmachine, zoals interne zoekresultaten of winkelwagenpagina's.
+INDEX-SECTION-DISCONNECTED = Sectie losgekoppeld van de interne linkstructuur
+    .description = Een groep pagina's linkt naar elkaar, maar is vanaf de homepage niet te bereiken via gewone links: de brug naar de rest van de site is JavaScript, een formulier, of ontbreekt helemaal. Zoekmachines ontdekken ze alleen via de sitemap en er stroomt weinig interne autoriteit naartoe. Er is één oorzaak — er ontbreekt een crawlbare link naar de sectie — en die los je één keer op, niet pagina voor pagina.
+INDEX-SITEMAP-ERROR = Sitemap met fouten
+    .description = Een sitemap reageert niet, bevat misvormde XML of overschrijdt de limieten van het protocol (50.000 URL's of 50 MB). Zoekmachines stoppen met lezen bij de fout, dus alles daarna wordt via die weg nooit ontdekt, en niets waarschuwt je: de sitemap staat er nog, schijnbaar in orde.
+INDEX-SITEMAP-MISSING = Geen sitemap
+    .description = Er is geen sitemap gevonden: robots.txt kondigt er geen aan, op de gebruikelijke paden staat er geen, en geen enkele gevonden sitemap bevat een URL. Zonder sitemap bereikt de zoekmachine alleen wat gelinkt is, in het tempo dat de interne linkstructuur toelaat; en je verliest de vergelijking tussen wat de site zegt te publiceren en wat een crawl echt bereikt.
+LINK-ANCHOR-EMPTY = Interne link zonder tekst
+    .description = Sommige interne links hebben geen tekst, geen afbeelding en geen aria-label: een met CSS getekend icoon, een heel blok dat een lege link is geworden. De zoekmachine krijgt geen hint over waar hij heen leidt, en wie een schermlezer gebruikt, hoort ‘link’ en verder niets. Geef hem tekst, al is die visueel verborgen, of een aria-label dat zegt waar hij heen gaat.
+LINK-ANCHOR-GENERIC = Generieke linktekst
+    .description = Sommige interne links bestaan alleen uit een standaardfrase zoals ‘lees meer’, ‘hier’ of ‘klik hier’. Die tekst zegt niets over de doelpagina — precies wat de zoekmachine erin leest — en buiten de context, zoals een schermlezer ze opsomt, zegt elke link hetzelfde. Het is genoeg als de tekst het doel noemt: ‘lees meer over de prijzen’ in plaats van ‘lees meer’.
+META-DESC-DUPLICATE = Dubbele meta description
+    .description = Twee of meer indexeerbare pagina's herhalen dezelfde description, dus het zoekresultaat onderscheidt ze niet en geen ervan belooft iets specifieks. Meestal komt het van een sitebrede standaardwaarde die niemand heeft overschreven.
+META-DESC-MISSING = Ontbrekende meta description
+    .description = De indexeerbare pagina geeft geen description op, dus Google knipt een willekeurig fragment uit de tekst voor het zoekresultaat. Het is geen rankingfactor, maar het is de tekst die over de klik beslist, en wie hem niet schrijft, heeft hem niet in de hand.
+META-DESC-TOO-LONG = Meta description te lang
+    .description = De description past niet in het zoekresultaat en wordt afgekapt, dus de call-to-action aan het eind wordt nooit gelezen. Er wordt gemeten in pixels, niet in tekens, omdat de weergegeven breedte bepaalt waar wordt afgekapt.
+META-DESC-TOO-SHORT = Meta description te kort
+    .description = De description is zo beknopt dat Google hem vaak negeert en de snippet in plaats daarvan uit de tekst opbouwt. Met zo weinig benutte ruimte is er plaats voor het argument noch voor de variant van de zoekopdracht die de klik zou rechtvaardigen.
+META-OUTSIDE-HEAD = Metadata buiten de head
+    .description = De canonical, meta robots, hreflang, title of description belanden buiten de <head>. Een element dat niet in de head thuishoort — een tracking-<img>, een <div>, losse tekst van een plug-in — sluit hem op dat punt af, en Google negeert alles daarna, ook al staat het nog in de broncode. Het effect is hetzelfde als ze niet hebben.
+META-REFRESH = Meta refresh-redirect
+    .description = De pagina verwijst door met <meta http-equiv=refresh> in plaats van met een 301. Google leest het met voorbehoud, geeft autoriteit minder betrouwbaar door, en de gebruiker ziet een abrupte sprong; met een vertraging groter dan nul zet het bovendien de terugknop van de browser klem.
+META-TITLE-DUPLICATE = Dubbele title
+    .description = Twee of meer indexeerbare pagina's delen dezelfde <title>. Google moet kiezen welke het voor dezelfde zoekopdracht toont, dus ze concurreren met elkaar in plaats van elkaar te versterken. Het is het meest voorkomende symptoom van verkeerd ingestelde paginering of archieven.
+META-TITLE-MISSING = Ontbrekende title
+    .description = De pagina is indexeerbaar en heeft geen <title>, of een lege. Het is de zwaarstwegende on-page factor die je direct in de hand hebt, en het is de blauwe tekst in het zoekresultaat: zonder title verzint Google er een uit wat het maar vindt.
+META-TITLE-MULTIPLE = Meerdere title-tags
+    .description = De pagina bevat meer dan één <title>. Browsers en Google houden de eerste en negeren de rest stilzwijgend, dus de zorgvuldig geschreven title is misschien niet degene die wordt gepubliceerd. Bijna altijd is het een template die hem twee keer uitvoert, of een SEO-plug-in die er een eigen toevoegt zonder die van het thema te verwijderen.
+META-TITLE-TOO-LONG = Title te lang
+    .description = De title past niet in het zoekresultaat en Google kapt hem af met een beletselteken, dus het einde — vaak het merk, of het zoekwoord dat tot het laatst is bewaard — wordt nooit gelezen. Er wordt gemeten in pixels, niet in tekens: de weergegeven breedte bepaalt waar wordt afgekapt.
+META-TITLE-TOO-SHORT = Title te kort
+    .description = De title laat het grootste deel van de ruimte die het zoekresultaat biedt onbenut. Het is geen fout maar verspilde ruimte: er is plaats voor een variant van de zoekopdracht of een reden om te klikken, en vaak wijst het op een template die alleen de naam van de sectie uitvoert.
+META-VIEWPORT-MISSING = Ontbrekende meta viewport
+    .description = Zonder <meta name=viewport> toont een telefoon de pagina op 980 px breed en verkleint hem, waardoor de tekst onleesbaar wordt en je moet inzoomen met twee vingers. Indexering is mobile-first: wat Google beoordeelt, is die verkleinde versie.
+SOCIAL-OG-IMAGE-BROKEN = Kapotte Open Graph-afbeelding
+    .description = De afbeelding die in og:image is opgegeven, geeft een fout, direct of aan het eind van haar redirects. De tag is er, en geen tool die alleen de HTML leest, merkt het op, maar als de pagina gedeeld wordt op WhatsApp, LinkedIn of Slack, toont de previewkaart geen afbeelding, of een leeg kader. Meestal is het een afbeelding die uit de mediabibliotheek is verwijderd of een pad dat een migratie niet heeft overleefd.
+SOCIAL-OG-MISSING = Onvolledige Open Graph
+    .description = og:title, og:description of og:image ontbreekt. Als iemand de pagina deelt op WhatsApp, LinkedIn of Slack, kan het netwerk de previewkaart niet opbouwen en verschijnt de link als kale URL: het heeft geen invloed op de ranking, maar de klik gaat verloren.
