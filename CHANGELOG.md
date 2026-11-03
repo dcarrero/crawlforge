@@ -19,7 +19,7 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
-## [Unreleased]
+## [0.20.0] — 2026-11-03
 
 Five new rules, all `free`, per-site rule configuration, and the whole output in ten languages.
 Minor bump when released: the catalog reports things it did not, and there are new flags. No

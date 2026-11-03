@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "crawlforge-adapters"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "crawlforge-core",
  "reqwest",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "crawlforge-cli"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -351,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "crawlforge-core"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "crawlforge-rules",
  "flate2",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "crawlforge-ffi"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "crawlforge-core",
  "serde",
@@ -386,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "crawlforge-rules"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "fluent-bundle",
  "fluent-syntax",
