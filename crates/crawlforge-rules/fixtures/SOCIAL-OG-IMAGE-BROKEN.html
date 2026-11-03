@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<!-- SOCIAL-OG-IMAGE-BROKEN: the card image declared in og:image does not exist in the published
+     tree, so the crawl requests it and gets a 404. The tag is fine as markup; only requesting the
+     file shows the card has no image.
+     The URL is written with `http://` on purpose: the og:image is not something the page loads,
+     and a crawl of this fixture must not call it mixed content (`fixtures_de_reglas.rs` checks
+     both things). The second og:image is never requested: only the first one is, the one the
+     networks use. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Una página cuya tarjeta social apunta a una imagen borrada</title>
+<meta name="description" content="Una descripción correcta, de longitud suficiente para no llamar la atención de otras reglas del catálogo.">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:title" content="Una página cuya tarjeta social apunta a una imagen borrada">
+<meta property="og:description" content="La imagen de la tarjeta se borró de la biblioteca de medios.">
+<meta property="og:image" content="http://fixture.local/img/tarjeta-borrada.png">
+<meta property="og:image" content="/img/segunda-tarjeta.png">
+</head>
+<body>
+<main>
+<h1>Un encabezado correcto</h1>
+<p>Compartida en WhatsApp, LinkedIn o Slack, esta página sale con una tarjeta sin imagen, y nada
+en el HTML lo delata.</p>
+</main>
+</body>
+</html>

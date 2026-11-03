@@ -1,5 +1,5 @@
 {
-  "count": 66,
+  "count": 71,
   "rules": [
     {
       "category": "asset",
@@ -786,6 +786,22 @@
       "severity": "medium"
     },
     {
+      "category": "hreflang",
+      "description": {
+        "en": "The hreflang annotation pointing at the page itself declares a different language from its `<html lang>`: a page in Spanish announcing itself as English, for example. One of the two is wrong, and if it is the hreflang, Google serves the page to people searching in the other language. It is usually a translation plugin that copies the original page's set without changing the code.",
+        "es": "La anotación hreflang que apunta a la propia página declara un idioma distinto del que dice su `<html lang>`: una página en español que se anuncia como inglesa, por ejemplo. Una de las dos está mal, y si es el hreflang, Google ofrece la página a quien busca en el otro idioma. Suele ser un plugin de traducción que copia el conjunto de la página original sin cambiar el código."
+      },
+      "id": "HREFLANG-LANG-MISMATCH",
+      "min_tier": "free",
+      "name": {
+        "en": "Self hreflang in another language than the page",
+        "es": "Hreflang propio en otro idioma que la página"
+      },
+      "references": [],
+      "scope": "page",
+      "severity": "medium"
+    },
+    {
       "category": "http",
       "description": {
         "en": "The site links to a URL on another domain that is gone: it answers 404 or 410, or its domain does not resolve. It does not hurt like a 404 of your own, but it sends the visitor to an error page and ages the content: a guide full of dead links stops looking maintained.",
@@ -898,6 +914,22 @@
       "severity": "medium"
     },
     {
+      "category": "links",
+      "description": {
+        "en": "Some internal links have no text, no image and no aria-label: an icon drawn with CSS, a whole block turned into an empty link. The search engine gets no hint of where it leads, and someone using a screen reader hears «link» and nothing else. Give it text, even if visually hidden, or an aria-label saying where it goes.",
+        "es": "Hay enlaces internos sin texto, sin imagen y sin aria-label: un icono pintado con CSS, un bloque entero convertido en enlace vacío. El buscador no recibe ninguna pista de a qué lleva y quien usa lector de pantalla oye «enlace» y nada más. Dale un texto, aunque sea oculto a la vista, o un aria-label que diga a dónde va."
+      },
+      "id": "LINK-ANCHOR-EMPTY",
+      "min_tier": "free",
+      "name": {
+        "en": "Internal link without text",
+        "es": "Enlace interno sin texto"
+      },
+      "references": [],
+      "scope": "page",
+      "severity": "medium"
+    },
+    {
       "category": "meta",
       "description": {
         "en": "Two or more indexable pages repeat the same description, so the search result does not tell them apart and none of them promises anything specific. It usually comes from a site-wide default nobody overrode.",
@@ -946,6 +978,22 @@
       "severity": "medium"
     },
     {
+      "category": "social",
+      "description": {
+        "en": "The image declared in og:image returns an error, directly or at the end of its redirects. The tag is there and no tool that only reads the HTML notices, but when the page is shared on WhatsApp, LinkedIn or Slack the card shows no image, or an empty frame. It is usually an image deleted from the media library or a path that did not survive a migration.",
+        "es": "La imagen declarada en og:image devuelve un error, directamente o al final de sus redirecciones. La etiqueta está y ninguna herramienta que solo lea el HTML lo nota, pero al compartir la página en WhatsApp, LinkedIn o Slack la tarjeta sale sin imagen, o con un hueco. Suele ser una imagen borrada de la biblioteca de medios o una ruta que no sobrevivió a una migración."
+      },
+      "id": "SOCIAL-OG-IMAGE-BROKEN",
+      "min_tier": "free",
+      "name": {
+        "en": "Broken Open Graph image",
+        "es": "Imagen Open Graph que no carga"
+      },
+      "references": [],
+      "scope": "site",
+      "severity": "medium"
+    },
+    {
       "category": "content",
       "description": {
         "en": "The page has more than one H1. HTML5 allows it, but there is no longer a single main topic: the search engine has to guess what the page is about, and a screen reader announces several level-one headings as if they were separate documents. It is usually the template marking the logo or the site name as an H1 on top of the real headline.",
@@ -978,6 +1026,22 @@
       "severity": "low"
     },
     {
+      "category": "hreflang",
+      "description": {
+        "en": "The page declares hreflang, but every annotation points at the page itself: there is no translation in the set, so it does nothing. If the page has no translation, the annotation is unnecessary; if it does, its links are missing, and that is what really needs checking: it is usually a translation the plugin stopped linking.",
+        "es": "La página declara hreflang, pero todas las anotaciones apuntan a ella misma: no hay ninguna traducción en el conjunto, así que no hace nada. Si la página no tiene traducción, sobra; si la tiene, faltan sus enlaces, que es lo que de verdad hay que mirar: suele ser una traducción que el plugin dejó de vincular."
+      },
+      "id": "HREFLANG-SELF-ONLY",
+      "min_tier": "free",
+      "name": {
+        "en": "Hreflang with no alternates",
+        "es": "Hreflang sin alternativas"
+      },
+      "references": [],
+      "scope": "page",
+      "severity": "low"
+    },
+    {
       "category": "http",
       "description": {
         "en": "The site links to a URL on another domain that refused the check: it answered 401, 403 or 429. That is usually an anti-bot wall, a paywall or a rate limit, and the page almost always opens fine in a browser. It is not called broken because there is no way to tell from here: open it to confirm it is still there.",
@@ -991,6 +1055,22 @@
       },
       "references": [],
       "scope": "site",
+      "severity": "low"
+    },
+    {
+      "category": "links",
+      "description": {
+        "en": "Some internal links consist entirely of a stock phrase such as «read more», «here» or «click here». That text says nothing about the target page, which is exactly what the search engine reads in it, and out of context —the way a screen reader lists them— every link says the same. It is enough for the text to name the target: «read more about pricing» instead of «read more».",
+        "es": "Hay enlaces internos cuyo texto entero es una fórmula como «leer más», «aquí» o «haz clic aquí». Ese texto no dice nada de la página de destino, que es justo lo que el buscador lee en él, y fuera de contexto —como lo recorre un lector de pantalla— todos los enlaces dicen lo mismo. Basta con que el texto nombre el destino: «leer más sobre tarifas» en vez de «leer más»."
+      },
+      "id": "LINK-ANCHOR-GENERIC",
+      "min_tier": "free",
+      "name": {
+        "en": "Generic link text",
+        "es": "Texto de enlace genérico"
+      },
+      "references": [],
+      "scope": "page",
       "severity": "low"
     },
     {

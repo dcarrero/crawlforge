@@ -19,6 +19,52 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [Unreleased]
+
+Five new rules, all `free`. Minor bump when released: the catalog reports things it did not. No
+schema change: the og:image travels as one more `links` row (`element = 'meta'`), a value the
+column never constrained, so older crawl files open as before and older binaries read the new
+ones. The catalog has 71 rules.
+
+### Added
+
+- **`SOCIAL-OG-IMAGE-BROKEN`** (medium, site). The page's first `og:image` returns an error —any
+  4xx/5xx on your own host, 404/410 or a dead domain on someone else's—, directly or at the end
+  of up to ten redirects. The card shared on WhatsApp, LinkedIn or Slack comes out without an
+  image, and nothing in the HTML shows it. One finding per image URL, with how many pages declare
+  it and one of them. It was planned as `pro`; it ships as `free`, like the broken-image rules.
+  To have a status to read, the parser records the first `og:image` as a link and the crawl
+  requests it like an `<img>` (or probes it, when it is on another host). That URL counts against
+  `--max-urls`, and it is kept out of the page rules: an `http://` og:image is not mixed content.
+  `twitter:image` is not checked.
+- **`HREFLANG-LANG-MISMATCH`** (medium, page). The hreflang entry pointing at the page itself
+  names another language than its `<html lang>` —a Spanish page announced as `en`, the
+  translation plugin that copied a set without swapping the codes—. Only the language subtag is
+  compared (`es-ES` and `es` agree), withdrawn aliases (`iw`/`he`, `nb`/`no`…) count as the same
+  language, and it stays quiet when `lang` is missing, the page has no self-reference or the code
+  is malformed: other rules own those.
+- **`HREFLANG-SELF-ONLY`** (low, page). Every hreflang entry points at the page itself, so the
+  annotation does nothing. Either the page has no translation and the tags are unnecessary, or
+  its alternates went missing. It never fires together with `HREFLANG-NO-SELF` (its exact
+  complement) or `HREFLANG-NOT-RECIPROCAL`.
+- **`LINK-ANCHOR-EMPTY`** (medium, page), first rule of the new `LINK` category. Internal links
+  with no text, no image and no `aria-label`/`aria-labelledby`/`title`: an icon drawn with CSS, an
+  empty overlay link. Links that wrap an image are left to `ASSET-IMG-EMPTY-ALT-LINK` and
+  `ASSET-IMG-NO-ALT`, so the same `<img>` is never reported twice. One finding per page, with
+  the count.
+- **`LINK-ANCHOR-GENERIC`** (low, page). Internal links whose whole text is a stock phrase —«read
+  more», «click here», «leer más», «aquí», «weiterlesen», «lire la suite»…—. The phrases live in
+  one list per language (English, Spanish, German, French, Italian, Dutch, Turkish), chosen by the
+  page's `<html lang>`; words that can be a name elsewhere («Go», «Plus», «Link») only count when
+  the page declares that language. One finding per page, grouped by the phrases found, so an
+  archive template's «Leer más» reads as one cause.
+
+### Changed
+
+- The `og:image` is now a URL of the crawl: on an internal host it is requested like an image and
+  appears in `urls`, `links` (as `element = 'meta'`, `rel = 'og:image'`) and the exports. Pages
+  keep their `internal_links_out` figure: the og:image is not counted as a link.
+
 ## [0.19.0] — 2026-10-28
 
 A new rule. Minor bump: the catalog reports something it did not. No schema change; the rule

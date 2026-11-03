@@ -204,7 +204,7 @@ CREATE TABLE links (
     anchor       TEXT,
     rel          TEXT,
     is_nofollow  INTEGER NOT NULL DEFAULT 0,
-    element      TEXT NOT NULL,     -- 'a'|'link'|'img'|'script'|'iframe'|'form'
+    element      TEXT NOT NULL,     -- 'a'|'link'|'img'|'script'|'iframe'|'form'|'meta'
     region       TEXT,              -- 'nav'|'main'|'footer'|'aside'|'unknown'
     position     INTEGER            -- orden de aparición en el documento
 );
@@ -212,6 +212,12 @@ CREATE TABLE links (
 CREATE INDEX idx_links_from ON links(from_url_id);
 CREATE INDEX idx_links_to   ON links(to_url_id);
 ```
+
+`element = 'meta'` (añadido tras la 0.19.0) es el primer `og:image` de la página, con `rel = 'og:image'`.
+No es algo que la página enlace ni cargue, pero escribirlo aquí es lo que hace que se pida —o que
+se sonde, si está en otro host— como un `<img>`, y así `SOCIAL-OG-IMAGE-BROKEN` puede leer su
+estado. Quien cuente los enlaces de una página debe filtrar por `element = 'a'`, como ya hacen
+todas las reglas.
 
 `region` se deduce del ancestro semántico más cercano (`<nav>`, `<main>`, `<footer>`). Permite
 distinguir enlaces de plantilla de enlaces de contenido, que es la diferencia que importa en

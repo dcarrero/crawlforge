@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<!-- LINK-ANCHOR-EMPTY: one internal link with no name at all —an icon drawn with CSS— next to
+     five that look the same in the source but do have one: an aria-label, a title, an inline
+     SVG with aria-label, an inline SVG with <title>, text hidden for screen readers. The image
+     link is ASSET territory and is not counted either. `fixtures_de_reglas.rs` checks the
+     finding counts exactly one link: that is what proves the parser carries the label and the
+     image through to the rule. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Una cabecera con un enlace vacío entre iconos con nombre</title>
+<meta name="description" content="Una descripción correcta, de longitud suficiente para no llamar la atención de otras reglas del catálogo.">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<header>
+<a href="/"><i class="icon-cart"></i></a>
+<a href="/" aria-label="Carrito"><i class="icon-cart"></i></a>
+<a href="/" title="Buscar"><i class="icon-search"></i></a>
+<a href="/"><svg aria-label="Inicio" role="img" viewBox="0 0 10 10"><path d="M0 0h10v10H0z"/></svg></a>
+<a href="/"><svg viewBox="0 0 10 10"><title>Perfil</title><path d="M0 0h10v10H0z"/></svg></a>
+<a href="/"><span class="screen-reader-text">Menú</span><i class="icon-menu"></i></a>
+<a href="/"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="Portada"></a>
+</header>
+<main>
+<h1>Un encabezado correcto</h1>
+<p>El primer enlace de la cabecera no dice a dónde lleva ni al buscador ni a un lector de pantalla.</p>
+</main>
+</body>
+</html>

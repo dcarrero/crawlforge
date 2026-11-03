@@ -20,6 +20,9 @@ pub enum LinkElement {
     Script,
     Iframe,
     Form,
+    /// A URL declared in a `<meta>` tag that something outside the page fetches: today only the
+    /// first `og:image`, with `rel` set to the property name. See the `<meta>` handler.
+    Meta,
 }
 
 impl LinkElement {
@@ -31,6 +34,7 @@ impl LinkElement {
             Self::Script => "script",
             Self::Iframe => "iframe",
             Self::Form => "form",
+            Self::Meta => "meta",
         }
     }
 }
@@ -82,6 +86,11 @@ pub struct RawLink {
     pub element: LinkElement,
     pub region: Region,
     pub position: u32,
+    /// The `<a>` is named by something other than its text: a non-empty `aria-label`,
+    /// `aria-labelledby` or `title` on the link itself, or an inline `<svg aria-label>` inside
+    /// it. `LINK-ANCHOR-EMPTY` needs it to tell an icon link with a label from one with nothing
+    /// at all. Always `false` for anything that is not an `<a>`.
+    pub labelled: bool,
 }
 
 /// Una imagen con sus atributos de accesibilidad y rendimiento.
@@ -422,6 +431,10 @@ fn on_end(
 /// `nav` y `footer` se excluyen por indicación explícita de `§5`.
 const NON_CONTENT_TAGS: &[&str] = &["script", "style", "nav", "footer", "noscript", "template"];
 
+/// The `<a>` that carry an attribute giving them a name without any text inside: `aria-label`,
+/// `aria-labelledby` or `title`. See [`RawLink::labelled`].
+const LINK_LABEL_SELECTOR: &str = "a[href][aria-label], a[href][aria-labelledby], a[href][title]";
+
 /// Atributos donde el lazy-load esconde el `src` real, por orden de preferencia.
 ///
 /// Los plugins de lazy-load de WordPress sustituyen el `src` por un placeholder `data:`
@@ -570,10 +583,25 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                     // Solo se sigue para saber cuándo un `<title>` no es el de la página: un
                     // icono en línea lleva el suyo. Los `<svg>` pueden anidarse, así que es
                     // una profundidad y no un booleano.
+                    //
+                    // It is also where an icon link gets its name: `<a><svg aria-label="…">`
+                    // is a named link with no text, and `LINK-ANCHOR-EMPTY` must not call it
+                    // empty. An `<svg><title>` needs nothing here: its text already reaches
+                    // the anchor through the `text!("a")` handler.
                     element!("svg", {
                         let acc = Rc::clone(&acc);
                         move |el| {
-                            acc.borrow_mut().svg_depth += 1;
+                            let mut a = acc.borrow_mut();
+                            a.svg_depth += 1;
+                            let en_enlace = a.current_anchor.as_ref().map(|(i, _)| *i);
+                            if let Some(indice) = en_enlace {
+                                if el.get_attribute("aria-label").is_some_and(|v| !v.trim().is_empty()) {
+                                    if let Some(link) = a.page.links.get_mut(indice) {
+                                        link.labelled = true;
+                                    }
+                                }
+                            }
+                            drop(a);
                             let acc = Rc::clone(&acc);
                             let _ = el.on_end_tag(on_end(move |_| {
                                 let mut a = acc.borrow_mut();
@@ -671,6 +699,31 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 _ => {
                                     if property.starts_with("og:") {
                                         if let Some(c) = content {
+                                            // The first `og:image` also travels as a link, so
+                                            // the crawl requests it like an `<img>` —or probes
+                                            // it if it lives on another host— and
+                                            // `SOCIAL-OG-IMAGE-BROKEN` can read its status.
+                                            // Only the first: it is the one the networks use
+                                            // for the card, and a gallery of twenty would be
+                                            // twenty requests for one finding.
+                                            if property == "og:image"
+                                                && !c.trim().is_empty()
+                                                && !a.page.og.iter().any(|(k, _)| k == "og:image")
+                                            {
+                                                let region = a.current_region();
+                                                let position = a.link_position;
+                                                a.link_position += 1;
+                                                a.page.links.push(RawLink {
+                                                    href: c.clone(),
+                                                    anchor: None,
+                                                    rel: Some(property.clone()),
+                                                    is_nofollow: false,
+                                                    element: LinkElement::Meta,
+                                                    region,
+                                                    position,
+                                                    labelled: false,
+                                                });
+                                            }
                                             a.page.og.push((property, c));
                                         }
                                     }
@@ -720,6 +773,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                         element: LinkElement::Link,
                                         region,
                                         position,
+                                        labelled: false,
                                     });
                                 }
                                 _ => {}
@@ -797,6 +851,8 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 element: LinkElement::A,
                                 region,
                                 position,
+                                // Set by the handler right below when the link has a label.
+                                labelled: false,
                             });
                             let index = a.page.links.len() - 1;
                             a.current_anchor = Some((index, String::new()));
@@ -816,6 +872,27 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 }
                                 Ok(())
                             }));
+                            Ok(())
+                        }
+                    }),
+                    // An `<a>` named by an attribute instead of its text. It runs after the
+                    // handler above, so `current_anchor` already points at this link.
+                    //
+                    // A selector and not `get_attribute` in that handler: every attribute lookup
+                    // in `lol_html` lowercases and copies the name it is given, so three of them
+                    // per link cost 7% of the parse of a long Wikipedia article, which puts a
+                    // `title` on every link (measured 2026-11-03; with `has_attribute`, still
+                    // 4.5%). The selector is matched on the raw bytes, and costs 2% on that same
+                    // article and nothing measurable on an ordinary one. Presence is what counts:
+                    // a blank label can only hide an empty link, never invent one.
+                    element!(LINK_LABEL_SELECTOR, {
+                        let acc = Rc::clone(&acc);
+                        move |_| {
+                            let mut a = acc.borrow_mut();
+                            let en_enlace = a.current_anchor.as_ref().map(|(i, _)| *i);
+                            if let Some(link) = en_enlace.and_then(|i| a.page.links.get_mut(i)) {
+                                link.labelled = true;
+                            }
                             Ok(())
                         }
                     }),
@@ -912,6 +989,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                     element: LinkElement::Img,
                                     region,
                                     position,
+                                    labelled: false,
                                 });
                             }
                             Ok(())
@@ -937,6 +1015,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 element: LinkElement::Script,
                                 region,
                                 position,
+                                labelled: false,
                             });
                             Ok(())
                         }
@@ -982,6 +1061,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 element: LinkElement::Form,
                                 region,
                                 position,
+                                labelled: false,
                             });
                             Ok(())
                         }
@@ -1005,6 +1085,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 element: LinkElement::Iframe,
                                 region,
                                 position,
+                                labelled: false,
                             });
                             Ok(())
                         }
@@ -1388,6 +1469,73 @@ mod tests {
         let p = parse(r#"<body><a href="/x"><img src="/i.png"></a></body>"#);
         let anchor_link = p.links.iter().find(|l| l.element == LinkElement::A).expect("enlace");
         assert!(anchor_link.anchor.is_none());
+    }
+
+    #[test]
+    fn a_link_is_labelled_by_its_aria_attributes_title_or_an_svg_label() {
+        let p = parse(
+            r#"<body>
+                 <a href="/1" aria-label="Carrito"><i></i></a>
+                 <a href="/2" aria-labelledby="t"><i></i></a>
+                 <a href="/3" title="Buscar"><i></i></a>
+                 <a href="/4"><svg aria-label="Inicio"><path/></svg></a>
+                 <a href="/5"><i></i></a>
+                 <a href="/6" aria-label="  "><i></i></a>
+                 <svg aria-label="Fuera de un enlace"></svg>
+               </body>"#,
+        );
+        let marcas: Vec<(&str, bool)> = p
+            .links
+            .iter()
+            .filter(|l| l.element == LinkElement::A)
+            .map(|l| (l.href.as_str(), l.labelled))
+            .collect();
+        assert_eq!(
+            marcas,
+            vec![("/1", true), ("/2", true), ("/3", true), ("/4", true), ("/5", false), ("/6", true)],
+            "presence is what counts (a blank label hides an empty link rather than inventing \
+             one), and an SVG outside a link labels nothing"
+        );
+    }
+
+    #[test]
+    fn the_title_of_an_inline_svg_is_part_of_the_anchor() {
+        // An icon link named by `<svg><title>` is not empty: LINK-ANCHOR-EMPTY relies on this.
+        let p = parse(r#"<body><a href="/p"><svg><title>Perfil</title><path/></svg></a></body>"#);
+        assert_eq!(p.links[0].anchor.as_deref(), Some("Perfil"));
+        assert_eq!(p.title, None, "and it is still not the page title");
+    }
+
+    #[test]
+    fn the_first_og_image_becomes_a_meta_link() {
+        let p = parse(
+            r#"<html><head>
+                 <meta property="og:title" content="T">
+                 <meta property="og:image" content="/img/tarjeta.png">
+                 <meta property="og:image" content="/img/otra.png">
+                 <meta property="og:image:width" content="1200">
+               </head><body><a href="/a">A</a></body></html>"#,
+        );
+        let meta: Vec<&RawLink> =
+            p.links.iter().filter(|l| l.element == LinkElement::Meta).collect();
+        assert_eq!(meta.len(), 1, "only the first og:image, the one the networks use");
+        assert_eq!(meta[0].href, "/img/tarjeta.png", "kept raw: the engine resolves it");
+        assert_eq!(meta[0].rel.as_deref(), Some("og:image"));
+        assert_eq!(p.og.len(), 4, "the og list itself is untouched");
+    }
+
+    #[test]
+    fn an_empty_og_image_is_not_a_link() {
+        let p = parse(
+            r#"<head><meta property="og:image" content=" "><meta property="og:image" content="/b.png"></head>"#,
+        );
+        let meta: Vec<&str> = p
+            .links
+            .iter()
+            .filter(|l| l.element == LinkElement::Meta)
+            .map(|l| l.href.as_str())
+            .collect();
+        assert_eq!(meta, Vec::<&str>::new(), "the blank one is the first og:image; none is requested");
     }
 
     // --- Regiones ---

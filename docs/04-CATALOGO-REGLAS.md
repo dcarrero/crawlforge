@@ -251,6 +251,20 @@ project).
 | `HREFLANG-TO-NOINDEX` | critical | site | pro | hreflang points to a non-indexable page |
 | `HREFLANG-CONFLICT-CANONICAL` | high | site | pro | hreflang and canonical contradict each other |
 | `HREFLANG-NO-XDEFAULT` | low | site | pro | Multilingual set without `x-default` |
+| `HREFLANG-LANG-MISMATCH` | medium | page | free | The page's own hreflang entry names another language than its `<html lang>` (primary subtag only: `es-ES` vs `es` is fine) |
+| `HREFLANG-SELF-ONLY` | low | page | free | Every hreflang entry points at the page itself: a set with no alternates |
+
+**The two page rules added after 0.19.0 never overlap the existing ones.** `HREFLANG-SELF-ONLY`
+is the exact complement of `HREFLANG-NO-SELF` on a non-empty set —all entries are the page, or
+none is— and `HREFLANG-NOT-RECIPROCAL` only judges entries that point elsewhere, of which a
+self-only set has none. `HREFLANG-LANG-MISMATCH` stays quiet whenever another rule owns the
+problem: no `<html lang>` (`CONTENT-LANG-MISSING`), no self-reference (`HREFLANG-NO-SELF`), a
+malformed code (`HREFLANG-INVALID-CODE`). It compares the language subtag only and folds the
+withdrawn aliases Google still honours (`iw`/`he`, `in`/`id`, `nb`/`nn`/`no`, `sh` with
+`sr`/`hr`/`bs`): a region is a targeting choice, not a contradiction. It is `medium` and not
+`high` because it cannot tell which side is wrong: if it is the hreflang, Google serves the page
+to the wrong audience; if it is the `lang`, Google does not use that attribute to detect the
+language and the damage is to screen readers and translation prompts.
 
 ## 9. Structured data and social (`SCHEMA`)
 
@@ -260,7 +274,56 @@ project).
 | `SCHEMA-MISSING-REQUIRED` | medium | page | pro | A required property of the declared type is missing |
 | `SCHEMA-MISSING-ARTICLE` | low | page | pro | Article-like page without an `Article`/`BlogPosting` schema |
 | `SOCIAL-OG-MISSING` | low | page | free | No `og:title` / `og:description` / `og:image` |
-| `SOCIAL-OG-IMAGE-BROKEN` | medium | site | pro | `og:image` returns an error |
+| `SOCIAL-OG-IMAGE-BROKEN` | medium | site | free | The first `og:image` returns 4xx/5xx (own host) or 404/410/dead domain (foreign host, see §3 note), directly or at the end of its redirects |
+
+**`SOCIAL-OG-IMAGE-BROKEN` shipped as `free`, not `pro` as planned.** A card that loses its image
+is the same kind of finding as a broken `<img>`, and those are free; the tier split in §13 keeps
+`pro` for whole areas (schema, WordPress, JS rendering), not for one more status code. To have a
+status to read, the parser now records the page's **first** `og:image` —the one the networks
+use— as a `links` row with `element = 'meta'`, so the crawl requests it like an `<img>`, or
+probes it if it is on another host. No fetcher of its own. Two consequences, both deliberate: the
+og:image is a URL of the crawl and counts against `--max-urls` like any image, and it is kept out
+of the page rules' view, because an `http://` og:image on an HTTPS page is not mixed content —no
+browser loads it—. One finding per image URL, with how many pages declare it. When the same file
+is also an `<img>` on the page, `ASSET-IMG-BROKEN` reports it too: a hole in the page and a card
+without an image are different damage, fixed by the same file. `twitter:image` is not checked
+yet: it is usually the same URL as `og:image`, and X falls back to `og:image` when the tag is
+absent. A `twitter:image` that differs and is broken is a known gap.
+
+## 9.bis Internal link text (`LINK`)
+
+| ID | Sev. | Scope | Tier | Condition |
+|---|---|---|---|---|
+| `LINK-ANCHOR-EMPTY` | medium | page | free | Internal `<a href>` with no text, no image inside and no `aria-label`/`aria-labelledby`/`title` (nor an `<svg aria-label>`) |
+| `LINK-ANCHOR-GENERIC` | low | page | free | Internal `<a href>` whose whole text is a stock phrase: «read more», «click here», «leer más», «aquí»… |
+
+Both read internal `<a>` links only, skip same-page fragments (`href="#…"`, which are buttons in
+link's clothing) and give **one finding per page with the count**, not one per link.
+
+**`LINK-ANCHOR-EMPTY` leaves image links to the `ASSET` rules.** An `<a>` whose only content is an
+`<img alt="">` is `ASSET-IMG-EMPTY-ALT-LINK`, one with an `<img>` without `alt` is
+`ASSET-IMG-NO-ALT`; reporting them here too would count the same `<img>` twice. What is left is
+the icon drawn with CSS and the whole card turned into an empty overlay link. Text hidden with
+CSS and an inline `<svg><title>` count as text. It is `medium`: the missing name is a real
+accessibility failure (WCAG 2.4.4), but for search it costs the anchor signal of one link, not
+the page. `ASSET-IMG-EMPTY-ALT-LINK` is `high` for the same missing name, and that difference is
+inherited, not argued here: whether both should meet at one severity is an open question.
+
+**`LINK-ANCHOR-GENERIC` keeps its phrases per language** (`link::GENERIC_ANCHORS`: English,
+Spanish, German, French, Italian, Dutch and Turkish today), and adding a language is adding one
+entry. Each language has two lists. The unmistakable phrases —«leer más», «click here», «klik
+hier»— are checked on every page, because a Spanish theme that left «Read more» untranslated is
+the most common case of all. The words that can be a name elsewhere —«Go», «Link», «Plus»,
+«Suite», «Meer», «qui»— count only on a page whose `<html lang>` says it is in that language.
+Matches are whole-text and folded (case, accents, curly apostrophes, the »/…/→ decoration):
+«Leer más sobre tarifas» names its target and is fine. A link whose text is its own target's slug
+(`<a href="/tag/mas/">más</a>`, a tag cloud) is a poor tag name, not a generic link, and is left
+out — found on the first real crawl. `aria-label` does not rescue a generic text: the claim is
+about what a search engine reads, and that is the text. Pagination («next», «siguiente») is not
+in the lists.
+
+**Not copied: «image without `title`».** Some crawlers flag images without a `title` attribute;
+Google does not use it, so it is not a finding here.
 
 ## 10. WordPress (`WP`) — requires the adapter, Pro tier
 
