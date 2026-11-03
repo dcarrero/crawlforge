@@ -282,7 +282,7 @@ crawlforge report cliente.sqlite --config otro.yaml          # aplica el de otro
 ### Ver qué comprueba la herramienta
 
 ```bash
-crawlforge rules --lang es                    # las 59, en tabla
+crawlforge rules --lang es                    # el catálogo entero, en tabla
 crawlforge rules INDEX-ORPHAN-PAGE            # la ficha de una regla concreta, por su ID
 crawlforge rules --lang es --category canonical
 crawlforge rules --lang es --detail           # con la explicación completa de cada una
