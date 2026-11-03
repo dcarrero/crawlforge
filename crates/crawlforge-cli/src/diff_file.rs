@@ -350,7 +350,7 @@ fn write_row(s: &mut String, c: &Change, rule_known: bool, lang: Lang) -> std::f
                 // Con --rule, la regla ya está en el título: repetirla en cada fila es ruido.
                 writeln!(s, "  {url}")
             } else {
-                writeln!(s, "  {} {:<30} {url}", i18n::pad(&severity, 9), c.field.as_deref().unwrap_or(""))
+                writeln!(s, "  {} {:<30} {url}", i18n::pad(&severity, i18n::severity_width(lang)), c.field.as_deref().unwrap_or(""))
             }
         }
         // `content` guarda el robots.txt entero de cada lado: se enseñan las líneas que se van

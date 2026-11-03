@@ -1688,6 +1688,17 @@ fn print_header(outcome: &DiffOutcome, lang: Lang) {
         )
     });
     let ancho_recuentos = recuentos.iter().map(|r| i18n::display_width(r)).max().unwrap_or(0);
+    // The label column fits this language's longest label, not English's nine columns.
+    let ancho = i18n::column_width(
+        [
+            msg::label_before(lang),
+            msg::label_after(lang),
+            msg::label_site(lang),
+            msg::label_common(lang),
+            msg::label_saved(lang),
+        ],
+        9,
+    );
     for ((etiqueta, info), recuento) in
         [(msg::label_before(lang), &outcome.before), (msg::label_after(lang), &outcome.after)]
             .into_iter()
@@ -1695,22 +1706,22 @@ fn print_header(outcome: &DiffOutcome, lang: Lang) {
     {
         println!(
             "  {} {:<19} {}   {}",
-            i18n::pad(&etiqueta, 9),
+            i18n::pad(&etiqueta, ancho),
             info.started_at,
             i18n::pad(recuento, ancho_recuentos),
             info.path
         );
     }
-    println!("  {} {}", i18n::pad(&msg::label_site(lang), 9), outcome.after.base_url);
+    println!("  {} {}", i18n::pad(&msg::label_site(lang), ancho), outcome.after.base_url);
     println!(
         "  {} {}",
-        i18n::pad(&msg::label_common(lang), 9),
+        i18n::pad(&msg::label_common(lang), ancho),
         msg::diff_common_note(lang, i18n::count(lang, outcome.urls_common))
     );
     if let Some(saved) = &outcome.saved {
         println!(
             "  {} {}",
-            i18n::pad(&msg::label_saved(lang), 9),
+            i18n::pad(&msg::label_saved(lang), ancho),
             msg::diff_saved_note(lang, &saved.generated_at, &saved.tool_version, saved.path.display())
         );
     }
@@ -1722,13 +1733,14 @@ fn print_warnings(outcome: &DiffOutcome, lang: Lang) {
     }
     println!();
     println!("{}", i18n::section(&msg::warnings_title(lang)));
+    let ancho = i18n::column_width([msg::tag_inconclusive(lang), msg::tag_warning(lang)], 15);
     for warning in &outcome.warnings {
         let etiqueta = if warning.breaks_conclusion() {
             msg::tag_inconclusive(lang)
         } else {
             msg::tag_warning(lang)
         };
-        println!("  {} {}", i18n::pad(&etiqueta, 15), warning.message(lang));
+        println!("  {} {}", i18n::pad(&etiqueta, ancho), warning.message(lang));
     }
 }
 
@@ -1746,7 +1758,7 @@ fn print_worse(outcome: &DiffOutcome, lang: Lang) {
         for (severity, rule_id, ejemplos) in group_issues(&nuevos, lang) {
             println!(
                 "    {} {rule_id:<30} {:>6}",
-                i18n::pad(&i18n::severity_word(lang, &severity), 9),
+                i18n::pad(&i18n::severity_word(lang, &severity), i18n::severity_width(lang)),
                 n(ejemplos.len())
             );
             for url in ejemplos.iter().take(MAX_EXAMPLES) {
@@ -1847,7 +1859,7 @@ fn print_better(outcome: &DiffOutcome, lang: Lang) {
         for (severity, rule_id, ejemplos) in group_issues(&cambios, lang) {
             println!(
                 "    {} {rule_id:<30} {:>6}",
-                i18n::pad(&i18n::severity_word(lang, &severity), 9),
+                i18n::pad(&i18n::severity_word(lang, &severity), i18n::severity_width(lang)),
                 n(ejemplos.len())
             );
         }

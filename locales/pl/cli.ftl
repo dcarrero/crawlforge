@@ -284,7 +284,7 @@ diff_common_note = { $n ->
        *[other] { $n } adresów URL obecnych w obu skanowaniach
     }
 warnings_title = Ostrzeżenia
-tag_inconclusive = NIEPEWNE
+tag_inconclusive = NIEROZSTRZYGNIĘTE
 tag_warning = UWAGA
 side_before = przed
 side_after = po

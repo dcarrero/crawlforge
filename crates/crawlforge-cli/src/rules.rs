@@ -147,24 +147,32 @@ fn category_names() -> Vec<&'static str> {
 /// `--category` (y que lista su error), y `free`/`pro`/`agency` son nombres de producto, los
 /// mismos en las tiendas y en la web.
 fn print_tabla(reglas: &[&'static RuleMeta], lang: Lang) {
+    // Each column as wide as its header or its widest value in this language, and never
+    // narrower than the English layout.
+    let (th_sev, th_cat, th_scope, th_tier) =
+        (msg::th_severity(lang), msg::th_category(lang), msg::th_scope(lang), msg::th_tier(lang));
+    let w_sev = i18n::column_width([&th_sev], i18n::severity_width(lang));
+    let w_cat = i18n::column_width([&th_cat], 14);
+    let w_scope = i18n::column_width([th_scope.clone(), msg::scope_page(lang), msg::scope_site(lang)], 7);
+    let w_tier = i18n::column_width([&th_tier], 6);
     println!(
         "{:<32} {} {} {} {} {}",
         "ID",
-        i18n::pad(&msg::th_severity(lang), 9),
-        i18n::pad(&msg::th_category(lang), 14),
-        i18n::pad(&msg::th_scope(lang), 7),
-        i18n::pad(&msg::th_tier(lang), 6),
+        i18n::pad(&th_sev, w_sev),
+        i18n::pad(&th_cat, w_cat),
+        i18n::pad(&th_scope, w_scope),
+        i18n::pad(&th_tier, w_tier),
         msg::th_name(lang)
     );
     println!("{}", "─".repeat(110));
     for meta in reglas {
         println!(
-            "{:<32} {} {:<14} {} {:<6} {}",
+            "{:<32} {} {} {} {} {}",
             meta.id,
-            i18n::pad(&i18n::severity_word(lang, meta.severity.as_str()), 9),
-            meta.category.as_str(),
-            i18n::pad(&alcance(meta.scope, lang), 7),
-            nivel(meta.min_tier),
+            i18n::pad(&i18n::severity_word(lang, meta.severity.as_str()), w_sev),
+            i18n::pad(meta.category.as_str(), w_cat),
+            i18n::pad(&alcance(meta.scope, lang), w_scope),
+            i18n::pad(nivel(meta.min_tier), w_tier),
             meta.name(lang),
         );
     }

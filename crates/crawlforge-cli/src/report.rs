@@ -356,19 +356,31 @@ pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()
     let pages: i64 = conn.query_row("SELECT COUNT(*) FROM pages", [], |r| r.get(0))?;
     let links: i64 = conn.query_row("SELECT COUNT(*) FROM links", [], |r| r.get(0))?;
 
+    // The label column of the summary: the longest label of this language, nineteen at least.
+    let ancho = i18n::column_width(
+        [
+            msg::label_urls(lang),
+            msg::label_html_pages(lang),
+            msg::label_links(lang),
+            msg::label_never_requested(lang),
+            msg::label_out_of_scope(lang),
+        ],
+        19,
+    );
+
     println!(
         "  {}{:>12}  ({})",
-        i18n::pad(&msg::label_urls(lang), 19),
+        i18n::pad(&msg::label_urls(lang), ancho),
         n(total),
         msg::note_internal(lang, n(internal))
     );
     println!(
         "  {}{:>12}  ({})",
-        i18n::pad(&msg::label_html_pages(lang), 19),
+        i18n::pad(&msg::label_html_pages(lang), ancho),
         n(pages),
         msg::note_indexable(lang, n(indexable))
     );
-    println!("  {}{:>12}", i18n::pad(&msg::label_links(lang), 19), n(links));
+    println!("  {}{:>12}", i18n::pad(&msg::label_links(lang), ancho), n(links));
 
     // Distribución de respuestas: códigos de estado, fallos y lo nunca pedido, por separado.
     let breakdown = response_breakdown(&conn)?;
@@ -402,7 +414,7 @@ pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()
         println!();
         println!(
             "  {}{:>12}  {}",
-            i18n::pad(&msg::label_never_requested(lang), 19),
+            i18n::pad(&msg::label_never_requested(lang), ancho),
             n(breakdown.never_requested),
             msg::note_never_requested(lang)
         );
@@ -414,7 +426,7 @@ pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()
         println!();
         println!(
             "  {}{:>12}  {}",
-            i18n::pad(&msg::label_out_of_scope(lang), 19),
+            i18n::pad(&msg::label_out_of_scope(lang), ancho),
             n(breakdown.out_of_scope),
             msg::note_out_of_scope(lang)
         );
@@ -630,7 +642,7 @@ fn findings_lines(
                     if let Some(f) = deep {
                         out.push(format!(
                             "    {} {rule:<24} {}",
-                            i18n::pad(&i18n::severity_word(lang, &severity), 9),
+                            i18n::pad(&i18n::severity_word(lang, &severity), i18n::severity_width(lang)),
                             msg::deep_pages_summary(
                                 lang,
                                 n(f.pages),
@@ -646,7 +658,7 @@ fn findings_lines(
                 }
                 out.push(format!(
                     "    {} {rule:<24} {:>8}  ({})",
-                    i18n::pad(&i18n::severity_word(lang, &severity), 9),
+                    i18n::pad(&i18n::severity_word(lang, &severity), i18n::severity_width(lang)),
                     n(total),
                     msg::pervasive_note(lang, pct)
                 ));
@@ -654,7 +666,7 @@ fn findings_lines(
             }
             out.push(format!(
                 "    {} {rule:<24} {:>8}",
-                i18n::pad(&i18n::severity_word(lang, &severity), 9),
+                i18n::pad(&i18n::severity_word(lang, &severity), i18n::severity_width(lang)),
                 n(total)
             ));
             continue;
@@ -672,7 +684,7 @@ fn findings_lines(
         if rest > 0 {
             texto.push_str(&msg::plus_more_findings(lang, n(rest)));
         }
-        out.push(format!("    {} {rule:<24} {texto}", i18n::pad(&i18n::severity_word(lang, &severity), 9)));
+        out.push(format!("    {} {rule:<24} {texto}", i18n::pad(&i18n::severity_word(lang, &severity), i18n::severity_width(lang))));
 
         // Dos URLs del grupo mayor: con ellas se ve la plantilla sin abrir nada más. `groups`
         // viene ordenado por tamaño, así que el primero es el mayor.

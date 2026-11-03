@@ -255,7 +255,7 @@ gate_pass = PASS   niets wat bewaakt wordt, duikt op als nieuwe bevinding.
 
 ## Saved diff (`diff_file.rs`)
 
-label_saved = Bestand
+label_saved = Opgeslagen
 diff_saved_note = vergelijking gemaakt op { $generated_at } door crawlforge { $version } · { $path }
 hint_diff_full_lists = De lijsten hierboven tonen maar een paar voorbeelden. Voeg voor alle rijen --rule <ID> of
     --change <type> toe aan hetzelfde commando (bijv. --change url_removed).

@@ -153,7 +153,7 @@ state_note_external_not_checked = externe URL – Status nicht geprüft ({ $reas
 state_note_external_unchecked = externe URL – nie abgerufen
 state_note_out_of_scope = gefunden, aber außerhalb des Umfangs dieses Crawls
 state_note_error = die Anfrage ist fehlgeschlagen ({ $detail })
-region_unknown = k. A.
+region_unknown = unbekannt
 inspect_page_title = Seite
 label_page_title = Title
 label_meta_description = Meta Description
@@ -252,7 +252,7 @@ gate_pass = PASS   nichts Überwachtes taucht als neuer Befund auf.
 
 ## Saved diff (`diff_file.rs`)
 
-label_saved = Datei
+label_saved = Gespeichert
 diff_saved_note = Vergleich erstellt am { $generated_at } mit crawlforge { $version } · { $path }
 hint_diff_full_lists = Die Listen oben zeigen nur einige Beispiele. Für alle Zeilen ergänzen Sie --rule <ID> oder
     --change <Typ> im selben Befehl (z. B. --change url_removed).

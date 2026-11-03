@@ -180,6 +180,29 @@ pub fn pad_left(text: &str, width: usize) -> String {
     out
 }
 
+/// The width of a column of labels: the widest of them, in terminal columns, and never less
+/// than `min` (the width the English layout always had, so English output does not move).
+///
+/// Fixed pads made translators shorten words to fit («k. A.» for «unbekannt»); a column sized
+/// from the labels of the language in use lets every language write the natural word.
+pub fn column_width<S: AsRef<str>>(labels: impl IntoIterator<Item = S>, min: usize) -> usize {
+    labels.into_iter().map(|l| display_width(l.as_ref())).max().unwrap_or(0).max(min)
+}
+
+/// The width of a severity column: the longest severity word of the language, nine at least.
+/// Computed once per language: it is asked for on every row of long listings.
+pub fn severity_width(lang: Lang) -> usize {
+    static WIDTHS: OnceLock<[usize; Lang::ALL.len()]> = OnceLock::new();
+    WIDTHS.get_or_init(|| {
+        Lang::ALL.map(|l| {
+            column_width(
+                ["critical", "high", "medium", "low", "info"].map(|s| severity_word(l, s)),
+                9,
+            )
+        })
+    })[effective(lang).index()]
+}
+
 // ──────────────────────────────────────────────────────── Cabeceras y etiquetas
 
 /// Ancho de las cabeceras de sección de la terminal (`── Título ────…`).

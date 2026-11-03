@@ -412,7 +412,8 @@ fn build_card(
     rules: &rule_config::Applied,
 ) -> Result<String> {
     let mut s = String::new();
-    let mut w = Writer { s: &mut s, format };
+    let label_width = i18n::column_width(kv_labels(lang), 19);
+    let mut w = Writer { s: &mut s, format, label_width };
 
     w.title(&sanitize(&row.url))?;
     status_section(&mut w, row, lang)?;
@@ -431,6 +432,27 @@ fn build_card(
 struct Writer<'a> {
     s: &'a mut String,
     format: Format,
+    /// The label column of the terminal card: the longest label of the language in use.
+    label_width: usize,
+}
+
+/// Every label the card prints with [`Writer::kv`], to size its column. A label missing here
+/// is still printed, only without the alignment.
+fn kv_labels(lang: Lang) -> [String; 12] {
+    [
+        msg::label_http_status(lang),
+        msg::label_content_type(lang),
+        msg::label_response_time(lang),
+        msg::label_depth(lang),
+        msg::label_in_sitemap(lang),
+        msg::label_crawl_state(lang),
+        msg::label_page_title(lang),
+        msg::label_meta_description(lang),
+        msg::label_h1(lang),
+        msg::label_word_count(lang),
+        msg::label_canonical(lang),
+        msg::label_indexable(lang),
+    ]
 }
 
 impl Writer<'_> {
@@ -453,9 +475,10 @@ impl Writer<'_> {
 
     fn kv(&mut self, label: &str, value: &str) -> Result<()> {
         match self.format {
-            // 19 y no 18: la etiqueta más larga del catálogo («Tiempo de respuesta») mide 19.
-            // En columnas de terminal, para que una etiqueta japonesa no descuadre el valor.
-            Format::Terminal => writeln!(self.s, "  {} {value}", i18n::pad(label, 19))?,
+            // 19 at least, the width English and Spanish always had («Tiempo de respuesta»);
+            // wider when the language's longest label needs it («Estado do rastreamento»).
+            // In terminal columns, so a Japanese label does not push the value.
+            Format::Terminal => writeln!(self.s, "  {} {value}", i18n::pad(label, self.label_width))?,
             Format::Md => writeln!(self.s, "- **{label}**: {value}")?,
         }
         Ok(())
@@ -682,7 +705,7 @@ fn findings_section(
         let veces = if cuantos > 1 { format!(" ×{cuantos}") } else { String::new() };
         w.item(&format!(
             "{} {rule:<26} {nombre}{veces}",
-            i18n::pad(&i18n::severity_word(lang, &severity), 9)
+            i18n::pad(&i18n::severity_word(lang, &severity), i18n::severity_width(lang))
         ))?;
     }
     if let Some(note) = rules.note(lang) {
@@ -785,6 +808,10 @@ fn print_link_lines(
     kind: LinkListKind,
 ) -> Result<bool> {
     let visibles = filas.len().min(limit.shown());
+    // The region column fits the widest region shown, eight at least: «desconocida» and
+    // «desconhecida» are longer than English's «unknown».
+    let region_width =
+        i18n::column_width(filas[..visibles].iter().map(|l| region_word(&l.region, lang)), 8);
     for linea in &filas[..visibles] {
         let ancla = match &linea.anchor {
             Some(a) if !a.trim().is_empty() => format!("\"{}\"", clean_anchor(a)),
@@ -803,7 +830,7 @@ fn print_link_lines(
         let texto = match kind {
             LinkListKind::Inlinks => format!(
                 "{} {ancla}{marcas} — {}",
-                i18n::pad(&region_word(&linea.region, lang), 8),
+                i18n::pad(&region_word(&linea.region, lang), region_width),
                 sanitize(&linea.url)
             ),
             LinkListKind::Outlinks => {
@@ -1173,6 +1200,42 @@ mod tests {
         let store = store_de_prueba("noindex");
         let s = ficha(&store, "https://ejemplo.es/");
         assert!(s.contains("noindex"), "the reason is the column value: {s}");
+    }
+
+    /// The display column where the text after `label` starts, in the line that has it.
+    fn columna_tras(s: &str, label: &str) -> usize {
+        let linea = s.lines().find(|l| l.trim_start().starts_with(label)).expect(label);
+        let tras = &linea[linea.find(label).expect(label) + label.len()..];
+        let espacios = tras.len() - tras.trim_start().len();
+        i18n::display_width(&linea[..linea.len() - tras.len()]) + espacios
+    }
+
+    #[test]
+    fn the_card_labels_fit_the_longest_label_of_the_language() {
+        // «Estado do rastreamento» is 22 columns; with a fixed pad of 19 its value started
+        // three columns to the right of every other value of the card. The column is sized
+        // from every label the card can print, shown on this page or not.
+        let store = store_de_prueba("ancho-etiquetas");
+        let s = render_card(&store, "https://ejemplo.es/blog/", ListLimit::N(DEFAULT_LIMIT), "terminal", Lang::Pt)
+            .expect("the card must render");
+        assert_eq!(columna_tras(&s, "Status HTTP"), 2 + 22 + 1, "{s}");
+        // English keeps its layout: nineteen columns of label plus the separator.
+        let en = ficha(&store, "https://ejemplo.es/blog/");
+        assert_eq!(columna_tras(&en, &msg::label_http_status(Lang::En)), 2 + 19 + 1, "{en}");
+    }
+
+    #[test]
+    fn the_region_column_fits_an_unknown_region() {
+        // «desconocida» (11) overflowed the 8-column pad, and its anchor started further right
+        // than the `nav` one above it.
+        let store = store_de_prueba("ancho-region");
+        let conn = Connection::open(&store).expect("open");
+        conn.execute("UPDATE links SET region = 'unknown' WHERE from_url_id = 4 AND to_url_id = 2", [])
+            .expect("update");
+        drop(conn);
+        let s = render_card(&store, "https://ejemplo.es/blog/", ListLimit::N(DEFAULT_LIMIT), "terminal", Lang::Es)
+            .expect("the card must render");
+        assert_eq!(columna_tras(&s, "nav"), columna_tras(&s, "desconocida"), "{s}");
     }
 
     #[test]

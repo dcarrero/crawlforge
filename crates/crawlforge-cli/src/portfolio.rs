@@ -930,7 +930,7 @@ pub fn print_report(outcome: &PortfolioOutcome) {
             for group in &change.new_critical_high {
                 println!(
                     "      {} {:<30} {:>6}",
-                    i18n::pad(&i18n::severity_word(lang, &group.severity), 9),
+                    i18n::pad(&i18n::severity_word(lang, &group.severity), i18n::severity_width(lang)),
                     group.rule_id,
                     n(group.count)
                 );
@@ -998,7 +998,7 @@ pub fn print_report(outcome: &PortfolioOutcome) {
         for row in &outcome.spread {
             println!(
                 "  {} {:<30} {}{}",
-                i18n::pad(&i18n::severity_word(lang, &row.severity), 9),
+                i18n::pad(&i18n::severity_word(lang, &row.severity), i18n::severity_width(lang)),
                 row.rule_id,
                 msg::portfolio_sites_of(lang, row.fired, outcome.site_total()),
                 msg::portfolio_inconclusive_suffix(lang, row.inconclusive),
@@ -1016,12 +1016,19 @@ pub fn print_report(outcome: &PortfolioOutcome) {
     let sev_widths: Vec<usize> = sev_headers.iter().map(|h| i18n::display_width(h).max(5)).collect();
     let header_sev: Vec<String> =
         sev_headers.iter().zip(&sev_widths).map(|(h, w)| i18n::pad_left(h, *w)).collect();
+    let (th_urls, th_indexable, th_crawled) =
+        (msg::label_urls(lang), msg::th_indexable(lang), msg::th_crawled(lang));
+    let (w_urls, w_indexable, w_crawled) = (
+        i18n::column_width([&th_urls], 9),
+        i18n::column_width([&th_indexable], 7),
+        i18n::column_width([&th_crawled], 10),
+    );
     println!(
         "  {} {} {}  {}  {}",
-        i18n::pad_left(&msg::label_urls(lang), 9),
-        i18n::pad_left(&msg::th_indexable(lang), 7),
+        i18n::pad_left(&th_urls, w_urls),
+        i18n::pad_left(&th_indexable, w_indexable),
         header_sev.join(" "),
-        i18n::pad(&msg::th_crawled(lang), 10),
+        i18n::pad(&th_crawled, w_crawled),
         msg::th_site(lang),
     );
     for site in &outcome.sites {
@@ -1033,11 +1040,11 @@ pub fn print_report(outcome: &PortfolioOutcome) {
             .map(|(c, w)| i18n::pad_left(&n(*c), *w))
             .collect();
         println!(
-            "  {:>9} {:>7} {}  {:<10}  {}{}",
-            n(site.urls_total),
-            n(site.indexable),
+            "  {} {} {}  {}  {}{}",
+            i18n::pad_left(&n(site.urls_total), w_urls),
+            i18n::pad_left(&n(site.indexable), w_indexable),
             counts.join(" "),
-            day_of(&site.started_at),
+            i18n::pad(&day_of(&site.started_at), w_crawled),
             site.label,
             flag,
         );
