@@ -19,6 +19,26 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [Unreleased]
+
+### Changed
+
+- **Dropped connections and timeouts now count as overload** in the adaptive throttle. Until
+  now only `429` and `503` fed the streak that halves a host's concurrency, but a saturated
+  server often does not get as far as answering: it resets or refuses the connection, or does
+  not answer in time. A `connection` or `timeout` failure (after the retries) now adds to the
+  same streak. DNS and TLS failures do not, and neither add to it nor break it: they would fail
+  the same with the server idle. `CrawlMetrics::throttle_reductions` says how many times a host
+  was halved.
+- **`Retry-After` on the site's own pages is obeyed.** A `429` or `503` that carries it (in
+  seconds or as an HTTP date, in any of the three formats RFC 9110 requires) is retried after at
+  least that long instead of the fixed 1/2/4 s backoff, and the whole host is paused meanwhile,
+  not just that URL. The wait is capped at two minutes (`fetch::MAX_RETRY_AFTER`): above that the
+  page is not retried at all, so a `429` is left pending for `resume` exactly as one that
+  outlives the retries (`truncated_reason = 'rate_limited'`), and a `503` is recorded as such.
+  `robots.txt` and sitemap downloads honour the same wait; external status probes are
+  unchanged.
+
 ## [0.20.0] — 2026-11-03
 
 Five new rules, all `free`, per-site rule configuration, and the whole output in ten languages.

@@ -127,6 +127,8 @@ Google?" is answered with that column, and it is the most frequent query an SEO 
 connection timeout: 10 s
 total timeout per request: 30 s
 retries: 3, exponential backoff with jitter (1s, 2s, 4s ±50%)
+Retry-After on a 429/503 (seconds or HTTP-date): wait at least that long, up to 120 s
+Retry-After above 120 s: no retry (a 429 is left pending, see below)
 retry on: 429, 500, 502, 503, 504, timeout, connection error
 do not retry on: 4xx except 429, TLS error, DNS error
 response size limit: 10 MB (configurable). Exceeding it → error_kind='toolarge'
@@ -138,6 +140,31 @@ crawler. The 503 counts because a saturated Varnish or Cloudflare answers 503 ra
 the effect on the server is the same: telling them apart would be faithful to the letter of this
 document and unfaithful to its reason. Recovery is deliberately slower than the braking — halved
 at once, raised one point at a time after a run of good responses.
+
+**Dropped connections and timeouts count too.** A saturated server often does not get as far as
+answering 429 or 503: it resets the connection, refuses it because its accept queue is full, or
+does not answer in time. Same signal by another road, so a `connection` or `timeout` failure
+(after the fetcher's retries, like a 429) adds to the same streak. A DNS or TLS failure does not:
+a name that does not resolve or a certificate that does not validate would fail the same with the
+server idle, and they neither add to the streak nor break it (`throttle::is_overload_failure`).
+How many times a host was halved is in `CrawlMetrics::throttle_reductions`.
+
+**`Retry-After` on the site's own pages is obeyed.** When a 429 or 503 carries it, the retry of
+that URL waits at least what it asks —and never less than the backoff, so `Retry-After: 0` does
+not mean "retry at once"— and **the whole host is paused** until then, not just that URL: if the
+rest of its pages kept being dispatched, waiting on one would relieve nothing. The task that got
+the header keeps its slot while it sleeps, which is what keeps the crawl loop from mistaking "all
+paused" for "nothing left". The wait lives inside the task, so `max_duration` and a cancel cut it
+like any other. Above `fetch::MAX_RETRY_AFTER` (120 s) the server is not retried at all —coming
+back after 1, 2 and 4 s would disobey it three times—: a 429 is left `pending` with
+`truncated_reason = 'rate_limited'` exactly like one that outlives the retries, and a 503 is
+recorded as the 503 it is. External links are not affected: a status probe never waits, and a
+`Retry-After` there stops probing that host (see the external queue).
+
+A host that stops answering altogether is not given up on: every one of its queued pages goes
+through its four attempts and is recorded as an error, and with dropped connections now counting
+as overload its concurrency drops to 1 along the way. That is the polite side; the cost is a long
+crawl when the host is truly dead (up to ~2 min per page with timeouts). `--max-duration` bounds it.
 
 An interrupted crawl (app closed, network drop) must be resumable: the pending queue lives in
 `urls` with `crawl_state='pending'`, so resuming is re-reading that table.

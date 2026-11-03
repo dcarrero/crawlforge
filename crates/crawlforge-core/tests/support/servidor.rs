@@ -47,6 +47,12 @@ pub struct Respuesta {
     /// la respuesta de verdad. Es un límite de peticiones que se levanta, como el de un
     /// Cloudflare que deja de frenar al cabo de un rato.
     pub falla_las_primeras: Option<(u16, usize)>,
+    /// Cabeceras que lleva la respuesta de error de `falla_las_primeras`: un `Retry-After`,
+    /// típicamente, que es lo que manda un servidor que dice cuánto esperar.
+    pub cabeceras_del_fallo: Vec<(String, String)>,
+    /// Cerrar la conexión sin responder nada, en todas las peticiones a la ruta. Es lo que
+    /// hace un servidor o un proxy saturado que corta lo que no puede atender.
+    pub corta_la_conexion: bool,
 }
 
 impl Respuesta {
@@ -59,6 +65,8 @@ impl Respuesta {
             autorizacion_requerida: None,
             rechaza_head: false,
             falla_las_primeras: None,
+            cabeceras_del_fallo: Vec::new(),
+            corta_la_conexion: false,
         }
     }
 
@@ -142,6 +150,27 @@ impl Respuesta {
         self
     }
 
+    /// Como [`Self::fallando_las_primeras`], con cabeceras en la respuesta de error.
+    #[allow(dead_code)]
+    pub fn fallando_las_primeras_con(
+        mut self,
+        status: u16,
+        n: usize,
+        cabeceras: &[(&str, &str)],
+    ) -> Self {
+        self.falla_las_primeras = Some((status, n));
+        self.cabeceras_del_fallo =
+            cabeceras.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
+        self
+    }
+
+    /// Una ruta que corta la conexión sin responder, siempre.
+    #[allow(dead_code)]
+    pub fn cortando_la_conexion(mut self) -> Self {
+        self.corta_la_conexion = true;
+        self
+    }
+
     /// El 401 con el que responde una ruta protegida, con su `WWW-Authenticate` de rigor.
     fn no_autorizada() -> Self {
         let mut r = Self::pagina("401 Unauthorized", "<p>Authentication required.</p>");
@@ -195,6 +224,7 @@ fn motivo(status: u16) -> &'static str {
         401 => "Unauthorized",
         404 => "Not Found",
         410 => "Gone",
+        429 => "Too Many Requests",
         500 => "Internal Server Error",
         503 => "Service Unavailable",
         _ => "Status",
@@ -473,8 +503,17 @@ async fn atender(
 
     let es_head = metodo.eq_ignore_ascii_case("HEAD");
     let respuesta = rutas.get(&objetivo).cloned().unwrap_or_else(Respuesta::no_encontrada);
+    if respuesta.corta_la_conexion {
+        // Soltar el socket sin escribir nada: el cliente ve la conexión cerrada antes de que
+        // llegue respuesta alguna.
+        return;
+    }
     let respuesta = match respuesta.falla_las_primeras {
-        Some((status, n)) if numero <= n => Respuesta::error(status),
+        Some((status, n)) if numero <= n => {
+            let mut error = Respuesta::error(status);
+            error.headers.extend(respuesta.cabeceras_del_fallo.iter().cloned());
+            error
+        }
         _ => respuesta,
     };
     // Un servidor que rechaza HEAD responde 405 sin mirar nada más, como los reales.
