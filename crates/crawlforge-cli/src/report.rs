@@ -432,8 +432,13 @@ pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()
     if !rows.is_empty() {
         println!();
         println!("  {}", msg::heading_non_indexable(lang));
+        // The reason is stored as an identifier (`canonicalised`) and shown translated; the
+        // column is as wide as the longest reason in this language, sixteen at least.
+        let rows: Vec<(String, i64)> =
+            rows.into_iter().map(|(r, c)| (i18n::indexability_reason(lang, &r), c)).collect();
+        let ancho = rows.iter().map(|(r, _)| i18n::display_width(r)).max().unwrap_or(0).max(16);
         for (reason, cuantas) in rows {
-            println!("    {reason:<16} {:>10}", n(cuantas));
+            println!("    {} {:>10}", i18n::pad(&reason, ancho), n(cuantas));
         }
     }
 

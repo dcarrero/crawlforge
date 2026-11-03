@@ -638,8 +638,12 @@ fn page_section(w: &mut Writer<'_>, conn: &Connection, row: &UrlRow, lang: Lang)
     let indexable = if page.is_indexable {
         msg::word_yes(lang)
     } else {
-        // El motivo (`noindex`, `canonicalised`…) es un valor de columna y no se traduce.
-        msg::indexable_no(lang, page.indexability_reason.as_deref().unwrap_or("-"))
+        // The stored reason (`noindex`, `canonicalised`…) is an identifier; it is shown
+        // translated, and an unknown value as is.
+        msg::indexable_no(
+            lang,
+            i18n::indexability_reason(lang, page.indexability_reason.as_deref().unwrap_or("-")),
+        )
     };
     w.kv(&msg::label_indexable(lang), &indexable)?;
     Ok(())
@@ -1169,6 +1173,20 @@ mod tests {
         let store = store_de_prueba("noindex");
         let s = ficha(&store, "https://ejemplo.es/");
         assert!(s.contains("noindex"), "the reason is the column value: {s}");
+    }
+
+    #[test]
+    fn the_non_indexable_reason_is_shown_translated() {
+        // The stored value is an identifier; what a person reads follows --lang.
+        let store = store_de_prueba("motivo-traducido");
+        let conn = Connection::open(&store).expect("open");
+        conn.execute("UPDATE pages SET indexability_reason = 'canonicalised' WHERE url_id = 1", [])
+            .expect("update");
+        drop(conn);
+        let s = render_card(&store, "https://ejemplo.es/", ListLimit::N(DEFAULT_LIMIT), "terminal", Lang::Es)
+            .expect("the card must render");
+        assert!(s.contains("no — canonicalizada"), "{s}");
+        assert_eq!(i18n::indexability_reason(Lang::Es, "algo_nuevo"), "algo_nuevo", "unknown: as is");
     }
 
     #[test]

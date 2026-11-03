@@ -142,7 +142,10 @@ fn category_names() -> Vec<&'static str> {
 
 /// Las cabeceras y etiquetas de la tabla siguen al `--lang` pedido, igual que los nombres de
 /// las reglas: con el idioma por defecto (`en`) salían cabeceras en español sobre nombres en
-/// inglés, dos idiomas en la misma pantalla.
+/// inglés, dos idiomas en la misma pantalla. La severidad también se traduce: aquí es una
+/// etiqueta de columna. La categoría y el nivel no: la categoría es el valor que acepta
+/// `--category` (y que lista su error), y `free`/`pro`/`agency` son nombres de producto, los
+/// mismos en las tiendas y en la web.
 fn print_tabla(reglas: &[&'static RuleMeta], lang: Lang) {
     println!(
         "{:<32} {} {} {} {} {}",
@@ -156,9 +159,9 @@ fn print_tabla(reglas: &[&'static RuleMeta], lang: Lang) {
     println!("{}", "─".repeat(110));
     for meta in reglas {
         println!(
-            "{:<32} {:<9} {:<14} {} {:<6} {}",
+            "{:<32} {} {:<14} {} {:<6} {}",
             meta.id,
-            meta.severity.as_str(),
+            i18n::pad(&i18n::severity_word(lang, meta.severity.as_str()), 9),
             meta.category.as_str(),
             i18n::pad(&alcance(meta.scope, lang), 7),
             nivel(meta.min_tier),
@@ -168,7 +171,7 @@ fn print_tabla(reglas: &[&'static RuleMeta], lang: Lang) {
 }
 
 fn print_detalle(meta: &RuleMeta, lang: Lang) {
-    println!("\n{}  [{}]", meta.id, meta.severity.as_str());
+    println!("\n{}  [{}]", meta.id, i18n::severity_word(lang, meta.severity.as_str()));
     println!("  {}", meta.name(lang));
     for linea in envolver(meta.description(lang), 92) {
         println!("  {linea}");

@@ -27,6 +27,16 @@ severity_word_medium = moyenne
 severity_word_low = faible
 severity_word_info = info
 
+## Non-indexability reasons
+
+reason_noindex = noindex
+reason_canonicalised = canonicalisée
+reason_robots = robots
+reason_redirect = redirection
+reason_4xx = 4xx
+reason_5xx = 5xx
+reason_not_html = pas du HTML
+
 ## Crawl summary (`report.rs`)
 
 crawl_finished = Exploration terminée : { $urls } URL en { $secs } s
@@ -327,6 +337,11 @@ portfolio_glance_title = Le portefeuille en un coup d'œil
 th_site = site
 th_crawled = exploré
 th_indexable = index.
+th_sev_critical = crit.
+th_sev_high = élev.
+th_sev_medium = moy.
+th_sev_low = faible
+th_sev_info = info
 flag_truncated = (tronquée)
 flag_list_mode = (mode liste)
 flag_unfinished = (inachevée : { $status })

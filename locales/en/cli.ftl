@@ -19,6 +19,19 @@ severity_word_medium = medium
 severity_word_low = low
 severity_word_info = info
 
+## Non-indexability reasons
+
+# Why a page is not indexable, in `report` and `inspect`. The crawl file stores the English
+# identifier (`canonicalised`); exports keep it, this is only what a person reads. `noindex`,
+# `robots` (robots.txt), `4xx` and `5xx` are names of the mechanism and usually stay.
+reason_noindex = noindex
+reason_canonicalised = canonicalised
+reason_robots = robots
+reason_redirect = redirect
+reason_4xx = 4xx
+reason_5xx = 5xx
+reason_not_html = not_html
+
 ## Resumen del rastreo (`report.rs`)
 
 crawl_finished = Crawl finished: { $urls ->
@@ -351,6 +364,12 @@ portfolio_glance_title = The portfolio at a glance
 th_site = site
 th_crawled = crawled
 th_indexable = index.
+# The severity columns of the portfolio's at-a-glance table, abbreviated: five share a line.
+th_sev_critical = crit
+th_sev_high = high
+th_sev_medium = med
+th_sev_low = low
+th_sev_info = info
 flag_truncated = (truncated)
 flag_list_mode = (list crawl)
 flag_unfinished = (did not finish: { $status })

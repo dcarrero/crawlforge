@@ -16,6 +16,16 @@ severity_word_medium = gemiddeld
 severity_word_low = laag
 severity_word_info = info
 
+## Non-indexability reasons
+
+reason_noindex = noindex
+reason_canonicalised = gecanonicaliseerd
+reason_robots = robots
+reason_redirect = doorverwijzing
+reason_4xx = 4xx
+reason_5xx = 5xx
+reason_not_html = geen HTML
+
 ## Crawl summary (`report.rs`)
 
 crawl_finished = Crawl voltooid: { $urls ->
@@ -304,6 +314,11 @@ portfolio_glance_title = Het portfolio in één oogopslag
 th_site = site
 th_crawled = gecrawld
 th_indexable = index.
+th_sev_critical = krit.
+th_sev_high = hoog
+th_sev_medium = gem.
+th_sev_low = laag
+th_sev_info = info
 flag_truncated = (afgebroken)
 flag_list_mode = (lijstcrawl)
 flag_unfinished = (niet voltooid: { $status })

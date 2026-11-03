@@ -22,6 +22,16 @@ severity_word_medium = orta
 severity_word_low = düşük
 severity_word_info = bilgi
 
+## Non-indexability reasons
+
+reason_noindex = noindex
+reason_canonicalised = kanonikleştirilmiş
+reason_robots = robots
+reason_redirect = yönlendirme
+reason_4xx = 4xx
+reason_5xx = 5xx
+reason_not_html = HTML değil
+
 ## Resumen del rastreo (`report.rs`)
 
 crawl_finished = Tarama tamamlandı: { $urls } URL, { $secs } sn
@@ -262,6 +272,11 @@ portfolio_glance_title = Bir bakışta portföy
 th_site = site
 th_crawled = tarandı
 th_indexable = dizin.
+th_sev_critical = kritik
+th_sev_high = yüksek
+th_sev_medium = orta
+th_sev_low = düşük
+th_sev_info = bilgi
 flag_truncated = (kesildi)
 flag_list_mode = (liste taraması)
 flag_unfinished = (tamamlanmadı: { $status })

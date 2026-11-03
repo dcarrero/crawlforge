@@ -22,6 +22,16 @@ severity_word_medium = 中
 severity_word_low = 低
 severity_word_info = 情報
 
+## Non-indexability reasons
+
+reason_noindex = noindex
+reason_canonicalised = 正規化済み
+reason_robots = robots
+reason_redirect = リダイレクト
+reason_4xx = 4xx
+reason_5xx = 5xx
+reason_not_html = HTML 以外
+
 ## Resumen del rastreo (`report.rs`)
 
 crawl_finished = クロール完了: { $urls } URL、{ $secs } 秒
@@ -262,6 +272,11 @@ portfolio_glance_title = ポートフォリオの概要
 th_site = サイト
 th_crawled = クロール
 th_indexable = index可
+th_sev_critical = 重大
+th_sev_high = 高
+th_sev_medium = 中
+th_sev_low = 低
+th_sev_info = 情報
 flag_truncated = (打ち切り)
 flag_list_mode = (リストクロール)
 flag_unfinished = (未完了: { $status })

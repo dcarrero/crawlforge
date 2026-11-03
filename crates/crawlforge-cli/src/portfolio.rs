@@ -1009,36 +1009,50 @@ pub fn print_report(outcome: &PortfolioOutcome) {
     // 3. One line per site, worst first.
     println!();
     println!("{}", i18n::section(&msg::portfolio_glance_title(lang)));
-    // The severity columns keep their identifier abbreviations in every language, like the
-    // `--fail-on` tokens: they are column keys, not prose.
+    // The severity headers are translated: a person reads them and nothing parses this table
+    // (the panel has no JSON or CSV output). Each column is as wide as its header in the
+    // current language, five at least, so no translation has to be shortened to fit.
+    let sev_headers = severity_headers(lang);
+    let sev_widths: Vec<usize> = sev_headers.iter().map(|h| i18n::display_width(h).max(5)).collect();
+    let header_sev: Vec<String> =
+        sev_headers.iter().zip(&sev_widths).map(|(h, w)| i18n::pad_left(h, *w)).collect();
     println!(
-        "  {} {} {:>5} {:>5} {:>5} {:>5} {:>5}  {}  {}",
+        "  {} {} {}  {}  {}",
         i18n::pad_left(&msg::label_urls(lang), 9),
         i18n::pad_left(&msg::th_indexable(lang), 7),
-        "crit",
-        "high",
-        "med",
-        "low",
-        "info",
+        header_sev.join(" "),
         i18n::pad(&msg::th_crawled(lang), 10),
         msg::th_site(lang),
     );
     for site in &outcome.sites {
         let flag = completeness_flag(site, lang).map(|f| format!("  {f}")).unwrap_or_default();
+        let counts: Vec<String> = site
+            .sev_counts
+            .iter()
+            .zip(&sev_widths)
+            .map(|(c, w)| i18n::pad_left(&n(*c), *w))
+            .collect();
         println!(
-            "  {:>9} {:>7} {:>5} {:>5} {:>5} {:>5} {:>5}  {:<10}  {}{}",
+            "  {:>9} {:>7} {}  {:<10}  {}{}",
             n(site.urls_total),
             n(site.indexable),
-            n(site.sev_counts[0]),
-            n(site.sev_counts[1]),
-            n(site.sev_counts[2]),
-            n(site.sev_counts[3]),
-            n(site.sev_counts[4]),
+            counts.join(" "),
             day_of(&site.started_at),
             site.label,
             flag,
         );
     }
+}
+
+/// The five severity column headers, most severe first, in the order of `sev_counts`.
+fn severity_headers(lang: crawlforge_rules::Lang) -> [String; 5] {
+    [
+        msg::th_sev_critical(lang),
+        msg::th_sev_high(lang),
+        msg::th_sev_medium(lang),
+        msg::th_sev_low(lang),
+        msg::th_sev_info(lang),
+    ]
 }
 
 /// The panel as Markdown — the same content as the terminal, in the shape that gets pasted
@@ -1158,11 +1172,12 @@ pub fn markdown(outcome: &PortfolioOutcome, lang: crawlforge_rules::Lang) -> Str
 
     s.push_str(&format!("## {}\n\n", msg::portfolio_glance_title(lang)));
     s.push_str(&format!(
-        "| {} | {} | {} | crit | high | med | low | info | {} |\n\
+        "| {} | {} | {} | {} | {} |\n\
          |---|---:|---:|---:|---:|---:|---:|---:|---|\n",
         msg::th_site(lang),
         msg::label_urls(lang),
         msg::th_indexable(lang),
+        severity_headers(lang).join(" | "),
         msg::th_crawled(lang),
     ));
     for site in &outcome.sites {
@@ -1885,6 +1900,9 @@ mod tests {
         let md_es = markdown(&outcome, Lang::Es);
         assert!(md_es.contains("1 de 2 sitios (1 no concluyente)"), "{md_es}");
         assert!(md_es.contains("(truncado)"), "{md_es}");
+        // The severity headers are for a person, so they follow --lang; English is unchanged.
+        assert!(md.contains("| crit | high | med | low | info |"), "{md}");
+        assert!(md_es.contains("| crít. | alto | medio | bajo | info |"), "{md_es}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

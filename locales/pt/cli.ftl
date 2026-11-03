@@ -23,6 +23,16 @@ severity_word_medium = média
 severity_word_low = baixa
 severity_word_info = info
 
+## Non-indexability reasons
+
+reason_noindex = noindex
+reason_canonicalised = canonicalizada
+reason_robots = robots
+reason_redirect = redirecionamento
+reason_4xx = 4xx
+reason_5xx = 5xx
+reason_not_html = não é HTML
+
 ## Resumen del rastreo (`report.rs`)
 
 crawl_finished = Rastreamento concluído: { $urls ->
@@ -342,6 +352,11 @@ portfolio_glance_title = Visão geral do portfólio
 th_site = site
 th_crawled = rastreado
 th_indexable = index.
+th_sev_critical = crít.
+th_sev_high = alta
+th_sev_medium = média
+th_sev_low = baixa
+th_sev_info = info
 flag_truncated = (truncado)
 flag_list_mode = (rastreamento de lista)
 flag_unfinished = (não terminou: { $status })

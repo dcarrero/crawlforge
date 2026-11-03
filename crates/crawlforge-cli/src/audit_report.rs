@@ -625,7 +625,7 @@ fn markdown(conn: &Connection, lang: Lang, store: &Path, config: &Applied) -> Re
     }
 
     s.push_str(&format!("| {} | {} |\n|---|---:|\n", msg::th_metric(lang), msg::th_value(lang)));
-    s.push_str(&format!("| URLs | {} |\n", n(tot.urls)));
+    s.push_str(&format!("| {} | {} |\n", msg::label_urls(lang), n(tot.urls)));
     s.push_str(&format!("| {} | {} |\n", msg::row_pages(lang), n(tot.paginas)));
     s.push_str(&format!("| {} | {} |\n", msg::row_indexable(lang), n(tot.indexables)));
     s.push_str(&format!("| {} | {} |\n\n", msg::row_errors_4xx_5xx(lang), n(tot.errores)));
@@ -802,6 +802,15 @@ fn inline(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_summary_table_labels_follow_the_language() {
+        // «| URLs |» was written in English whatever --lang said.
+        let (_d, path) = store_de_prueba(false);
+        let md = render(&path, "md", Lang::Tr, None).expect("report");
+        assert!(md.contains("| URL'ler |"), "{md}");
+        assert!(!md.contains("| URLs |"), "{md}");
+    }
 
     #[test]
     fn the_template_headline_groups_its_counts() {

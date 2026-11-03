@@ -218,6 +218,36 @@ pub fn severity_word(lang: Lang, db_value: &str) -> String {
     format(lang, key, &[])
 }
 
+/// Por qué una página no es indexable, para pantalla, desde el valor de
+/// `pages.indexability_reason`. El valor guardado no cambia —los exports y `stats` lo escriben
+/// tal cual, porque se filtran y se cruzan—; lo que se traduce es lo que lee una persona en
+/// `report` e `inspect`. Un valor desconocido se enseña tal cual, como en [`severity_word`].
+pub fn indexability_reason(lang: Lang, db_value: &str) -> String {
+    let key = match db_value {
+        "noindex" => "reason_noindex",
+        "canonicalised" => "reason_canonicalised",
+        "robots" => "reason_robots",
+        "redirect" => "reason_redirect",
+        "4xx" => "reason_4xx",
+        "5xx" => "reason_5xx",
+        "not_html" => "reason_not_html",
+        _ => return db_value.to_string(),
+    };
+    format(lang, key, &[])
+}
+
+/// Las claves de [`indexability_reason`], para los tests.
+#[cfg(test)]
+const REASON_KEYS: [&str; 7] = [
+    "reason_noindex",
+    "reason_canonicalised",
+    "reason_robots",
+    "reason_redirect",
+    "reason_4xx",
+    "reason_5xx",
+    "reason_not_html",
+];
+
 /// Las claves de `cli.ftl` que no declara [`messages!`] sino las funciones de arriba.
 #[cfg(test)]
 const SEVERITY_KEYS: [&str; 10] = [
@@ -513,9 +543,10 @@ pub mod msg {
 
         // ── Panel de cartera (`portfolio.rs`) ────────────────────────────────────
         //
-        // Los IDs de regla, las severidades usadas como token (`crit`, `high`…), las rutas, las
-        // fechas y las versiones no se traducen: son datos e identificadores, como en el resto
-        // de la CLI.
+        // Los IDs de regla, las rutas, las fechas y las versiones no se traducen: son datos e
+        // identificadores, como en el resto de la CLI. Las cabeceras de severidad de la tabla
+        // sí (`th_sev_*`): las lee una persona y ninguna máquina las analiza —el panel no tiene
+        // salida JSON ni CSV—, a diferencia de los tokens de `--fail-on`.
         portfolio_title();
         portfolio_range(oldest, newest);
         // Trap 3.3: crawls weeks apart are not a snapshot of the portfolio, and "what
@@ -548,6 +579,13 @@ pub mod msg {
         th_site();
         th_crawled();
         th_indexable();
+        // The severity columns of the at-a-glance table, abbreviated: five of them share a
+        // line with the URL counts. Display only; `--fail-on` keeps its English tokens.
+        th_sev_critical();
+        th_sev_high();
+        th_sev_medium();
+        th_sev_low();
+        th_sev_info();
         flag_truncated();
         flag_list_mode();
         flag_unfinished(status);
@@ -950,13 +988,14 @@ mod tests {
     // entrada, una variable que no coincide o una traducción a medias. Listan todos los
     // problemas de una vez, con fichero y clave, para que quien traduce tenga la lista entera.
 
-    /// Todo lo que el código pide a `cli.ftl`: el macro, las funciones con plural y la severidad.
+    /// Todo lo que el código pide a `cli.ftl`: el macro, las funciones con plural, la severidad y
+    /// los motivos de no indexabilidad.
     fn declared() -> Vec<(&'static str, Vec<&'static str>)> {
         msg::DECLARED
             .iter()
             .chain(msg::HAND_WRITTEN)
             .map(|(k, a)| (*k, a.to_vec()))
-            .chain(SEVERITY_KEYS.iter().map(|k| (*k, Vec::new())))
+            .chain(SEVERITY_KEYS.iter().chain(&REASON_KEYS).map(|k| (*k, Vec::new())))
             .collect()
     }
 

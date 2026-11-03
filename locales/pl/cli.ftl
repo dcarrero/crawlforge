@@ -26,6 +26,16 @@ severity_word_medium = średnia
 severity_word_low = niska
 severity_word_info = info
 
+## Non-indexability reasons
+
+reason_noindex = noindex
+reason_canonicalised = inny adres kanoniczny
+reason_robots = robots
+reason_redirect = przekierowanie
+reason_4xx = 4xx
+reason_5xx = 5xx
+reason_not_html = nie HTML
+
 ## Resumen del rastreo (`report.rs`)
 
 crawl_finished = Skanowanie zakończone: { $urls ->
@@ -397,6 +407,11 @@ portfolio_glance_title = Portfolio w skrócie
 th_site = witryna
 th_crawled = data skanu
 th_indexable = indeks.
+th_sev_critical = kryt.
+th_sev_high = wys.
+th_sev_medium = śr.
+th_sev_low = niska
+th_sev_info = info
 flag_truncated = (przerwane)
 flag_list_mode = (skanowanie listy)
 flag_unfinished = (nieukończone: { $status })
