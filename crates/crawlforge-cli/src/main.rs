@@ -931,7 +931,7 @@ async fn run_and_report(mut job: CrawlJob, store: &Path, opts: RunOptions) -> Re
     };
     let lang = crawlforge_cli::i18n::current_lang();
     println!("{}", msg::crawling(lang, &target));
-    println!("File:     {}", store.display());
+    println!("{}", msg::file_line(lang, store.display().to_string()));
 
     // Re-rastrear no destruye el rastreo anterior: se aparta como `.prev.sqlite`, que es
     // justo el «antes» que `diff` necesita tras un despliegue. Ver [`rotate_previous_store`].
@@ -1074,7 +1074,7 @@ async fn run_resume(store: &Path, csv: Option<PathBuf>) -> Result<()> {
     let lang = crawlforge_cli::i18n::current_lang();
 
     println!("{}", msg::resuming(lang, &info.base_url));
-    println!("File:     {}", store.display());
+    println!("{}", msg::file_line(lang, store.display().to_string()));
     println!(
         "{}",
         msg::resume_counts(
