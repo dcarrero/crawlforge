@@ -23,6 +23,8 @@
 //! one site rule, with their meta, their evaluation and their tests.
 
 use rusqlite::Connection;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 pub mod asset;
 pub mod canon;
@@ -30,6 +32,7 @@ pub mod content;
 pub mod hreflang;
 pub mod http;
 pub mod index;
+pub mod l10n;
 pub mod link;
 pub mod meta;
 pub mod social;
@@ -40,6 +43,7 @@ pub mod social;
 mod test_schema;
 
 pub use index::{deep_page_shape, DeepPageShape};
+pub use l10n::Lang;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -154,8 +158,10 @@ pub struct Reference {
 /// Everything known about a rule without evaluating it.
 ///
 /// Kept separate from the implementation so the CLI and the UIs can list the catalog, and so
-/// the texts live **in the crate** and not in each interface: if a rule's name lived in the
-/// macOS app, Windows and the CLI would say different things.
+/// the texts live **with the crate** and not in each interface: if a rule's name lived in the
+/// macOS app, Windows and the CLI would say different things. The name and description are in
+/// `locales/<lang>/rules.ftl`, one message per rule ID; [`RuleMeta::name`] and
+/// [`RuleMeta::description`] read them.
 #[derive(Debug, Clone, Copy)]
 pub struct RuleMeta {
     /// `CATEGORY-SUBJECT-CONDITION`, in English and stable forever.
@@ -164,55 +170,47 @@ pub struct RuleMeta {
     pub category: Category,
     pub min_tier: Tier,
     pub scope: Scope,
-    /// Short name, for a table column.
-    pub name_es: &'static str,
-    pub name_en: &'static str,
-    /// What it is and why it matters. It is what the user reads to decide whether to act on it.
-    pub desc_es: &'static str,
-    pub desc_en: &'static str,
     pub references: &'static [Reference],
 }
 
+/// `locales/<lang>/rules.ftl`, embedded.
+pub static RULE_TEXTS: l10n::Catalog = l10n::Catalog::new(locale_sources!("rules.ftl"));
+
+/// Name and description of every rule in one language, formatted once per process.
+///
+/// `&'static str` and not `String` so the API did not change when the texts left the struct,
+/// and so a report that names the rule of every finding does not allocate per row. The strings
+/// are leaked on purpose: at most 10 languages × the catalog, a few hundred kilobytes formatted
+/// once — the same memory the old `&'static` fields took, just filled at run time.
+fn rule_texts(lang: Lang) -> &'static HashMap<&'static str, (&'static str, &'static str)> {
+    static TABLES: [OnceLock<HashMap<&'static str, (&'static str, &'static str)>>; 10] =
+        [const { OnceLock::new() }; 10];
+    TABLES[lang.index()].get_or_init(|| {
+        let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+        catalog()
+            .into_iter()
+            .map(|m| {
+                // Never empty: a missing text falls back to English, and if English lacked it too
+                // (the tests rule that out) the ID is still better than a blank cell.
+                let name = RULE_TEXTS.format(lang, m.id, None, None).unwrap_or_else(|| m.id.to_string());
+                let desc = RULE_TEXTS
+                    .format(lang, m.id, Some("description"), None)
+                    .unwrap_or_else(|| m.id.to_string());
+                (m.id, (leak(name), leak(desc)))
+            })
+            .collect()
+    })
+}
+
 impl RuleMeta {
+    /// Short name, for a table column.
     pub fn name(&self, lang: Lang) -> &'static str {
-        match lang {
-            Lang::Es => self.name_es,
-            Lang::En => self.name_en,
-        }
+        rule_texts(lang).get(self.id).map_or(self.id, |t| t.0)
     }
 
+    /// What it is and why it matters. It is what the user reads to decide whether to act on it.
     pub fn description(&self, lang: Lang) -> &'static str {
-        match lang {
-            Lang::Es => self.desc_es,
-            Lang::En => self.desc_en,
-        }
-    }
-}
-
-/// Catalog languages.
-///
-/// **English is the source language and Spanish a translation**, not the other way around: it
-/// is the order the product ships in, and it decides which text wins when the two disagree.
-///
-/// Both exist from day one, not as a retrofit. When a third language comes in, the `name_*` and
-/// `desc_*` fields of [`RuleMeta`] will stop working —you cannot add a pair of fields per
-/// language to fifty rules— and the texts will have to move to a separate catalog indexed by
-/// language. The [`RuleMeta::name`] and [`RuleMeta::description`] API is already shaped so that
-/// change goes unnoticed outside this crate.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Lang {
-    #[default]
-    En,
-    Es,
-}
-
-impl Lang {
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "es" | "es-es" | "spanish" | "español" => Some(Self::Es),
-            "en" | "en-us" | "en-gb" | "english" => Some(Self::En),
-            _ => None,
-        }
+        rule_texts(lang).get(self.id).map_or(self.id, |t| t.1)
     }
 }
 
@@ -762,17 +760,46 @@ mod tests {
     }
 
     #[test]
-    fn every_rule_has_texts_in_both_languages() {
+    fn the_english_file_names_every_rule_and_nothing_else() {
+        // English is the source: every rule needs its name and description there, and a text
+        // for a rule that no longer exists is a leftover a translator would waste time on.
+        let en = RULE_TEXTS.source(Lang::En);
+        let mut ids = l10n::message_ids(en);
+        ids.sort();
+        let mut esperados: Vec<String> = catalog().iter().map(|m| m.id.to_string()).collect();
+        esperados.sort();
+        assert_eq!(ids, esperados, "locales/en/rules.ftl must have exactly one message per rule");
+        let problemas = l10n::check_translation("locales/en/rules.ftl", en, en);
+        assert!(problemas.is_empty(), "{}", problemas.join("\n"));
+    }
+
+    #[test]
+    fn every_translated_catalog_is_complete() {
+        // The test that replaces "an untranslated rule does not compile". A folder whose file
+        // has no messages is a language not translated yet (it falls back to English); one with
+        // messages must have all of them. Every problem is listed at once, by file and key.
+        let en = RULE_TEXTS.source(Lang::En);
+        let mut problemas = Vec::new();
+        for lang in Lang::ALL.into_iter().filter(|l| *l != Lang::En) {
+            let src = RULE_TEXTS.source(lang);
+            if l10n::has_messages(src) {
+                let file = format!("locales/{}/rules.ftl", lang.code());
+                problemas.extend(l10n::check_translation(&file, en, src));
+            }
+        }
+        assert!(problemas.is_empty(), "{} problem(s):\n{}", problemas.len(), problemas.join("\n"));
+    }
+
+    #[test]
+    fn every_rule_has_texts_in_every_translated_language() {
         // UI strings always go through the localization system, and the catalog is the first
-        // of those surfaces. An untranslated rule would show up in English inside the Spanish
-        // app, which is exactly what this project does not do.
-        for meta in catalog() {
-            for (lang, nombre, desc) in [
-                (Lang::Es, meta.name_es, meta.desc_es),
-                (Lang::En, meta.name_en, meta.desc_en),
-            ] {
-                assert!(!nombre.trim().is_empty(), "{} has no name in {:?}", meta.id, lang);
-                assert!(!desc.trim().is_empty(), "{} has no description in {:?}", meta.id, lang);
+        // of those surfaces. Spanish is translated from day one and must stay so.
+        assert!(RULE_TEXTS.is_translated(Lang::Es), "Spanish must not lose its catalog");
+        for lang in Lang::ALL.into_iter().filter(|l| RULE_TEXTS.is_translated(*l)) {
+            for meta in catalog() {
+                let nombre = meta.name(lang);
+                let desc = meta.description(lang);
+                assert!(!nombre.trim().is_empty() && nombre != meta.id, "{} has no name in {:?}", meta.id, lang);
                 assert!(
                     desc.trim().chars().count() > 20,
                     "the description of {} in {:?} explains nothing: {:?}",
@@ -780,6 +807,27 @@ mod tests {
                     lang,
                     desc
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn the_spanish_catalog_is_not_the_english_one_copied() {
+        let iguales: Vec<&str> = catalog()
+            .iter()
+            .filter(|m| m.description(Lang::Es) == m.description(Lang::En))
+            .map(|m| m.id)
+            .collect();
+        assert!(iguales.is_empty(), "descriptions identical in English and Spanish: {iguales:?}");
+    }
+
+    #[test]
+    fn an_untranslated_language_reads_the_english_catalog() {
+        // Until a translator fills `locales/<lang>/rules.ftl`, that language shows English
+        // rather than an empty cell.
+        for lang in Lang::ALL.into_iter().filter(|l| !RULE_TEXTS.is_translated(*l)) {
+            for meta in catalog() {
+                assert_eq!(meta.name(lang), meta.name(Lang::En), "{lang:?}");
             }
         }
     }
@@ -817,7 +865,8 @@ mod tests {
         assert_eq!(Lang::parse("es"), Some(Lang::Es));
         assert_eq!(Lang::parse("ES-es"), Some(Lang::Es));
         assert_eq!(Lang::parse("en"), Some(Lang::En));
-        assert_eq!(Lang::parse("fr"), None);
+        assert_eq!(Lang::parse("fr"), Some(Lang::Fr));
+        assert_eq!(Lang::parse("klingon"), None);
     }
 
     #[test]

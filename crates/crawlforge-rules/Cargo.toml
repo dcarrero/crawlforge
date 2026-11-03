@@ -12,3 +12,5 @@ serde_json.workspace = true
 thiserror.workspace = true
 rusqlite.workspace = true
 xxhash-rust.workspace = true
+fluent-bundle.workspace = true
+fluent-syntax.workspace = true

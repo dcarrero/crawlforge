@@ -33,14 +33,6 @@ pub static HREFLANG_NO_SELF: RuleMeta = RuleMeta {
     category: Category::Hreflang,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Hreflang sin autorreferencia",
-    name_en: "Hreflang without self-reference",
-    desc_es: "La página declara alternativas de idioma pero ninguna apunta a ella misma. Google \
-              exige que cada página del conjunto se incluya a sí misma; si falta, descarta el \
-              grupo entero y ninguna de las traducciones se beneficia de las demás.",
-    desc_en: "The page declares language alternates but none points to itself. Google requires \
-              every page in the set to include itself; when that link is missing it discards the \
-              whole group and none of the translations benefit from the others.",
     references: &[],
 };
 
@@ -50,14 +42,6 @@ pub static HREFLANG_NOT_RECIPROCAL: RuleMeta = RuleMeta {
     category: Category::Hreflang,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Hreflang sin reciprocidad",
-    name_en: "Hreflang not reciprocal",
-    desc_es: "Esta página declara una alternativa de idioma que no la declara de vuelta. Las \
-              anotaciones hreflang son votos que solo cuentan si son mutuos: Google ignora la \
-              relación entera cuando uno de los dos lados no confirma al otro.",
-    desc_en: "This page declares a language alternate that does not declare it back. Hreflang \
-              annotations are votes that only count when they are mutual: Google ignores the \
-              whole relationship when one of the two sides does not confirm the other.",
     references: &[],
 };
 
@@ -67,16 +51,6 @@ pub static HREFLANG_INVALID_CODE: RuleMeta = RuleMeta {
     category: Category::Hreflang,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Código hreflang no válido",
-    name_en: "Invalid hreflang code",
-    desc_es: "El valor del atributo no es un idioma ISO 639-1 con región ISO 3166-1 opcional ni \
-              el especial x-default. Google descarta en silencio la anotación mal escrita, así \
-              que el conjunto queda incompleto sin que nada lo avise: es el fallo más frecuente \
-              y el más difícil de ver a ojo.",
-    desc_en: "The attribute value is neither an ISO 639-1 language with an optional ISO 3166-1 \
-              region nor the special x-default. Google silently discards a malformed annotation, \
-              so the set is left incomplete with no warning: it is the most frequent failure and \
-              the hardest one to spot by eye.",
     references: &[],
 };
 
@@ -86,14 +60,6 @@ pub static HREFLANG_TO_4XX: RuleMeta = RuleMeta {
     category: Category::Hreflang,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Hreflang a URL con error",
-    name_en: "Hreflang to error URL",
-    desc_es: "Una alternativa de idioma apunta a una URL que devuelve 4xx. La traducción que la \
-              página promete no existe: el visitante que cambia de idioma aterriza en un error y \
-              Google saca del conjunto a la página que apunta ahí.",
-    desc_en: "A language alternate points to a URL that returns 4xx. The translation the page \
-              promises does not exist: a visitor switching language lands on an error page and \
-              Google drops the referring page from the set.",
     references: &[],
 };
 
@@ -103,18 +69,6 @@ pub static HREFLANG_LANG_MISMATCH: RuleMeta = RuleMeta {
     category: Category::Hreflang,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Hreflang propio en otro idioma que la página",
-    name_en: "Self hreflang in another language than the page",
-    desc_es: "La anotación hreflang que apunta a la propia página declara un idioma distinto \
-              del que dice su `<html lang>`: una página en español que se anuncia como inglesa, \
-              por ejemplo. Una de las dos está mal, y si es el hreflang, Google ofrece la página \
-              a quien busca en el otro idioma. Suele ser un plugin de traducción que copia el \
-              conjunto de la página original sin cambiar el código.",
-    desc_en: "The hreflang annotation pointing at the page itself declares a different language \
-              from its `<html lang>`: a page in Spanish announcing itself as English, for \
-              example. One of the two is wrong, and if it is the hreflang, Google serves the page \
-              to people searching in the other language. It is usually a translation plugin that \
-              copies the original page's set without changing the code.",
     references: &[],
 };
 
@@ -124,16 +78,6 @@ pub static HREFLANG_SELF_ONLY: RuleMeta = RuleMeta {
     category: Category::Hreflang,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Hreflang sin alternativas",
-    name_en: "Hreflang with no alternates",
-    desc_es: "La página declara hreflang, pero todas las anotaciones apuntan a ella misma: no hay \
-              ninguna traducción en el conjunto, así que no hace nada. Si la página no tiene \
-              traducción, sobra; si la tiene, faltan sus enlaces, que es lo que de verdad hay que \
-              mirar: suele ser una traducción que el plugin dejó de vincular.",
-    desc_en: "The page declares hreflang, but every annotation points at the page itself: there \
-              is no translation in the set, so it does nothing. If the page has no translation, \
-              the annotation is unnecessary; if it does, its links are missing, and that is what \
-              really needs checking: it is usually a translation the plugin stopped linking.",
     references: &[],
 };
 

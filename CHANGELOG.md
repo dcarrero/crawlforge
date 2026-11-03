@@ -84,6 +84,16 @@ ones. The catalog has 71 rules.
 - **`portfolio` reads each site with its own stored configuration** and names the sites that
   have one, so a disabled rule does not read as a site without that problem.
 - Exports leave out the findings of disabled rules and write the overridden severity.
+- **Texts moved to Fluent files, ready for ten languages.** The CLI messages and the rule names
+  and descriptions now live in `locales/<lang>/cli.ftl` and `locales/<lang>/rules.ftl`, embedded
+  in the binary. `--lang` and `CRAWLFORGE_LANG` accept `en`, `es`, `de`, `fr`, `it`, `nl`, `tr`,
+  `pt`, `ja` and `pl` (with or without a region: `pt-BR`); a language not translated yet shows
+  English, numbers included. English and Spanish output is unchanged byte for byte. Plurals go
+  through CLDR plural rules, so a translation can have the forms its language needs (Polish has
+  four). Terminal tables align by display width, so Japanese text does not break the columns.
+  `rules --format json` and `rules.json` keep their shape; a language joins `name` and
+  `description` once its translation is complete. `CONTRIBUTING.md` explains how to add or
+  improve a language.
 
 ## [0.19.0] — 2026-10-28
 

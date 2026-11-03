@@ -7,11 +7,11 @@
 //! la plantilla de `clap` («Usage», «Options») y sus errores de parseo («invalid value…») son
 //! ingleses y no se pueden localizar, así que el inglés es el único idioma en el que la CLI
 //! puede ser coherente de arriba abajo — y además es el idioma de origen del producto
-//! (`CONVENTIONS.md §4`: el español es una traducción, no la fuente). El español está disponible
-//! donde existe un canal real de localización: `rules --lang es` y `report --lang es`, cuyos
-//! textos salen del catálogo de reglas o de tablas de cadenas por idioma, nunca de literales
-//! sueltos. Ampliar `--lang` al resto de la salida es trabajo pendiente, no de
-//! este fichero.
+//! (`CONVENTIONS.md §4`: los demás idiomas son traducciones, no la fuente). Los otros idiomas
+//! están donde existe un canal real de localización: los subcomandos que leen un rastreo
+//! (`report`, `inspect`, `diff`, `portfolio`, `rules`) aceptan `--lang`, y todo lo demás sigue a
+//! `CRAWLFORGE_LANG`. Los textos salen de `locales/<idioma>/*.ftl`, nunca de literales sueltos;
+//! ver `i18n.rs`. La ayuda de `clap` y los errores de argumentos se quedan en inglés.
 
 mod export;
 mod report;
@@ -248,8 +248,9 @@ enum Command {
         /// `rules:` shows every finding. See docs/crawl-config.example.yaml.
         #[arg(long, value_name = "FILE")]
         config: Option<PathBuf>,
-        /// Report language. English is the original; `es` is available. Falls back to
-        /// CRAWLFORGE_LANG, then to English.
+        /// Report language. English is the original; also es, de, fr, it, nl, tr, pt,
+        /// ja, pl (one not translated yet shows English). Falls back to CRAWLFORGE_LANG, then to
+        /// English.
         #[arg(long)]
         lang: Option<String>,
     },
@@ -281,8 +282,9 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         config: Option<PathBuf>,
 
-        /// Card language. English is the original; `es` is available. Falls back to
-        /// CRAWLFORGE_LANG, then to English.
+        /// Card language. English is the original; also es, de, fr, it, nl, tr, pt,
+        /// ja, pl (one not translated yet shows English). Falls back to CRAWLFORGE_LANG, then to
+        /// English.
         #[arg(long)]
         lang: Option<String>,
     },
@@ -318,8 +320,9 @@ enum Command {
         /// Save the diff as a file, to open it later.
         #[arg(short, long)]
         out: Option<PathBuf>,
-        /// Diff language. English is the original; `es` is available. Falls back to
-        /// CRAWLFORGE_LANG, then to English.
+        /// Diff language. English is the original; also es, de, fr, it, nl, tr, pt,
+        /// ja, pl (one not translated yet shows English). Falls back to CRAWLFORGE_LANG, then to
+        /// English.
         #[arg(long)]
         lang: Option<String>,
         /// Rule IDs or severities that fail the command when they show up as new findings.
@@ -361,8 +364,9 @@ enum Command {
         /// site's own stored one (the default).
         #[arg(long, value_name = "FILE")]
         config: Option<PathBuf>,
-        /// Panel language. English is the original; `es` is available. Falls back to
-        /// CRAWLFORGE_LANG, then to English.
+        /// Panel language. English is the original; also es, de, fr, it, nl, tr, pt,
+        /// ja, pl (one not translated yet shows English). Falls back to CRAWLFORGE_LANG, then to
+        /// English.
         #[arg(long)]
         lang: Option<String>,
     },
@@ -371,8 +375,9 @@ enum Command {
         /// A rule ID from a report, e.g. CANON-CHAIN: shows that rule's full record.
         /// Without it, the whole catalog is listed.
         id: Option<String>,
-        /// Language for rule names and descriptions. English is the original; `es` is
-        /// available. Falls back to CRAWLFORGE_LANG, then to English.
+        /// Language for rule names and descriptions. English is the original; also es, de, fr,
+        /// it, nl, tr, pt, ja, pl (one not translated yet shows English). Falls back to
+        /// CRAWLFORGE_LANG, then to English.
         #[arg(long)]
         lang: Option<String>,
         /// Show a single category: meta, http, canonical, content, asset…
@@ -382,7 +387,7 @@ enum Command {
         #[arg(long)]
         detail: bool,
         /// `table` to read it here, or `json` for CI and integrations: the whole record of
-        /// every rule, with names and descriptions in both languages.
+        /// every rule, with names and descriptions in every translated language.
         #[arg(short, long, default_value = "table")]
         format: String,
     },
@@ -724,7 +729,7 @@ async fn main() -> Result<()> {
                 .context("the portfolio panel could not be generated")
         }
         Command::Rules { id, category, detail, format, .. } => match format.as_str() {
-            // JSON carries both languages at once — the consumer picks. `--lang` governs the
+            // JSON carries every translated language at once — the consumer picks. `--lang` governs the
             // human formats only, which is why it is not passed down here.
             "json" => rules::print_json(id.as_deref(), category.as_deref()),
             "table" => match id {

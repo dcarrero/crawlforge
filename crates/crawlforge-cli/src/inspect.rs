@@ -454,7 +454,8 @@ impl Writer<'_> {
     fn kv(&mut self, label: &str, value: &str) -> Result<()> {
         match self.format {
             // 19 y no 18: la etiqueta más larga del catálogo («Tiempo de respuesta») mide 19.
-            Format::Terminal => writeln!(self.s, "  {label:<19} {value}")?,
+            // En columnas de terminal, para que una etiqueta japonesa no descuadre el valor.
+            Format::Terminal => writeln!(self.s, "  {} {value}", i18n::pad(label, 19))?,
             Format::Md => writeln!(self.s, "- **{label}**: {value}")?,
         }
         Ok(())
@@ -676,8 +677,8 @@ fn findings_section(
             .unwrap_or_default();
         let veces = if cuantos > 1 { format!(" ×{cuantos}") } else { String::new() };
         w.item(&format!(
-            "{:<9} {rule:<26} {nombre}{veces}",
-            i18n::severity_word(lang, &severity)
+            "{} {rule:<26} {nombre}{veces}",
+            i18n::pad(&i18n::severity_word(lang, &severity), 9)
         ))?;
     }
     if let Some(note) = rules.note(lang) {
@@ -797,8 +798,8 @@ fn print_link_lines(
         }
         let texto = match kind {
             LinkListKind::Inlinks => format!(
-                "{:<8} {ancla}{marcas} — {}",
-                region_word(&linea.region, lang),
+                "{} {ancla}{marcas} — {}",
+                i18n::pad(&region_word(&linea.region, lang), 8),
                 sanitize(&linea.url)
             ),
             LinkListKind::Outlinks => {

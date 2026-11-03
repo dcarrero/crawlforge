@@ -24,14 +24,6 @@ pub static SOCIAL_OG_MISSING: RuleMeta = RuleMeta {
     category: Category::Social,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Open Graph incompleto",
-    name_en: "Incomplete Open Graph",
-    desc_es: "Falta og:title, og:description u og:image. Cuando alguien comparte la página en \
-              WhatsApp, LinkedIn o Slack, la red no puede montar la tarjeta y el enlace aparece \
-              como una URL desnuda: no afecta al posicionamiento, pero se pierde el clic.",
-    desc_en: "og:title, og:description or og:image is missing. When someone shares the page on \
-              WhatsApp, LinkedIn or Slack the network cannot build the preview card and the link \
-              shows up as a bare URL: it does not affect ranking, but the click is lost.",
     references: &[],
 };
 
@@ -41,18 +33,6 @@ pub static SOCIAL_OG_IMAGE_BROKEN: RuleMeta = RuleMeta {
     category: Category::Social,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Imagen Open Graph que no carga",
-    name_en: "Broken Open Graph image",
-    desc_es: "La imagen declarada en og:image devuelve un error, directamente o al final de sus \
-              redirecciones. La etiqueta está y ninguna herramienta que solo lea el HTML lo \
-              nota, pero al compartir la página en WhatsApp, LinkedIn o Slack la tarjeta sale \
-              sin imagen, o con un hueco. Suele ser una imagen borrada de la biblioteca de \
-              medios o una ruta que no sobrevivió a una migración.",
-    desc_en: "The image declared in og:image returns an error, directly or at the end of its \
-              redirects. The tag is there and no tool that only reads the HTML notices, but when \
-              the page is shared on WhatsApp, LinkedIn or Slack the card shows no image, or an \
-              empty frame. It is usually an image deleted from the media library or a path that \
-              did not survive a migration.",
     references: &[],
 };
 

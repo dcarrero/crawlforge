@@ -24,15 +24,36 @@ cd ~/Desarrollos/proyectos/proyectos-mini/crawlforge
 cargo build --release -p crawlforge-cli && cp target/release/crawlforge ~/.cargo/bin/
 ```
 
-**The tool's output is in English.** That is the source language; Spanish exists where there is
-real text to translate — the rule catalog and the reports — and you ask for it with `--lang es`:
+**The tool's output is in English.** That is the source language; the others are translations,
+and you ask for one with `--lang` on the commands that read a crawl (`report`, `inspect`, `diff`,
+`portfolio`, `rules`):
 
 ```bash
 crawlforge rules  --lang es
 crawlforge report crawl.sqlite --lang es
 ```
 
-To avoid repeating it on every command, in your `~/.zshrc`:
+| `--lang` | Language |
+|---|---|
+| `en` | English — the default and the source |
+| `es` | Spanish |
+| `de` | German |
+| `fr` | French |
+| `it` | Italian |
+| `nl` | Dutch |
+| `tr` | Turkish |
+| `pt` | Portuguese |
+| `ja` | Japanese |
+| `pl` | Polish |
+
+A region or encoding is accepted and ignored (`pt-BR`, `es_ES.UTF-8`): there is one Portuguese,
+one Spanish. A language whose translation has not been written yet is accepted and shows English
+— numbers included — until it is; an unknown value is an error that lists these codes. Help
+texts (`--help`) and argument errors are always in English.
+
+To avoid repeating it on every command, in your `~/.zshrc`. The variable also sets the language
+of `crawl`, `audit` and `list`, which have no `--lang`; an unknown value there is ignored and the
+output stays in English:
 
 ```bash
 export CRAWLFORGE_LANG=es
@@ -283,12 +304,13 @@ crawlforge rules --lang es                    # the whole catalog, as a table
 crawlforge rules INDEX-ORPHAN-PAGE            # one rule's card, by its ID
 crawlforge rules --lang es --category canonical
 crawlforge rules --lang es --detail           # with each rule's full explanation
-crawlforge rules --format json                # the whole catalog as data, both languages
+crawlforge rules --format json                # the whole catalog as data, every language
 ```
 
 The JSON is for anything that consumes the catalog as data — a CI script checking that a
 rule ID still exists, or a page generated from the catalog instead of copying it. It always
-carries both languages, and its envelope states the catalog version and the rule count.
+carries every translated language (`name.en`, `name.es`…; English and Spanish always, the others
+once translated), and its envelope states the catalog version and the rule count.
 
 ---
 

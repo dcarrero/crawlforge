@@ -55,17 +55,6 @@ pub static ASSET_IMG_NO_ALT: RuleMeta = RuleMeta {
     category: Category::Asset,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Imagen sin atributo alt",
-    name_en: "Image without alt attribute",
-    desc_es: "Hay imágenes sin atributo `alt`. El lector de pantalla no tiene nada que leer y \
-              acaba deletreando el nombre del fichero, y Google pierde el único texto que \
-              describe la imagen: es lo que la posiciona en la búsqueda de imágenes y lo que se \
-              muestra cuando la foto no carga. Un `alt=\"\"` vacío sí es válido, pero solo para \
-              imágenes decorativas.",
-    desc_en: "Some images have no `alt` attribute. A screen reader has nothing to read and ends \
-              up spelling out the file name, and Google loses the only text describing the \
-              image: it is what ranks it in image search and what shows up when the picture \
-              fails to load. An empty `alt=\"\"` is valid, but only for decorative images.",
     references: &[],
 };
 
@@ -75,18 +64,6 @@ pub static ASSET_IMG_EMPTY_ALT_LINK: RuleMeta = RuleMeta {
     category: Category::Asset,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Enlace con una sola imagen de alt vacío",
-    name_en: "Link with only an empty-alt image",
-    desc_es: "Un enlace cuyo único contenido es una imagen con `alt=\"\"` no tiene nombre \
-              accesible: quien navega con lector de pantalla oye «enlace» y nada más, y el \
-              buscador no recibe ninguna señal de a dónde lleva. El caso típico es el logotipo \
-              de la cabecera, que suele ser el enlace más repetido del sitio. Aquí el `alt` no \
-              es decorativo: es el texto del enlace.",
-    desc_en: "A link whose only content is an image with `alt=\"\"` has no accessible name: \
-              someone using a screen reader hears «link» and nothing else, and the search engine \
-              gets no signal about where it leads. The typical case is the header logo, usually \
-              the most repeated link on the site. Here the `alt` is not decorative: it is the \
-              link text.",
     references: &[],
 };
 
@@ -96,16 +73,6 @@ pub static ASSET_IMG_BROKEN: RuleMeta = RuleMeta {
     category: Category::Asset,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Imagen que no carga",
-    name_en: "Broken image",
-    desc_es: "Una imagen a la que apunta el sitio devuelve 4xx o 5xx. El hueco se ve en la \
-              página, la imagen no existe para la búsqueda de imágenes y cada visita gasta una \
-              petición en un error. Casi siempre es una migración que no se llevó la carpeta de \
-              subidas, o una ruta escrita a mano.",
-    desc_en: "An image the site points to returns 4xx or 5xx. The gap shows on the page, the \
-              image does not exist for image search, and every visit spends a request on an \
-              error. It is almost always a migration that left the uploads folder behind, or a \
-              hand-written path.",
     references: &[],
 };
 
@@ -115,16 +82,6 @@ pub static ASSET_IMG_HEAVY: RuleMeta = RuleMeta {
     category: Category::Asset,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Imagen demasiado pesada",
-    name_en: "Oversized image",
-    desc_es: "La imagen supera los 200 KB. Es la causa más frecuente de un LCP malo en móvil: \
-              retrasa la pintura del elemento principal y se come el ancho de banda de una \
-              conexión lenta. Suele bastar con exportarla al tamaño en que se muestra de verdad \
-              y servirla en WebP o AVIF.",
-    desc_en: "The image is over 200 KB. It is the most common cause of a poor mobile LCP: it \
-              delays painting the main element and eats the bandwidth of a slow connection. \
-              Exporting it at the size it is actually displayed and serving WebP or AVIF is \
-              usually enough.",
     references: &[],
 };
 
@@ -134,17 +91,6 @@ pub static ASSET_BROKEN: RuleMeta = RuleMeta {
     category: Category::Asset,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Hoja de estilo o script que no carga",
-    name_en: "Broken CSS or JS",
-    desc_es: "Un CSS o un JS del sitio devuelve 4xx o 5xx. Google renderiza la página para \
-              indexarla, así que una hoja de estilo ausente puede hacer que la vea sin maquetar \
-              —y por tanto no apta para móvil— y un script ausente puede dejar vacío el \
-              contenido que se pinta al hidratar. Es típico de un despliegue con los hashes de \
-              fichero desincronizados.",
-    desc_en: "A CSS or JS file on the site returns 4xx or 5xx. Google renders the page to index \
-              it, so a missing stylesheet can make it see an unstyled —hence not \
-              mobile-friendly— page, and a missing script can leave client-rendered content \
-              empty. It is typical of a deploy with mismatched file hashes.",
     references: &[],
 };
 
@@ -154,18 +100,6 @@ pub static ASSET_JS_HEAVY: RuleMeta = RuleMeta {
     category: Category::Asset,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Script demasiado pesado",
-    name_en: "Oversized script",
-    desc_es: "El script supera los 250 KB tal como se sirve. Cada página que lo carga paga su \
-              descarga y, sobre todo, el tiempo de analizarlo y ejecutarlo en el hilo principal, \
-              que es de donde sale una mala respuesta al primer toque en un móvil corriente. \
-              Suele ser un paquete que nadie ha dividido: mira qué parte hace falta en la \
-              primera pantalla y carga el resto aparte.",
-    desc_en: "The script is over 250 KB as delivered. Every page that loads it pays for the \
-              download and, more to the point, for parsing and executing it on the main thread, \
-              which is where poor responsiveness on an ordinary phone comes from. It is usually \
-              a bundle nobody has split: work out what is needed for the first screen and load \
-              the rest separately.",
     references: &[],
 };
 
@@ -175,16 +109,6 @@ pub static ASSET_CSS_HEAVY: RuleMeta = RuleMeta {
     category: Category::Asset,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Hoja de estilo demasiado pesada",
-    name_en: "Oversized stylesheet",
-    desc_es: "La hoja de estilo supera los 100 KB tal como se sirve. El navegador no pinta nada \
-              hasta tenerla, así que estos bytes cuestan más que los de un script: retrasan la \
-              primera pintura entera. El umbral es más bajo por eso. Casi siempre es un \
-              framework completo servido para usar una décima parte.",
-    desc_en: "The stylesheet is over 100 KB as delivered. The browser paints nothing until it \
-              has it, so these bytes cost more than a script's: they delay the whole first \
-              paint. That is why the bar is lower. It is nearly always a full framework shipped \
-              to use a tenth of it.",
     references: &[],
 };
 
@@ -194,16 +118,6 @@ pub static ASSET_IFRAME_BROKEN: RuleMeta = RuleMeta {
     category: Category::Asset,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Marco embebido que no carga",
-    name_en: "Broken embedded frame",
-    desc_es: "Un `<iframe>` de la página apunta a una URL propia que devuelve 4xx o 5xx, así que \
-              el visitante ve un hueco en blanco donde debería estar el mapa, el vídeo o el \
-              formulario. No deja rastro en la página que lo contiene —el HTML sigue siendo \
-              válido— y por eso pasa desapercibido durante meses.",
-    desc_en: "An `<iframe>` on the page points at a URL of yours returning 4xx or 5xx, so the \
-              visitor sees a blank hole where the map, the video or the form should be. It \
-              leaves no trace in the containing page —the HTML is still valid— which is why it \
-              goes unnoticed for months.",
     references: &[],
 };
 
@@ -213,20 +127,6 @@ pub static ASSET_FORM_BROKEN: RuleMeta = RuleMeta {
     category: Category::Asset,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Formulario que envía a una URL rota",
-    name_en: "Form posting to a broken URL",
-    desc_es: "El `action` de un formulario apunta a una URL propia que devuelve 4xx o 5xx. El \
-              formulario se ve bien, se rellena bien y se pierde al enviarlo: es de los pocos \
-              defectos que cuestan clientes directamente, y nadie se entera porque quien lo \
-              sufre se va sin avisar. Solo se comprueban los formularios que se envían por GET \
-              —un buscador, un filtro de catálogo—: comprobar un POST exigiría enviarlo, y esta \
-              herramienta no envía formularios.",
-    desc_en: "A form's `action` points at a URL of yours returning 4xx or 5xx. The form looks \
-              fine, fills in fine and is lost on submit: one of the few defects that costs \
-              customers outright, and nobody finds out, because whoever hits it leaves without \
-              saying so. Only forms submitted with GET are checked —a search box, a catalogue \
-              filter—: checking a POST would mean submitting it, and this tool does not submit \
-              forms.",
     references: &[],
 };
 

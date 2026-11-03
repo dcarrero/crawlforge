@@ -2,11 +2,11 @@
 //!
 //! Sirve para tres cosas: saber qué comprueba la herramienta antes de rastrear nada, tener los
 //! IDs a mano para `--fail-on` en un pipeline de CI, y comprobar que las traducciones existen.
-//! Los textos vienen del crate de reglas, no de aquí: si estuvieran en la CLI, la app de macOS
-//! diría otra cosa.
+//! Los textos vienen de `locales/<idioma>/rules.ftl` a través del crate de reglas, no de aquí:
+//! si estuvieran en la CLI, la app de macOS diría otra cosa.
 
 use anyhow::{bail, Result};
-use crawlforge_cli::i18n::msg;
+use crawlforge_cli::i18n::{self, msg};
 use crawlforge_rules::{catalog, Lang, RuleMeta, Scope, Severity, Tier};
 
 pub fn print_catalog(lang: Lang, categoria: Option<&str>, detalle: bool) -> Result<()> {
@@ -62,9 +62,11 @@ pub fn print_rule(lang: Lang, id: &str) -> Result<()> {
 /// website's rule reference is generated from this output instead of keeping a copy that
 /// would drift from the product.
 ///
-/// Both languages are always included and `--lang` is ignored on purpose: a pipeline that
-/// greps for a rule ID does not care, and a consumer that shows text picks its language from
-/// the payload. The envelope carries `rules_version` and `count` so a consumer can assert
+/// Every translated language is always included and `--lang` is ignored on purpose: a pipeline
+/// that greps for a rule ID does not care, and a consumer that shows text picks its language
+/// from the payload. A language enters `name` and `description` once its
+/// `locales/<lang>/rules.ftl` has messages, and the completeness test only lets a complete one
+/// in; until then it is absent, not filled with English. English and Spanish are always there. The envelope carries `rules_version` and `count` so a consumer can assert
 /// that what it generated matches the catalog it generated it from.
 ///
 /// The order is the reading order of the human formats — severity, then ID — so the same
@@ -108,14 +110,19 @@ fn catalog_json(id: Option<&str>, category: Option<&str>) -> Result<serde_json::
 }
 
 fn rule_json(meta: &RuleMeta) -> serde_json::Value {
+    let translated = || Lang::ALL.into_iter().filter(|l| crawlforge_rules::RULE_TEXTS.is_translated(*l));
+    let name: serde_json::Map<String, serde_json::Value> =
+        translated().map(|l| (l.code().to_string(), meta.name(l).into())).collect();
+    let description: serde_json::Map<String, serde_json::Value> =
+        translated().map(|l| (l.code().to_string(), meta.description(l).into())).collect();
     serde_json::json!({
         "id": meta.id,
         "severity": meta.severity,
         "category": meta.category,
         "scope": meta.scope,
         "min_tier": meta.min_tier,
-        "name": { "en": meta.name_en, "es": meta.name_es },
-        "description": { "en": meta.desc_en, "es": meta.desc_es },
+        "name": name,
+        "description": description,
         "references": meta.references.iter().map(|r| serde_json::json!({
             "standard": r.standard,
             "clause": r.clause,
@@ -138,22 +145,22 @@ fn category_names() -> Vec<&'static str> {
 /// inglés, dos idiomas en la misma pantalla.
 fn print_tabla(reglas: &[&'static RuleMeta], lang: Lang) {
     println!(
-        "{:<32} {:<9} {:<14} {:<7} {:<6} {}",
+        "{:<32} {} {} {} {} {}",
         "ID",
-        msg::th_severity(lang),
-        msg::th_category(lang),
-        msg::th_scope(lang),
-        msg::th_tier(lang),
+        i18n::pad(&msg::th_severity(lang), 9),
+        i18n::pad(&msg::th_category(lang), 14),
+        i18n::pad(&msg::th_scope(lang), 7),
+        i18n::pad(&msg::th_tier(lang), 6),
         msg::th_name(lang)
     );
     println!("{}", "─".repeat(110));
     for meta in reglas {
         println!(
-            "{:<32} {:<9} {:<14} {:<7} {:<6} {}",
+            "{:<32} {:<9} {:<14} {} {:<6} {}",
             meta.id,
             meta.severity.as_str(),
             meta.category.as_str(),
-            alcance(meta.scope, lang),
+            i18n::pad(&alcance(meta.scope, lang), 7),
             nivel(meta.min_tier),
             meta.name(lang),
         );
@@ -215,20 +222,43 @@ fn nivel(t: Tier) -> &'static str {
     }
 }
 
-/// Parte un texto en líneas sin cortar palabras. Cuenta caracteres, no bytes: en español el
-/// texto lleva tildes y un corte por bytes descuadraría la columna.
+/// Parte un texto en líneas sin cortar palabras. Cuenta columnas de terminal, no bytes: en
+/// español el texto lleva tildes y un corte por bytes descuadraría la columna.
+///
+/// Un japonés no separa las palabras con espacios: toda la descripción sería una sola «palabra»
+/// y saldría en una línea. Una palabra más ancha que la línea se corta por caracteres, que en
+/// japonés es un punto de corte válido; en inglés y en español no hay palabras de 92 columnas.
 fn envolver(texto: &str, ancho: usize) -> Vec<String> {
     let mut lineas = Vec::new();
     let mut actual = String::new();
+    let mut trozos = Vec::new();
     for palabra in texto.split_whitespace() {
-        let largo = actual.chars().count();
-        if largo > 0 && largo + 1 + palabra.chars().count() > ancho {
-            lineas.push(std::mem::take(&mut actual));
+        trozos.clear();
+        if i18n::display_width(palabra) > ancho {
+            let mut trozo = String::new();
+            for c in palabra.chars() {
+                let mut buf = [0u8; 4];
+                if i18n::display_width(&trozo) + i18n::display_width(c.encode_utf8(&mut buf)) > ancho {
+                    trozos.push(std::mem::take(&mut trozo));
+                }
+                trozo.push(c);
+            }
+            trozos.push(trozo);
+        } else {
+            trozos.push(palabra.to_string());
         }
-        if !actual.is_empty() {
-            actual.push(' ');
+        for (i, trozo) in trozos.iter().enumerate() {
+            let largo = i18n::display_width(&actual);
+            // Los trozos de una palabra partida van pegados: no hay espacio que poner entre ellos.
+            let sep = usize::from(i == 0 && largo > 0);
+            if largo > 0 && largo + sep + i18n::display_width(trozo) > ancho {
+                lineas.push(std::mem::take(&mut actual));
+            }
+            if i == 0 && !actual.is_empty() {
+                actual.push(' ');
+            }
+            actual.push_str(trozo);
         }
-        actual.push_str(palabra);
     }
     if !actual.is_empty() {
         lineas.push(actual);
@@ -246,6 +276,16 @@ mod tests {
         let lineas = envolver(texto, 20);
         assert!(lineas.iter().all(|l| l.chars().count() <= 20), "{lineas:?}");
         assert_eq!(lineas.join(" "), texto, "nothing is lost or duplicated");
+    }
+
+    #[test]
+    fn envolver_parte_el_japones_por_columnas() {
+        // Sin espacios, la descripción entera era una palabra y salía en una sola línea.
+        let texto = "ページはインデックス可能ですがタイトルがありません。";
+        let lineas = envolver(texto, 20);
+        assert!(lineas.len() > 1, "{lineas:?}");
+        assert!(lineas.iter().all(|l| i18n::display_width(l) <= 20), "{lineas:?}");
+        assert_eq!(lineas.concat(), texto, "nothing is lost or duplicated");
     }
 
     #[test]

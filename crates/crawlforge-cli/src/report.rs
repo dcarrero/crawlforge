@@ -357,18 +357,18 @@ pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()
     let links: i64 = conn.query_row("SELECT COUNT(*) FROM links", [], |r| r.get(0))?;
 
     println!(
-        "  {:<19}{:>12}  ({})",
-        msg::label_urls(lang),
+        "  {}{:>12}  ({})",
+        i18n::pad(&msg::label_urls(lang), 19),
         n(total),
         msg::note_internal(lang, n(internal))
     );
     println!(
-        "  {:<19}{:>12}  ({})",
-        msg::label_html_pages(lang),
+        "  {}{:>12}  ({})",
+        i18n::pad(&msg::label_html_pages(lang), 19),
         n(pages),
         msg::note_indexable(lang, n(indexable))
     );
-    println!("  {:<19}{:>12}", msg::label_links(lang), n(links));
+    println!("  {}{:>12}", i18n::pad(&msg::label_links(lang), 19), n(links));
 
     // Distribución de respuestas: códigos de estado, fallos y lo nunca pedido, por separado.
     let breakdown = response_breakdown(&conn)?;
@@ -390,8 +390,8 @@ pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()
         }
         if breakdown.no_response > 0 {
             println!(
-                "    {:<16} {:>10}  ({})",
-                msg::label_no_response(lang),
+                "    {} {:>10}  ({})",
+                i18n::pad(&msg::label_no_response(lang), 16),
                 n(breakdown.no_response),
                 msg::note_request_failed(lang)
             );
@@ -401,8 +401,8 @@ pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()
         // Fuera del cajón de los códigos de estado: a estas URLs nunca se les preguntó.
         println!();
         println!(
-            "  {:<19}{:>12}  {}",
-            msg::label_never_requested(lang),
+            "  {}{:>12}  {}",
+            i18n::pad(&msg::label_never_requested(lang), 19),
             n(breakdown.never_requested),
             msg::note_never_requested(lang)
         );
@@ -413,8 +413,8 @@ pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()
         // un misterio que el usuario resuelve con SQL.
         println!();
         println!(
-            "  {:<19}{:>12}  {}",
-            msg::label_out_of_scope(lang),
+            "  {}{:>12}  {}",
+            i18n::pad(&msg::label_out_of_scope(lang), 19),
             n(breakdown.out_of_scope),
             msg::note_out_of_scope(lang)
         );
@@ -624,8 +624,8 @@ fn findings_lines(
                 if rule == "INDEX-DEEP-PAGE" {
                     if let Some(f) = deep {
                         out.push(format!(
-                            "    {:<9} {rule:<24} {}",
-                            i18n::severity_word(lang, &severity),
+                            "    {} {rule:<24} {}",
+                            i18n::pad(&i18n::severity_word(lang, &severity), 9),
                             msg::deep_pages_summary(
                                 lang,
                                 n(f.pages),
@@ -640,16 +640,16 @@ fn findings_lines(
                     }
                 }
                 out.push(format!(
-                    "    {:<9} {rule:<24} {:>8}  ({})",
-                    i18n::severity_word(lang, &severity),
+                    "    {} {rule:<24} {:>8}  ({})",
+                    i18n::pad(&i18n::severity_word(lang, &severity), 9),
                     n(total),
                     msg::pervasive_note(lang, pct)
                 ));
                 continue;
             }
             out.push(format!(
-                "    {:<9} {rule:<24} {:>8}",
-                i18n::severity_word(lang, &severity),
+                "    {} {rule:<24} {:>8}",
+                i18n::pad(&i18n::severity_word(lang, &severity), 9),
                 n(total)
             ));
             continue;
@@ -663,15 +663,11 @@ fn findings_lines(
         // rastreo real están cada uno en ~540 páginas, pero son las mismas 567 páginas trece
         // veces, no 6.998.
         let collapsed = pages_in_groups(conn, &rule, &severity, &claves)?;
-        let mut texto = if template.len() == 1 {
-            msg::one_template_issue(lang, n(collapsed))
-        } else {
-            msg::n_template_issues(lang, template.len(), n(collapsed))
-        };
+        let mut texto = msg::template_issues(lang, template.len(), n(collapsed));
         if rest > 0 {
             texto.push_str(&msg::plus_more_findings(lang, n(rest)));
         }
-        out.push(format!("    {:<9} {rule:<24} {texto}", i18n::severity_word(lang, &severity)));
+        out.push(format!("    {} {rule:<24} {texto}", i18n::pad(&i18n::severity_word(lang, &severity), 9)));
 
         // Dos URLs del grupo mayor: con ellas se ve la plantilla sin abrir nada más. `groups`
         // viene ordenado por tamaño, así que el primero es el mayor.

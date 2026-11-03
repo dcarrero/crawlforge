@@ -62,6 +62,7 @@ inside the core, the design is wrong.
 | Export | `rust_xlsxwriter`, `csv` | |
 | Errors | `thiserror` in the core, `anyhow` in the CLI | |
 | Logs | `tracing` | |
+| Localisation | `fluent-bundle`, `fluent-syntax`; `unicode-width` | Texts in `locales/<lang>/*.ftl`, embedded. CLDR plurals; terminal columns by display width |
 
 **The stack is closed.** Adding a dependency for something solved in twenty lines is a decision
 with a cost: every crate is audit surface, compile time and a version to maintain. That is why the
@@ -82,8 +83,8 @@ but pending work.
 
 Spanish survives in two places, and in both it is product text, not engineering text:
 
-- The `name_es` and `desc_es` fields of the rule catalog, and the `i18n.rs` strings requested with
-  `--lang es`. That is what the end user reads.
+- `locales/es/` — the rule catalog (`rules.ftl`) and the CLI messages (`cli.ftl`) requested with
+  `--lang es`, like every other language folder under `locales/`. That is what the end user reads.
 - The **data** of a test: the string an `assert` compares against, a text that has to exceed
   seventy characters, the accented characters used to measure the width of a typeface. That is not
   prose, it is the test's input, and translating it breaks or weakens the test.

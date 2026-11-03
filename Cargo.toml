@@ -56,6 +56,15 @@ rand = "0.8"
 futures = "0.3"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 walkdir = "2"
+# Localización: los textos de la CLI y del catálogo de reglas viven en `locales/<idioma>/*.ftl`,
+# incrustados en el binario. `fluent-bundle` resuelve los plurales CLDR (el polaco tiene cuatro
+# formas, el japonés una) y la vuelta al inglés. `fluent-syntax` ya viene con él: se nombra
+# para recorrer el AST en el test de completitud y para saber si un idioma tiene traducción.
+# Razonamiento completo en `crawlforge-rules/src/l10n.rs`.
+fluent-bundle = "0.16"
+fluent-syntax = "0.12"
+# Ancho de columna en terminal: un ideograma japonés ocupa dos. Ya llegaba con `indicatif`.
+unicode-width = "0.2"
 
 # Miembros internos
 crawlforge-core = { path = "crates/crawlforge-core" }

@@ -8,14 +8,6 @@ pub static CONTENT_H1_MISSING: RuleMeta = RuleMeta {
     category: Category::Content,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Sin H1",
-    name_en: "Missing H1",
-    desc_es: "La página indexable no tiene H1, o lo tiene vacío. El H1 le dice al buscador de qué \
-              trata la página con las palabras del autor, y es el primer encabezado que anuncia \
-              un lector de pantalla al entrar en el contenido.",
-    desc_en: "The indexable page has no H1, or an empty one. The H1 tells the search engine what \
-              the page is about in the author's own words, and it is the first heading a screen \
-              reader announces when entering the content.",
     references: &[],
 };
 
@@ -25,18 +17,6 @@ pub static CONTENT_H1_MULTIPLE: RuleMeta = RuleMeta {
     category: Category::Content,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Varios H1",
-    name_en: "Multiple H1",
-    desc_es: "La página tiene más de un H1. HTML5 lo permite, pero deja de haber un tema \
-              principal: el buscador tiene que adivinar de qué trata la página y el lector de \
-              pantalla anuncia varios encabezados de nivel uno como si fueran documentos \
-              distintos. Casi siempre es la plantilla marcando el logotipo o el nombre del sitio \
-              como H1 además del titular.",
-    desc_en: "The page has more than one H1. HTML5 allows it, but there is no longer a single \
-              main topic: the search engine has to guess what the page is about, and a screen \
-              reader announces several level-one headings as if they were separate documents. It \
-              is usually the template marking the logo or the site name as an H1 on top of the \
-              real headline.",
     references: &[],
 };
 
@@ -46,16 +26,6 @@ pub static CONTENT_H1_EMPTY: RuleMeta = RuleMeta {
     category: Category::Content,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "H1 sin texto",
-    name_en: "Empty H1",
-    desc_es: "Hay un H1 en el marcado, pero no aporta texto: está vacío o su único contenido es \
-              una imagen que no dice nada. El encabezado ocupa el sitio del titular sin \
-              cumplir su función, así que ni el buscador ni un lector de pantalla obtienen el \
-              tema de la página. El caso típico es un logotipo dentro del H1.",
-    desc_en: "There is an H1 in the markup, but it contributes no text: it is empty, or its only \
-              content is an image that says nothing. The heading takes the headline's place \
-              without doing its job, so neither the search engine nor a screen reader gets the \
-              topic of the page. The usual case is a logo inside the H1.",
     references: &[],
 };
 
@@ -65,18 +35,6 @@ pub static CONTENT_HEADING_SKIP: RuleMeta = RuleMeta {
     category: Category::Content,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Salto de nivel de encabezado",
-    name_en: "Heading level skipped",
-    desc_es: "Los encabezados bajan más de un nivel de golpe, por ejemplo de H2 a H4. El esquema \
-              del documento queda con huecos: quien navega por encabezados no sabe si el H4 es \
-              un apartado del H2 o de otra sección, y el buscador pierde la jerarquía con la que \
-              entiende qué depende de qué. Suele venir de elegir el encabezado por su tamaño de \
-              letra en vez de por su nivel.",
-    desc_en: "Heading levels drop by more than one step at once, for example from H2 to H4. The \
-              document outline ends up with holes: someone navigating by headings cannot tell \
-              whether the H4 belongs to that H2 or to another section, and the search engine \
-              loses the hierarchy it uses to understand what belongs to what. It usually comes \
-              from picking a heading by its font size instead of its level.",
     references: &[],
 };
 
@@ -86,17 +44,6 @@ pub static CONTENT_THIN: RuleMeta = RuleMeta {
     category: Category::Content,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Contenido escaso",
-    name_en: "Thin content",
-    desc_es: "Una página indexable con menos de 300 palabras de texto visible. Rara vez tiene \
-              suficiente materia para responder a una consulta, así que compite mal y, en \
-              cantidad, diluye la calidad media del sitio a ojos del buscador. Muchas son \
-              archivos, etiquetas o fichas autogeneradas que convendría no indexar en vez de \
-              ampliar.",
-    desc_en: "An indexable page with fewer than 300 words of visible text. It rarely has enough \
-              substance to answer a query, so it competes poorly and, in bulk, dilutes the \
-              site's average quality in the search engine's eyes. Many of these are archives, \
-              tag pages or auto-generated stubs that are better left unindexed than expanded.",
     references: &[],
 };
 
@@ -106,16 +53,6 @@ pub static CONTENT_LANG_MISSING: RuleMeta = RuleMeta {
     category: Category::Content,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Sin atributo lang",
-    name_en: "Missing lang attribute",
-    desc_es: "El elemento <html> no declara el idioma del contenido. Sin él, el lector de \
-              pantalla pronuncia el texto con las reglas del idioma del sistema, el navegador no \
-              sabe qué diccionario usar para traducir y las señales de idioma del sitio quedan \
-              en manos de la detección automática. Es un atributo de una línea.",
-    desc_en: "The <html> element does not declare the language of the content. Without it, a \
-              screen reader pronounces the text using the system language's rules, the browser \
-              does not know which dictionary to use when translating, and the site's language \
-              signals are left to automatic detection. It is a one-line attribute.",
     references: &[],
 };
 
