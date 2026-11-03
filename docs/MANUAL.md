@@ -644,7 +644,7 @@ Of the free catalog, 59 of 60 rules are implemented.
 |---|---|
 | The crawl ends with far fewer URLs than you expect | Something cut it: `--max-urls`, `--max-depth`, `--max-duration`, or the free tier's 1,000-URL cap if `CRAWLFORGE_TIER=free` is set. The report says the crawl was truncated and by which limit. |
 | A `report` mentions findings "not evaluated" | The crawl was truncated and the rules that need the full graph were silenced on purpose. |
-| The site returns 429 or 503 | Lower `--concurrency`. The tool already halves its concurrency on that host after three 429s, 503s, dropped connections or timeouts in a row, waits what a `Retry-After` asks (up to two minutes) before retrying, and respects the `Crawl-delay` in `robots.txt`, but a WAF can be stricter than all of that. |
+| The site returns 429 or 503 | Lower `--concurrency`. The tool already halves its concurrency on that host after three 429s, 503s, dropped connections or timeouts in a row, waits what a `Retry-After` asks (up to two minutes) before retrying, and respects the `Crawl-delay` in `robots.txt`, but a WAF can be stricter than all of that. When it halved the concurrency, the crawl summary says so and how many times. |
 | "no such file" when running `diff` | The `.prev.sqlite` is missing: it only appears when you **repeat** a crawl onto the same output file. |
 
 | The program seems hung after crawling | It is in the final pass: inlinks and set-wide rules. It says which rule it is on (`final pass · rule 7/29 · …`). On large sites this takes minutes. |

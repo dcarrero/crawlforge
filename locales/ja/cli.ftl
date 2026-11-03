@@ -50,10 +50,11 @@ crawl_failed_suffix = {" "}({ $n } 件失敗)
 crawl_truncated = クロールは { $reason } により打ち切られました。表示している問題は、その時点までに検出されたものです。
 # A 429 is not a page's status: the site asked the crawler to slow down. The pages
 # were left pending, and the useful thing to say is how to get them.
-crawl_rate_limited_note = サイトがクロールのレートを制限しました。{ $n } ページは再試行後も 429 Too Many Requests を返したため、リンク切れとしては報告せず、保留にしています。サイト全体を必要とするルールは、これらのページを取得するまで評価されません。後で次を実行してください:
+crawl_rate_limited_note = サイトがクロールのレートを制限しました。{ $n } ページは 429 Too Many Requests を返し続けたか、2 分を超える待機を求めたため、リンク切れとしては報告せず、保留にしています。サイト全体を必要とするルールは、これらのページを取得するまで評価されません。後で次を実行してください:
     {"    "}crawlforge resume { $path }
     または --concurrency を下げて再度クロールするか、サイトのファイアウォールで CrawlForge のユーザーエージェントを許可してください。
-report_rate_limited_note = > **サイトがクロールのレートを制限しました。** { $n } ページが 429 Too Many Requests を返し、保留になっています。これらは集計にも含まれず、リンク切れとしても報告されません。サイト全体を必要とするルールも評価されていません。`crawlforge resume` で取得できます。
+report_rate_limited_note = > **サイトがクロールのレートを制限しました。** { $n } ページが 429 Too Many Requests を返し続けたか、2 分を超える待機を求めたため、保留になっています。これらは集計にも含まれず、リンク切れとしても報告されません。サイト全体を必要とするルールも評価されていません。`crawlforge resume` で取得できます。
+crawl_throttled_note = サーバーに過負荷の兆候(429、503、接続の切断、タイムアウト)が見られたため、クロールを減速しました。同時リクエスト数を { $n } 回半分にしています。次回は --concurrency を下げてみてください。
 crawl_list_mode_note = リストクロール: 指定した URL のみを監査しました。サイト全体のリンク構造を必要とするルール(孤立ページ、被リンク、階層)は評価されません。
 external_unchecked = { $n } 件の外部リンクを確認していません。max_external の上限に達しました。上限は --max-external で引き上げられます。
 external_unregistered = { $n } 件の外部リンクは記録すらされていません。max_external_urls の上限に達しました。この上限は、1 ページから数十万のホストにリンクしているような場合のためのものです。

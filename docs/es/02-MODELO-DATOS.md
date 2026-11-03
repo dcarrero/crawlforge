@@ -93,8 +93,8 @@ CREATE TABLE crawl_meta (
 lo usa para callar las reglas de `crawlforge_rules::REQUIERE_GRAFO_COMPLETO`, y `diff` para negarse
 a afirmar que una URL ha desaparecido. `list_mode` se marca en todo rastreo en modo lista — no
 porque nada se haya cortado, sino porque una lista solo ve las URLs que le diste. `rate_limited`
-(0.17.0) dice que algunas páginas seguían respondiendo 429 tras los reintentos y quedaron
-`pending`; es el único motivo con el que `resume` acepta un rastreo terminado.
+(0.17.0) dice que algunas páginas seguían respondiendo 429 tras los reintentos, o pidieron
+(`Retry-After`) esperar más de dos minutos, y quedaron `pending`; es el único motivo con el que `resume` acepta un rastreo terminado.
 
 `config_json` y `rules_version` son imprescindibles para que un diff entre dos rastreos sepa si la
 diferencia viene del sitio o de un cambio de configuración/reglas.

@@ -58,19 +58,25 @@ crawl_finished = Skanowanie zakończone: { $urls ->
 crawl_failed_suffix = {" "}(z błędem: { $n })
 crawl_truncated = Skanowanie przerwane z powodu { $reason }. Pokazane problemy to te wykryte do tego momentu.
 crawl_rate_limited_note = Witryna ograniczyła tempo skanowania: { $n ->
-        [one] { $n } strona po ponownych próbach nadal odpowiadała 429 Too Many Requests i czeka na pobranie
-        [few] { $n } strony po ponownych próbach nadal odpowiadały 429 Too Many Requests i czekają na pobranie
-        [many] { $n } stron po ponownych próbach nadal odpowiadało 429 Too Many Requests i czeka na pobranie
-       *[other] { $n } stron po ponownych próbach nadal odpowiadało 429 Too Many Requests i czeka na pobranie
+        [one] { $n } strona nadal odpowiadała 429 Too Many Requests albo prosiła o ponad dwie minuty oczekiwania i czeka na pobranie
+        [few] { $n } strony nadal odpowiadały 429 Too Many Requests albo prosiły o ponad dwie minuty oczekiwania i czekają na pobranie
+        [many] { $n } stron nadal odpowiadało 429 Too Many Requests albo prosiło o ponad dwie minuty oczekiwania i czeka na pobranie
+       *[other] { $n } stron nadal odpowiadało 429 Too Many Requests albo prosiło o ponad dwie minuty oczekiwania i czeka na pobranie
     }. Strony oczekujące nie są zgłaszane jako niedziałające, a reguły wymagające całej witryny nie są oceniane, dopóki nie zostaną pobrane. Później uruchom:
     {"    "}crawlforge resume { $path }
     albo przeskanuj witrynę ponownie z niższym --concurrency, albo przepuść user-agent CrawlForge przez zaporę witryny.
 report_rate_limited_note = > **Witryna ograniczyła tempo skanowania.** { $n ->
-        [one] { $n } strona odpowiedziała 429 Too Many Requests i czeka na pobranie
-        [few] { $n } strony odpowiedziały 429 Too Many Requests i czekają na pobranie
-        [many] { $n } stron odpowiedziało 429 Too Many Requests i czeka na pobranie
-       *[other] { $n } stron odpowiedziało 429 Too Many Requests i czeka na pobranie
+        [one] { $n } strona nadal odpowiadała 429 Too Many Requests albo prosiła o ponad dwie minuty oczekiwania i czeka na pobranie
+        [few] { $n } strony nadal odpowiadały 429 Too Many Requests albo prosiły o ponad dwie minuty oczekiwania i czekają na pobranie
+        [many] { $n } stron nadal odpowiadało 429 Too Many Requests albo prosiło o ponad dwie minuty oczekiwania i czeka na pobranie
+       *[other] { $n } stron nadal odpowiadało 429 Too Many Requests albo prosiło o ponad dwie minuty oczekiwania i czeka na pobranie
     }. Strony oczekujące nie są liczone ani zgłaszane jako niedziałające, a reguły wymagające całej witryny nie są oceniane. `crawlforge resume` je pobiera.
+crawl_throttled_note = Serwer nie nadążał (429, 503, zerwane połączenia lub przekroczone limity czasu), więc skanowanie zwolniło: współbieżność zmniejszono o połowę { $n ->
+        [one] { $n } raz
+        [few] { $n } razy
+        [many] { $n } razy
+       *[other] { $n } razy
+    }. Następnym razem spróbuj niższego --concurrency.
 crawl_list_mode_note = Skanowanie listy: sprawdzono tylko podane adresy URL. Reguły wymagające pełnego grafu linków witryny (strony osierocone, linki przychodzące, głębokość) nie są oceniane.
 external_unchecked = Nie sprawdzono { $n ->
         [one] { $n } linku zewnętrznego

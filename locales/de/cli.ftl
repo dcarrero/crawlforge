@@ -46,15 +46,19 @@ crawl_finished = Crawl abgeschlossen: { $urls ->
 crawl_failed_suffix = {" "}({ $n } fehlgeschlagen)
 crawl_truncated = Crawl abgebrochen durch { $reason }. Die angezeigten Befunde sind die bis zu diesem Punkt gefundenen.
 crawl_rate_limited_note = Die Website hat den Crawl gedrosselt: { $n ->
-        [one] { $n } Seite antwortete auch nach den Wiederholungsversuchen mit 429 Too Many Requests und bleibt ausstehend
-       *[other] { $n } Seiten antworteten auch nach den Wiederholungsversuchen mit 429 Too Many Requests und bleiben ausstehend
+        [one] { $n } Seite antwortete weiterhin mit 429 Too Many Requests oder verlangte eine Wartezeit von mehr als zwei Minuten und bleibt ausstehend
+       *[other] { $n } Seiten antworteten weiterhin mit 429 Too Many Requests oder verlangten eine Wartezeit von mehr als zwei Minuten und bleiben ausstehend
     }, statt als defekt gemeldet zu werden. Regeln, die die gesamte Website benötigen, werden erst ausgewertet, wenn alles abgerufen ist. Führen Sie später aus:
     {"    "}crawlforge resume { $path }
     oder crawlen Sie erneut mit einer niedrigeren --concurrency, oder lassen Sie den User-Agent von CrawlForge in der Firewall der Website zu.
 report_rate_limited_note = > **Die Website hat den Crawl gedrosselt.** { $n ->
-        [one] { $n } Seite antwortete mit 429 Too Many Requests und blieb ausstehend
-       *[other] { $n } Seiten antworteten mit 429 Too Many Requests und blieben ausstehend
+        [one] { $n } Seite antwortete weiterhin mit 429 Too Many Requests oder verlangte eine Wartezeit von mehr als zwei Minuten und blieb ausstehend
+       *[other] { $n } Seiten antworteten weiterhin mit 429 Too Many Requests oder verlangten eine Wartezeit von mehr als zwei Minuten und blieben ausstehend
     }: Solche Seiten werden weder gezählt noch als defekt gemeldet, und Regeln, die die gesamte Website benötigen, werden nicht ausgewertet. `crawlforge resume` ruft sie ab.
+crawl_throttled_note = Der Server war überlastet (429, 503, abgebrochene Verbindungen oder Timeouts), daher hat der Crawl sein Tempo verringert: Die Parallelität wurde { $n ->
+        [one] einmal
+       *[other] { $n }-mal
+    } halbiert. Versuchen Sie es beim nächsten Mal mit einer niedrigeren --concurrency.
 crawl_list_mode_note = Listen-Crawl: Nur die von Ihnen angegebenen URLs wurden auditiert. Regeln, die den vollständigen Linkgraphen der Website benötigen (verwaiste Seiten, eingehende Links, Klicktiefe), werden nicht ausgewertet.
 external_unchecked = { $n ->
         [one] { $n } externer Link wurde

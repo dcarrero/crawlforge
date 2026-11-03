@@ -56,15 +56,19 @@ crawl_truncated = Exploration tronquée par { $reason }. Les constats affichés 
 # A 429 is not a page's status: the site asked the crawler to slow down. The pages
 # were left pending, and the useful thing to say is how to get them.
 crawl_rate_limited_note = Le site a limité le débit de l'exploration : { $n ->
-        [one] { $n } page répondait encore 429 Too Many Requests après les nouvelles tentatives et est restée en attente, sans être signalée comme cassée.
-       *[other] { $n } pages répondaient encore 429 Too Many Requests après les nouvelles tentatives et sont restées en attente, sans être signalées comme cassées.
+        [one] { $n } page a continué de répondre 429 Too Many Requests, ou a demandé d'attendre plus de deux minutes, et est restée en attente, sans être signalée comme cassée.
+       *[other] { $n } pages ont continué de répondre 429 Too Many Requests, ou ont demandé d'attendre plus de deux minutes, et sont restées en attente, sans être signalées comme cassées.
     } Les règles qui ont besoin du site entier ne sont pas évaluées tant que ces pages n'ont pas été récupérées. Plus tard, lancez :
     {"    "}crawlforge resume { $path }
     ou relancez l'exploration avec un --concurrency plus bas, ou laissez passer le user-agent de CrawlForge dans le pare-feu du site.
 report_rate_limited_note = > **Le site a limité le débit de l'exploration.** { $n ->
-        [one] { $n } page a répondu 429 Too Many Requests et est restée en attente : elle n'est ni comptée ni signalée comme cassée
-       *[other] { $n } pages ont répondu 429 Too Many Requests et sont restées en attente : elles ne sont ni comptées ni signalées comme cassées
+        [one] { $n } page a continué de répondre 429 Too Many Requests, ou a demandé d'attendre plus de deux minutes, et est restée en attente : elle n'est ni comptée ni signalée comme cassée
+       *[other] { $n } pages ont continué de répondre 429 Too Many Requests, ou ont demandé d'attendre plus de deux minutes, et sont restées en attente : elles ne sont ni comptées ni signalées comme cassées
     }, et les règles qui ont besoin du site entier ne sont pas évaluées. `crawlforge resume` les récupère.
+crawl_throttled_note = Le serveur a montré des signes de surcharge (429, 503, connexions coupées ou délais dépassés), donc l'exploration a ralenti : sa concurrence a été divisée par deux { $n ->
+        [one] une fois
+       *[other] { $n } fois
+    }. La prochaine fois, essayez un --concurrency plus bas.
 crawl_list_mode_note = Exploration en mode liste : seules les URL fournies ont été auditées. Les règles qui ont besoin du graphe de liens complet du site (pages orphelines, liens entrants, profondeur) ne sont pas évaluées.
 external_unchecked = { $n ->
         [one] { $n } lien externe n'a pas été vérifié

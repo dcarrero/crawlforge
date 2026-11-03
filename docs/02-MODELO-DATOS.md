@@ -94,7 +94,8 @@ the difference comes from the site or from a configuration/rules change.
 it to silence the rules in `crawlforge_rules::REQUIERE_GRAFO_COMPLETO`, and `diff` uses it to refuse
 to claim that a URL disappeared. `list_mode` is set on every crawl in list mode — not because
 anything was cut short, but because a list only ever sees the URLs it was given. `rate_limited`
-(0.17.0) means some pages still answered 429 after the retries and were left `pending`; it is the
+(0.17.0) means some pages still answered 429 after the retries, or asked (`Retry-After`) to wait
+more than two minutes, and were left `pending`; it is the
 one reason with which `resume` accepts a finished crawl.
 
 ### 3.2 URLs

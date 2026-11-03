@@ -373,6 +373,9 @@ pub mod msg {
         // were left pending, and the useful thing to say is how to get them.
         crawl_rate_limited_note(n, path);
         report_rate_limited_note(n);
+        // The adaptive throttle halved a host's concurrency: the server was struggling, and
+        // the crawl took longer than it would have. Saying so is what docs/03 §7 promised.
+        crawl_throttled_note(n);
         // `list_mode` no es un corte: el rastreo hizo exactamente lo que se le pidió, así que
         // decirle al usuario «tu rastreo se truncó» sería mentir. Lo que sí hay que decirle es
         // la consecuencia de auditar un conjunto y no un sitio.
@@ -1192,8 +1195,10 @@ mod tests {
         assert!(msg::external_unregistered(en, "1").starts_with("1 external link was not"));
         assert_eq!(msg::external_never_checked(en, "1"), "1 external link was recorded but never checked.");
         assert_eq!(msg::external_checked_note(en, "1"), "1 external link checked.");
-        assert!(msg::crawl_rate_limited_note(en, "1", "x").contains("1 page still answered"));
-        assert!(msg::report_rate_limited_note(en, "1").contains("1 page answered"));
+        assert!(msg::crawl_rate_limited_note(en, "1", "x").contains("1 page kept answering"));
+        assert!(msg::report_rate_limited_note(en, "1").contains("1 page kept answering"));
+        assert!(msg::crawl_throttled_note(en, "1").contains("halved once."));
+        assert!(msg::crawl_throttled_note(en, "3").contains("halved 3 times."));
         assert!(msg::warn_unknown_change_types(en, "1", "x").starts_with("1 change of a type"));
         assert_eq!(msg::diff_crawl_counts(en, "1", "1"), "1 URL, 1 finding");
         assert_eq!(msg::chars_suffix(en, "1"), "1 char");
