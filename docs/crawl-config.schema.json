@@ -73,7 +73,8 @@
         "ASSET-FORM-BROKEN",
         "HREFLANG-NOT-RECIPROCAL",
         "HREFLANG-TO-4XX",
-        "SOCIAL-OG-IMAGE-BROKEN"
+        "SOCIAL-OG-IMAGE-BROKEN",
+        "LINK-FRAGMENT-BROKEN"
       ]
     },
     "severity": {
@@ -361,6 +362,9 @@
               "$ref": "#/$defs/severity"
             },
             "LINK-ANCHOR-GENERIC": {
+              "$ref": "#/$defs/severity"
+            },
+            "LINK-FRAGMENT-BROKEN": {
               "$ref": "#/$defs/severity"
             },
             "META-DESC-DUPLICATE": {
