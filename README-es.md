@@ -41,7 +41,31 @@ responda, la responde SQL.
 
 ## Instalación
 
-Necesita Rust 1.88 o posterior.
+Con Homebrew (macOS y Linux):
+
+```bash
+brew install dcarrero/tap/crawlforge
+```
+
+O el binario ya compilado para tu sistema, de la
+[última versión](https://github.com/dcarrero/crawlforge/releases/latest):
+
+```bash
+# macOS y Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-cli-installer.sh | sh
+```
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-cli-installer.ps1 | iex"
+```
+
+Los binarios los compila el flujo de publicación para macOS (Apple Silicon e Intel), Linux
+(x86_64 y ARM64) y Windows (x86_64). Los de macOS todavía no están notarizados: Homebrew los
+instala sin aviso, pero uno descargado a mano necesita `xattr -d com.apple.quarantine crawlforge`
+antes de que Gatekeeper lo deje arrancar.
+
+Desde el código, con Rust 1.88 o posterior:
 
 ```bash
 git clone https://github.com/dcarrero/crawlforge
@@ -49,8 +73,6 @@ cd crawlforge
 cargo build --release -p crawlforge-cli
 cp target/release/crawlforge ~/.cargo/bin/
 ```
-
-Funciona en macOS, Linux y Windows.
 
 ## Cinco minutos
 

@@ -1,0 +1,79 @@
+# Rendimiento A/B en cada pull request: la rama base y la del PR, compiladas en la misma máquina
+# y medidas en rondas alternas.
+#
+# Por qué existe, además de la regresión de `ci.yml`: esa compara contra un suelo fijo, calibrado
+# para cazar un 2x, y no ve un 10 %. Medir en el Mac del autor tampoco sirve cuando el Mac está
+# compilando otras cosas (el 2026-11-03 la carga llegó a 41 y las medias bailaban un 20 %).
+# Aquí las dos versiones comparten runner y se alternan, así que lo que cambie el runner les
+# afecta a las dos por igual.
+#
+# No falla el PR: deja la tabla en el resumen del trabajo. Un runner compartido tiene ruido, y
+# decidir si un +5 % merece la pena es cosa de quien revisa, no de un umbral.
+
+name: Perf A/B
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+jobs:
+  ab:
+    name: A/B (base vs PR)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compilar las dos versiones
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git worktree add --detach ../base "$BASE_SHA"
+          build() {
+            # Ruta del binario del test, sin ejecutarlo.
+            (cd "$1" && cargo test --release -p crawlforge-core --test regresion_rendimiento \
+               --no-run --message-format=json 2>/dev/null \
+             | jq -r 'select(.profile.test == true and .target.name == "regresion_rendimiento") | .executable' \
+             | tail -1)
+          }
+          echo "BASE_BIN=$(build ../base)" >> "$GITHUB_ENV"
+          echo "PR_BIN=$(build .)" >> "$GITHUB_ENV"
+
+      - name: Medir en rondas alternas
+        run: |
+          set -euo pipefail
+          # `|| true`: si una versión cae bajo el suelo, el test falla pero el número sigue
+          # impreso, y es justo el número que interesa aquí.
+          medir() { { "$1" --nocapture 2>&1 || true; } | grep -o 'elementos/s [0-9]*' | awk '{print $2}'; }
+          : > base.txt; : > pr.txt
+          for i in 1 2 3 4 5 6; do
+            if [ $((i % 2)) -eq 1 ]; then
+              medir "$BASE_BIN" >> base.txt; medir "$PR_BIN" >> pr.txt
+            else
+              medir "$PR_BIN" >> pr.txt; medir "$BASE_BIN" >> base.txt
+            fi
+          done
+          mediana() { sort -n "$1" | awk '{a[NR]=$1} END {print (NR%2 ? a[(NR+1)/2] : (a[NR/2]+a[NR/2+1])/2)}'; }
+          B=$(mediana base.txt); P=$(mediana pr.txt)
+          D=$(awk -v b="$B" -v p="$P" 'BEGIN { printf "%+.1f", (p-b)/b*100 }')
+          {
+            echo "### Rendimiento A/B (elementos/s, 6 rondas alternas)"
+            echo ""
+            echo "| | Mediana | Rondas |"
+            echo "|---|---|---|"
+            echo "| Base | $B | $(paste -sd' ' base.txt) |"
+            echo "| PR | $P | $(paste -sd' ' pr.txt) |"
+            echo ""
+            echo "Diferencia de la mediana: **${D} %**. Más alto es mejor; en un runner compartido, ±5 % es ruido."
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"

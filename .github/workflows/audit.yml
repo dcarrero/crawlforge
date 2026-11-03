@@ -1,0 +1,39 @@
+# Auditoría de dependencias: avisos de RustSec, licencias, orígenes y versiones vetadas, con la
+# política de `deny.toml`.
+#
+# En cada pull request y en cada push a `main`, y además una vez por semana: un aviso nuevo de
+# RustSec aparece sin que nadie toque el código, y es justo el caso que un CI por push no ve.
+#
+# `rust-audit-box` (cargo-audit + cargo-deny + cargo-geiger + clippy en un contenedor) se sigue
+# pasando en local antes de cada versión; esto es la vigilancia continua, que en un repositorio
+# público sale gratis.
+
+name: Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1" # los lunes a las 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo-deny (${{ matrix.checks }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        checks: [advisories, "bans licenses sources"]
+    # Un aviso nuevo de RustSec no debe bloquear un PR que no toca dependencias: se ve en rojo
+    # en su propio trabajo, pero no tumba el resto.
+    continue-on-error: ${{ matrix.checks == 'advisories' && github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}

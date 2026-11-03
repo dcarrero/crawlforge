@@ -14,6 +14,9 @@ edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
 publish = false
+repository = "https://github.com/dcarrero/crawlforge"
+homepage = "https://crawlforge.org/"
+description = "Technical SEO auditor for the command line"
 
 # Versiones centralizadas: los crates heredan con `workspace = true`.
 # El stack está cerrado (`docs/CONVENTIONS.md §3`) — no añadas dependencias equivalentes.
