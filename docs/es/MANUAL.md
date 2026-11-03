@@ -12,16 +12,23 @@
 
 ## 0. Antes de empezar
 
-El binario ya está instalado y en el `PATH`:
+Se instala con cualquiera de estas, y luego se comprueba que responde:
 
 ```bash
+brew install dcarrero/tap/crawlforge          # macOS y Linux, con Homebrew
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-installer.sh | sh
+cargo install crawlforge                       # Rust 1.88 o posterior
 crawlforge --version
 ```
 
-Si no responde, se reinstala desde el repositorio:
+En Windows, en PowerShell: `irm https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-installer.ps1 | iex`.
+Cada versión lleva además los binarios para macOS (Apple Silicon e Intel), Linux (x86_64 y ARM64) y
+Windows. Los de macOS todavía no están notarizados: Homebrew los instala sin aviso, pero uno
+descargado a mano necesita antes `xattr -d com.apple.quarantine crawlforge`.
+
+Desde un clon del repositorio:
 
 ```bash
-cd ~/Desarrollos/proyectos/proyectos-mini/crawlforge
 cargo build --release -p crawlforge && cp target/release/crawlforge ~/.cargo/bin/
 ```
 
