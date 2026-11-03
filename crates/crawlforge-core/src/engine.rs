@@ -70,10 +70,14 @@ pub struct CrawlMetrics {
     /// registraron**. Es un aviso distinto del de arriba —aquellas están en el fichero sin
     /// estado, estas no están— y el resumen tiene que decirlo por el mismo motivo.
     pub externals_unregistered: u64,
-    /// Pages of the site that still answered 429 after the fetcher's retries. They were not
-    /// processed and their rows stay `pending`, so `resume` can fetch them later; see
-    /// [`TruncationReason::RateLimited`].
+    /// Pages of the site that still answered 429 after the fetcher's retries, or whose 429
+    /// asked (`Retry-After`) for a longer wait than `fetch::MAX_RETRY_AFTER` and so was not
+    /// retried. They were not processed and their rows stay `pending`, so `resume` can fetch
+    /// them later; see [`TruncationReason::RateLimited`].
     pub rate_limited: u64,
+    /// Times the adaptive throttle halved some host's concurrency: three overload signals in a
+    /// row (429, 503, a dropped connection or a timeout). Zero on a healthy crawl.
+    pub throttle_reductions: u64,
     /// Duración del bucle de rastreo, sin el descubrimiento de sitemaps ni la pasada final.
     ///
     /// La eficiencia de paralelismo se calcula sobre esto y no sobre [`Self::elapsed`]: el suelo
@@ -1219,7 +1223,7 @@ async fn run_with<F: Fetcher + 'static>(
 
         // Se espera a **una**, no a todas. Aquí está la diferencia.
         {
-            // Las esperas en vuelo —crawl-delay, backoff de reintentos— no retienen el corte:
+            // Las esperas en vuelo —crawl-delay, backoff de reintentos, `Retry-After`— no retienen el corte:
             // al vencer el plazo se deja de esperar, lo pendiente se cancela al salir del
             // bucle y sus URLs quedan `pending`, que es el estado que relee una reanudación.
             let joined = tokio::select! {
@@ -1287,6 +1291,20 @@ async fn run_with<F: Fetcher + 'static>(
                 }
                 UrlOutcome::Failed(failure) => {
                     metrics.urls_errored += 1;
+                    // Una conexión que se cae o un timeout son la misma señal que un 503 por
+                    // otro camino (`throttle::is_overload_failure`). Solo por red: el fetcher de
+                    // ficheros reporta sus errores de lectura como de conexión, y no hay
+                    // servidor al que aliviar.
+                    if fetcher.is_network() {
+                        if let Some(host) = item.url.host_str() {
+                            if let Some(nuevo) = throttle.record_failure(host, failure.kind) {
+                                tracing::warn!(
+                                    host, limite = nuevo,
+                                    "el servidor corta conexiones o no responde: se reduce la concurrencia"
+                                );
+                            }
+                        }
+                    }
                     // Un recurso que no responde sigue siendo un recurso: la fila queda con
                     // el `kind` de su extensión y el estado a NULL, que es la verdad.
                     let resource = resource_row(hash, None, None, None, &item.url);
@@ -1369,7 +1387,8 @@ async fn run_with<F: Fetcher + 'static>(
                         ..Default::default()
                     }).await?;
                 }
-                // Still a 429 after the fetcher's retries: the server is asking us to slow down,
+                // Still a 429 after the fetcher's retries —or with a `Retry-After` longer than
+                // the fetcher grants, which it does not retry at all—: the server is asking us to slow down,
                 // which says nothing about the page. Nothing is written, so its row stays the
                 // `pending` it was when discovered and `resume` can fetch it later. The throttle
                 // still hears about it: halving the concurrency is what gives the rest a chance.
@@ -1909,6 +1928,7 @@ async fn run_with<F: Fetcher + 'static>(
     metrics.peak_rss_bytes = rss.sample();
     metrics.effective_concurrency =
         concurrency.average(job.limits.effective_concurrency() as f64);
+    metrics.throttle_reductions = throttle.reductions();
     let (elements, pages) = count_elements(&conn).unwrap_or((0, 0));
     metrics.elements_written = elements;
     metrics.pages_parsed = pages;
@@ -2600,8 +2620,10 @@ fn exclusion_reason_from_db(s: &str) -> Option<ExclusionReason> {
 /// compartían el freno del semilla — si un 503 lo reducía a 1, los demás también rastreaban de
 /// uno en uno. Ver `CONVENTIONS.md §4`.
 ///
-/// La decisión de a quién le queda hueco vive aquí; la de cómo encontrarlo sin recorrer la cola
-/// entera, en [`Frontier::dequeue_dispatchable`], que es donde está el recuento por host.
+/// La decisión de a quién le queda hueco vive aquí —el límite del host y, si su `Retry-After`
+/// lo pausó, la pausa ([`crate::throttle::Throttle::has_room`])—; la de cómo encontrarlo sin
+/// recorrer la cola entera, en [`Frontier::dequeue_dispatchable`], que es donde está el
+/// recuento por host.
 fn next_dispatchable(
     frontier: &mut Frontier,
     throttle: &crate::throttle::Throttle,
@@ -2609,7 +2631,7 @@ fn next_dispatchable(
 ) -> Option<QueuedUrl> {
     frontier.dequeue_dispatchable(MAX_FRONTIER_SCAN, |host| {
         let in_flight = in_flight_by_host.get(host).copied().unwrap_or(0);
-        in_flight < throttle.limit_for(host) as usize
+        throttle.has_room(host, in_flight)
     })
 }
 
@@ -2945,7 +2967,14 @@ async fn process_url<F: Fetcher>(
         }
     }
 
-    let outcome = match fetcher.fetch(&item.url).await {
+    // Un `Retry-After` obedecido pausa el host entero, no solo esta URL: si el resto de sus
+    // páginas siguiera despachándose, esperar aquí no aliviaría al servidor de nada. El fetcher
+    // avisa justo antes de dormir y esta tarea conserva su hueco mientras duerme (ver
+    // `Throttle::pause`); el `select!` del bucle corta la espera igual que la del `Crawl-delay`.
+    let host = item.url.host_str().unwrap_or_default();
+    let on_retry_after =
+        |asked: Duration| throttle.pause(host, tokio::time::Instant::now() + asked);
+    let outcome = match fetcher.fetch_observed(&item.url, &on_retry_after).await {
         Ok(Ok(doc)) => {
             let page = if doc.is_html() && !doc.body.is_empty() {
                 Some(parse::parse_html(&doc.body, job.collect_body_text))

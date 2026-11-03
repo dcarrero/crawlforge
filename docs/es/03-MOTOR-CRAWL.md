@@ -130,6 +130,8 @@ Google?" se responde con esa columna, y es la consulta más frecuente que hace u
 timeout de conexión: 10 s
 timeout total por petición: 30 s
 reintentos: 3, backoff exponencial con jitter (1s, 2s, 4s ±50%)
+Retry-After en un 429/503 (segundos o fecha HTTP): esperar al menos eso, hasta 120 s
+Retry-After por encima de 120 s: no se reintenta (un 429 queda pendiente, ver abajo)
 reintentar en: 429, 500, 502, 503, 504, timeout, error de conexión
 no reintentar en: 4xx salvo 429, error TLS, error DNS
 límite de tamaño de respuesta: 10 MB (configurable). Superarlo → error_kind='toolarge'
@@ -141,6 +143,34 @@ cliente es un crawler inservible. El 503 cuenta porque un Varnish o un Cloudflar
 503 y no 429, y el efecto sobre el servidor es el mismo: distinguirlos sería fiel a la letra de este
 documento e infiel a su motivo. La recuperación es deliberadamente más lenta que la reducción: se
 baja a la mitad de golpe y se sube de uno en uno tras una racha de respuestas buenas.
+
+**Las conexiones caídas y los timeouts también cuentan.** Un servidor saturado muchas veces no
+llega a contestar 429 ni 503: resetea la conexión, la rechaza porque tiene llena la cola de
+aceptación o no responde a tiempo. Es la misma señal por otro camino, así que un fallo
+`connection` o `timeout` (tras los reintentos del fetcher, igual que un 429) suma a la misma
+racha. Un fallo de DNS o de TLS no: un nombre que no resuelve o un certificado que no valida
+fallarían igual con el servidor ocioso, y ni suman a la racha ni la rompen
+(`throttle::is_overload_failure`). Cuántas veces se frenó un host queda en
+`CrawlMetrics::throttle_reductions`.
+
+**Se obedece el `Retry-After` de las páginas propias.** Cuando un 429 o un 503 lo trae, el
+reintento de esa URL espera al menos lo que pide —y nunca menos que el backoff, así que
+`Retry-After: 0` no significa «reintenta ya»— y **se pausa el host entero** hasta entonces, no solo
+esa URL: si el resto de sus páginas siguiera despachándose, esperar por una no aliviaría nada. La
+tarea que recibió la cabecera conserva su hueco mientras duerme, que es lo que impide que el bucle
+confunda «todo en pausa» con «no queda nada». La espera vive dentro de la tarea, así que
+`max_duration` y una cancelación la cortan como a cualquier otra. Por encima de
+`fetch::MAX_RETRY_AFTER` (120 s) no se reintenta en absoluto —volver al cabo de 1, 2 y 4 s sería
+desobedecerle tres veces—: un 429 queda `pending` con `truncated_reason = 'rate_limited'`, igual
+que uno que sobrevive a los reintentos, y un 503 se registra como el 503 que es. Las externas no
+cambian: una sonda de estado no espera nunca, y un `Retry-After` ahí deja de sondear ese host (ver
+la cola de externas).
+
+A un host que deja de responder del todo no se le da por perdido: cada página suya en cola pasa
+sus cuatro intentos y se registra como error, y ahora que las conexiones caídas cuentan como
+sobrecarga, su concurrencia baja a 1 por el camino. Es el lado educado; el precio es un rastreo
+largo si el host está muerto de verdad (hasta ~2 min por página con timeouts). `--max-duration` lo
+acota.
 
 Un rastreo interrumpido (cierre de la app, corte de red) debe poder reanudarse: la cola pendiente
 vive en `urls` con `crawl_state='pending'`, así que reanudar es releer esa tabla.

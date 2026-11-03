@@ -19,6 +19,15 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub const EXTERNAL_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 /// Reintentos antes de dar una URL por errónea.
 pub const MAX_RETRIES: u32 = 3;
+/// La espera más larga que se concede a un `Retry-After` antes de reintentar.
+///
+/// Un servidor puede pedir lo que quiera —`Retry-After: 86400` es legal—, y obedecer a ciegas
+/// dejaría el rastreo colgado un día por una sola URL. Por encima de esto **no se reintenta**:
+/// el servidor ha dicho que no volvamos antes, y volver al cabo de uno, dos y cuatro segundos
+/// sería desobedecerle tres veces. Un 429 así queda pendiente para `resume`, como cualquier
+/// 429 que sobrevive a los reintentos. Dos minutos cubren lo que mandan de verdad Cloudflare,
+/// nginx `limit_req` o un WordPress en mantenimiento, que va de segundos a un minuto.
+pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
 /// Límite de tamaño de una página. Superarlo marca `error_kind='toolarge'`.
 ///
 /// Diez megabytes de HTML es una barbaridad —la regla `HTTP-LARGE-PAGE` avisa a partir de 500 KB—
@@ -170,6 +179,23 @@ pub trait Fetcher: Send + Sync {
         url: &Url,
     ) -> impl std::future::Future<Output = Result<std::result::Result<FetchedDoc, FetchFailure>>> + Send;
 
+    /// Como [`Self::fetch`], avisando antes de cada espera que haya pedido el servidor.
+    ///
+    /// Si una respuesta 429 o 503 trae un `Retry-After` que se va a obedecer, se llama a
+    /// `on_retry_after` con lo que pidió **justo antes de dormir**, y la espera es al menos esa.
+    /// El motor lo usa para pausar el host entero ([`crate::throttle::Throttle::pause`]) y no
+    /// solo la URL. Solo el fetcher HTTP puede recibir esa cabecera: el resto hereda esta
+    /// versión, que no avisa nunca.
+    fn fetch_observed(
+        &self,
+        url: &Url,
+        on_retry_after: &(dyn Fn(Duration) + Sync),
+    ) -> impl std::future::Future<Output = Result<std::result::Result<FetchedDoc, FetchFailure>>> + Send
+    {
+        let _ = on_retry_after;
+        self.fetch(url)
+    }
+
     /// Forma publicada de una URL, si la fuente puede saberla sin pedirla.
     ///
     /// Solo el modo `filesystem` puede: tiene el árbol de ficheros delante y sabe que
@@ -235,6 +261,9 @@ pub struct HttpFetcher {
     client: reqwest::Client,
     max_body_bytes: u64,
     max_retries: u32,
+    /// Ver [`MAX_RETRY_AFTER`]. Configurable solo para que un test no tenga que esperar dos
+    /// minutos para demostrar el tope.
+    max_retry_after: Duration,
     basic_auth: Option<BasicAuthScope>,
     /// El perímetro, también aquí y no solo en el resolutor.
     ///
@@ -299,6 +328,7 @@ impl HttpFetcher {
             client,
             max_body_bytes: MAX_BODY_BYTES,
             max_retries: MAX_RETRIES,
+            max_retry_after: MAX_RETRY_AFTER,
             basic_auth: None,
             screen,
         })
@@ -326,6 +356,11 @@ impl HttpFetcher {
 
     pub fn with_max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
+        self
+    }
+
+    pub fn with_max_retry_after(mut self, cap: Duration) -> Self {
+        self.max_retry_after = cap;
         self
     }
 
@@ -397,10 +432,13 @@ impl HttpFetcher {
     }
 
     /// Una sola petición, sin reintentos.
+    ///
+    /// Devuelve también el `Retry-After` ya interpretado, cuando acompaña a un 429 o a un 503:
+    /// es la única cabecera que decide algo del reintento, y no pertenece al documento.
     async fn fetch_once(
         &self,
         url: &Url,
-    ) -> std::result::Result<FetchedDoc, FetchFailure> {
+    ) -> std::result::Result<(FetchedDoc, Option<Duration>), FetchFailure> {
         if let Some(refused) = self.refused_by_perimeter(url) {
             return Err(refused);
         }
@@ -429,6 +467,14 @@ impl HttpFetcher {
         let content_type = header("content-type");
         let x_robots_tag = header("x-robots-tag");
         let location = header("location");
+        // Solo donde significa «vuelve dentro de tanto» (RFC 9110 §10.2.3): en una redirección
+        // dice otra cosa, y en un 500 no lo manda nadie.
+        let retry_after = if crate::throttle::is_overload(status) {
+            header("retry-after")
+                .and_then(|v| parse_retry_after(&v, std::time::SystemTime::now()))
+        } else {
+            None
+        };
 
         // Un sitemap puede pesar legalmente cinco veces lo que se admite de una página.
         let limite = body_limit_for(content_type.as_deref(), self.max_body_bytes);
@@ -468,15 +514,18 @@ impl HttpFetcher {
             body.extend_from_slice(&chunk);
         }
 
-        Ok(FetchedDoc {
-            url: url.clone(),
-            status,
-            content_type,
-            x_robots_tag,
-            location,
-            body,
-            response_time_ms: started.elapsed().as_millis() as u32,
-        })
+        Ok((
+            FetchedDoc {
+                url: url.clone(),
+                status,
+                content_type,
+                x_robots_tag,
+                location,
+                body,
+                response_time_ms: started.elapsed().as_millis() as u32,
+            },
+            retry_after,
+        ))
     }
 }
 
@@ -503,15 +552,35 @@ impl Fetcher for HttpFetcher {
         &self,
         url: &Url,
     ) -> Result<std::result::Result<FetchedDoc, FetchFailure>> {
+        self.fetch_observed(url, &|_| {}).await
+    }
+
+    async fn fetch_observed(
+        &self,
+        url: &Url,
+        on_retry_after: &(dyn Fn(Duration) + Sync),
+    ) -> Result<std::result::Result<FetchedDoc, FetchFailure>> {
         let mut attempt = 0;
 
         loop {
             match self.fetch_once(url).await {
-                Ok(doc) if should_retry_status(doc.status) && attempt < self.max_retries => {
+                Ok((doc, asked)) if should_retry_status(doc.status) && attempt < self.max_retries => {
                     attempt += 1;
-                    tokio::time::sleep(backoff_delay(attempt)).await;
+                    let wait = match asked {
+                        // Pide más de lo que se concede: no se vuelve antes de tiempo. El
+                        // documento sale tal cual, y el motor deja un 429 pendiente.
+                        Some(asked) if asked > self.max_retry_after => return Ok(Ok(doc)),
+                        // «Al menos» lo pedido, y nunca menos que el backoff: un `Retry-After: 0`
+                        // no autoriza a reintentar en el acto.
+                        Some(asked) => {
+                            on_retry_after(asked);
+                            asked.max(backoff_delay(attempt))
+                        }
+                        None => backoff_delay(attempt),
+                    };
+                    tokio::time::sleep(wait).await;
                 }
-                Ok(doc) => return Ok(Ok(doc)),
+                Ok((doc, _)) => return Ok(Ok(doc)),
                 Err(failure) if failure.kind.is_retryable() && attempt < self.max_retries => {
                     attempt += 1;
                     tokio::time::sleep(backoff_delay(attempt)).await;
@@ -563,6 +632,81 @@ fn backoff_delay(attempt: u32) -> Duration {
     let base = Duration::from_secs(1 << (attempt.saturating_sub(1)).min(6));
     let jitter = rand::thread_rng().gen_range(0.5..=1.5);
     base.mul_f64(jitter)
+}
+
+/// Cuánto pide esperar un `Retry-After`, contado desde `now`.
+///
+/// RFC 9110 §10.2.3: o un número de segundos, o una fecha HTTP. Una fecha ya pasada pide
+/// cero. Lo que no se entiende se trata como si no hubiera cabecera —`None`, y manda el
+/// backoff de siempre—: inventarse una espera a partir de un valor ilegible sería peor que
+/// no esperar de más. Un número de segundos que no cabe en un `u64` es una petición de
+/// esperar muchísimo, no un error: devuelve `Duration::MAX`, que cualquier tope rechaza.
+pub fn parse_retry_after(value: &str, now: std::time::SystemTime) -> Option<Duration> {
+    let value = value.trim();
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) {
+        return Some(value.parse::<u64>().map_or(Duration::MAX, Duration::from_secs));
+    }
+    let at = parse_http_date(value)?;
+    let now = now.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    Some(Duration::from_secs(at.saturating_sub(now)))
+}
+
+/// Segundos desde la época Unix de una fecha HTTP (RFC 9110 §5.6.7).
+///
+/// Acepta los tres formatos que la norma obliga a entender —el IMF-fixdate de hoy
+/// (`Sun, 06 Nov 1994 08:49:37 GMT`) y los obsoletos RFC 850 (`Sunday, 06-Nov-94 08:49:37
+/// GMT`) y `asctime` (`Sun Nov  6 08:49:37 1994`)—, que solo difieren en separadores y en el
+/// orden: los tres traen un mes en letra, una hora con dos puntos y dos números, día y año
+/// en ese orden. Escrito aquí y no con una dependencia: es la única fecha que lee el motor.
+fn parse_http_date(value: &str) -> Option<u64> {
+    const MONTHS: [&str; 12] =
+        ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    let mut month = None;
+    let mut time = None;
+    let mut numbers = Vec::with_capacity(2);
+    for token in value.split([' ', ',', '-']).filter(|t| !t.is_empty()) {
+        if token.contains(':') {
+            time = Some(token);
+        } else if token.bytes().all(|b| b.is_ascii_digit()) {
+            numbers.push(token);
+        } else if let Some(m) = MONTHS.iter().position(|m| token.eq_ignore_ascii_case(m)) {
+            month = Some(m as u64 + 1);
+        }
+        // El día de la semana y `GMT` no deciden nada: se ignoran.
+    }
+    let (month, time) = (month?, time?);
+    let [day, year] = numbers.as_slice() else { return None };
+    let day: u64 = day.parse().ok()?;
+    let year: u64 = match year.len() {
+        4 => year.parse().ok()?,
+        // RFC 850: dos cifras. La norma pide leerlas como el año pasado más reciente si
+        // caerían a más de 50 años vista; un pivote fijo en 1970 da lo mismo para cualquier
+        // fecha que un servidor pueda mandar hoy en un `Retry-After`, sin mirar el reloj.
+        2 => {
+            let yy: u64 = year.parse().ok()?;
+            if yy >= 70 { 1900 + yy } else { 2000 + yy }
+        }
+        _ => return None,
+    };
+    let mut hms = time.split(':').map(|p| p.parse::<u64>().ok());
+    let (h, m, sec) = (hms.next()??, hms.next()??, hms.next()??);
+    if hms.next().is_some() || !(1..=31).contains(&day) || year < 1970 || h > 23 || m > 59 || sec > 60
+    {
+        return None;
+    }
+    Some(days_from_civil(year, month, day) * 86_400 + h * 3_600 + m * 60 + sec)
+}
+
+/// Días desde 1970-01-01 de una fecha del calendario gregoriano (algoritmo de Howard Hinnant).
+/// Solo se llama con `year >= 1970`, así que todo cabe en enteros sin signo.
+fn days_from_civil(year: u64, month: u64, day: u64) -> u64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 /// Todo lo que el error dice de sí mismo, causas incluidas.
@@ -1001,6 +1145,63 @@ mod tests {
                 let d = backoff_delay(attempt).as_secs_f64();
                 assert!(d >= low && d <= high, "intento {attempt} dio {d}s, fuera de [{low}, {high}]");
             }
+        }
+    }
+
+    /// 1994-11-06 08:49:37 UTC, el ejemplo de la RFC 9110, en segundos Unix.
+    const EJEMPLO_RFC: u64 = 784_111_777;
+
+    fn instante(secs: u64) -> std::time::SystemTime {
+        std::time::UNIX_EPOCH + Duration::from_secs(secs)
+    }
+
+    #[test]
+    fn retry_after_en_segundos() {
+        let ahora = instante(EJEMPLO_RFC);
+        assert_eq!(parse_retry_after("2", ahora), Some(Duration::from_secs(2)));
+        assert_eq!(parse_retry_after(" 120 ", ahora), Some(Duration::from_secs(120)));
+        assert_eq!(parse_retry_after("0", ahora), Some(Duration::ZERO));
+        assert_eq!(
+            parse_retry_after("99999999999999999999999", ahora),
+            Some(Duration::MAX),
+            "un número que no cabe pide esperar muchísimo, no es ilegible"
+        );
+    }
+
+    #[test]
+    fn retry_after_en_los_tres_formatos_de_fecha_http() {
+        let ahora = instante(EJEMPLO_RFC - 30);
+        for fecha in [
+            "Sun, 06 Nov 1994 08:49:37 GMT",
+            "Sunday, 06-Nov-94 08:49:37 GMT",
+            "Sun Nov  6 08:49:37 1994",
+        ] {
+            assert_eq!(parse_retry_after(fecha, ahora), Some(Duration::from_secs(30)), "{fecha}");
+        }
+    }
+
+    #[test]
+    fn una_fecha_pasada_pide_cero() {
+        let ahora = instante(EJEMPLO_RFC + 3_600);
+        assert_eq!(
+            parse_retry_after("Sun, 06 Nov 1994 08:49:37 GMT", ahora),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn la_fecha_cruza_bien_los_bisiestos() {
+        // 2024-02-29 y 2000-03-01: los dos casos en los que un cálculo de días a mano falla.
+        assert_eq!(parse_http_date("Thu, 29 Feb 2024 00:00:00 GMT"), Some(1_709_164_800));
+        assert_eq!(parse_http_date("Wed, 01 Mar 2000 00:00:00 GMT"), Some(951_868_800));
+        assert_eq!(parse_http_date("Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+    }
+
+    #[test]
+    fn un_retry_after_ilegible_es_como_no_tenerlo() {
+        let ahora = instante(EJEMPLO_RFC);
+        for basura in ["", "pronto", "-5", "1.5", "Sun, 06 Nov 1994 GMT", "Sun, 32 Nov 1994 08:49:37 GMT"] {
+            assert_eq!(parse_retry_after(basura, ahora), None, "{basura:?}");
         }
     }
 

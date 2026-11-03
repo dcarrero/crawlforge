@@ -8,6 +8,17 @@
 //! efecto sobre el servidor es el mismo. Distinguirlos sería fiel a la letra del documento e
 //! infiel a su motivo.
 //!
+//! También cuentan las conexiones que se caen y los timeouts: un servidor
+//! saturado no siempre llega a contestar 429 o 503 — corta la conexión, la rechaza porque su
+//! cola de aceptación está llena, o no responde a tiempo. Es la misma señal por otro camino.
+//! Lo que **no** cuenta es lo que no habla de la carga del servidor: un nombre que no resuelve
+//! o un certificado que no valida fallarían igual con el servidor vacío. Ver
+//! [`is_overload_failure`].
+//!
+//! Y cuando el servidor dice cuánto esperar —`Retry-After` en un 429 o un 503— el host entero
+//! se pausa hasta ese momento ([`Throttle::pause`]), no solo la URL que lo recibió: si la URL
+//! esperase y el resto del host siguiera despachándose, la espera no aliviaría nada.
+//!
 //! La recuperación es deliberadamente más lenta que la reducción: se baja a la mitad de golpe
 //! y se sube de uno en uno tras una racha de respuestas buenas. Frenar tarde castiga a un
 //! servidor que ya va mal; acelerar pronto lo vuelve a tumbar.
@@ -43,6 +54,23 @@ pub fn is_overload(status: u16) -> bool {
     matches!(status, 429 | 503)
 }
 
+/// ¿Indica este fallo de red que el servidor va justo?
+///
+/// - **Timeout**: el servidor no contestó a tiempo. Es la forma más común de ir ahogado.
+/// - **Conexión**: reseteada a media respuesta, rechazada o cortada antes de contestar. Un
+///   servidor con la cola de aceptación llena rechaza conexiones; un proxy saturado las corta.
+///   El rechazo cuenta también aunque a veces signifique «no hay nadie escuchando»: frenar un
+///   host caído no le quita nada a nadie.
+/// - **DNS y TLS, no**: un nombre que no resuelve o un certificado que no valida fallarían
+///   exactamente igual con el servidor ocioso. Frenarlos sería castigar al host por algo que
+///   no es carga.
+/// - **Demasiado grande y perímetro, tampoco**: son decisiones nuestras, no señales del
+///   servidor.
+pub fn is_overload_failure(kind: crate::fetch::ErrorKind) -> bool {
+    use crate::fetch::ErrorKind;
+    matches!(kind, ErrorKind::Timeout | ErrorKind::Connection)
+}
+
 #[derive(Debug, Clone, Copy)]
 struct HostState {
     limit: u8,
@@ -50,17 +78,87 @@ struct HostState {
     good_streak: u32,
     /// Techo original, para no recuperar por encima de lo que pidió el usuario.
     ceiling: u8,
+    /// Hasta cuándo no se despacha nada de este host: lo pidió con `Retry-After`.
+    paused_until: Option<tokio::time::Instant>,
+}
+
+impl HostState {
+    fn new(limit: u8) -> Self {
+        Self { limit, overload_streak: 0, good_streak: 0, ceiling: limit, paused_until: None }
+    }
 }
 
 /// Estado de frenado de todos los hosts del rastreo.
 pub struct Throttle {
     hosts: Mutex<HashMap<String, HostState>>,
     default_limit: u8,
+    /// Cuántas veces se ha reducido a la mitad la concurrencia de algún host. Va al resumen
+    /// del rastreo ([`crate::engine::CrawlMetrics::throttle_reductions`]).
+    reductions: std::sync::atomic::AtomicU64,
 }
 
 impl Throttle {
     pub fn new(default_limit: u8) -> Self {
-        Self { hosts: Mutex::new(HashMap::new()), default_limit }
+        Self {
+            hosts: Mutex::new(HashMap::new()),
+            default_limit,
+            reductions: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Cuántas veces se ha reducido la concurrencia de un host en todo el rastreo.
+    pub fn reductions(&self) -> u64 {
+        self.reductions.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// ¿Puede despacharse una petición más a este host, con `in_flight` ya en vuelo?
+    ///
+    /// Es [`Self::limit_for`] más la pausa de `Retry-After`. Va aparte y no dentro de
+    /// `limit_for` porque la pausa solo la respeta el despacho de páginas: los demás que
+    /// consultan el límite —el descubrimiento de sitemaps, las sondas de externas— no la
+    /// necesitan, y un límite de cero ahí sería una forma nueva de colgarse.
+    pub fn has_room(&self, host: &str, in_flight: usize) -> bool {
+        let Ok(mut guard) = self.hosts.lock() else {
+            // Mismo criterio que `limit_for`: un mutex envenenado no aborta el rastreo.
+            return in_flight < self.default_limit as usize;
+        };
+        let Some(state) = guard.get_mut(host) else {
+            return in_flight < self.default_limit as usize;
+        };
+        // El reloj solo se lee si hay pausa: el caso normal no paga nada por ella.
+        if let Some(until) = state.paused_until {
+            if tokio::time::Instant::now() < until {
+                return false;
+            }
+            state.paused_until = None;
+        }
+        in_flight < state.limit as usize
+    }
+
+    /// No despachar nada de este host hasta `until`: su `Retry-After` lo pidió.
+    ///
+    /// Si ya había una pausa más larga, se conserva. **Quien pausa tiene que esperar él mismo
+    /// hasta `until` sin soltar su hueco** —es lo que hace el fetcher, que llama a esto justo
+    /// antes de dormir—: así, mientras haya un host en pausa queda al menos una tarea en vuelo,
+    /// y el bucle del motor no puede confundir «todo pausado» con «no queda nada que hacer».
+    pub fn pause(&self, host: &str, until: tokio::time::Instant) {
+        let Ok(mut guard) = self.hosts.lock() else {
+            return;
+        };
+        let state =
+            guard.entry(host.to_string()).or_insert_with(|| HostState::new(self.default_limit));
+        state.paused_until = Some(state.paused_until.map_or(until, |p| p.max(until)));
+    }
+
+    /// Registra un fallo de red. Cuenta para la racha de sobrecarga solo si
+    /// [`is_overload_failure`] lo dice; los demás no tocan nada — ni suman ni rompen la racha,
+    /// porque no dicen nada de la carga del servidor. Devuelve el nuevo límite si cambió.
+    pub fn record_failure(&self, host: &str, kind: crate::fetch::ErrorKind) -> Option<u8> {
+        if !is_overload_failure(kind) {
+            return None;
+        }
+        // 503 es el representante de «sobrecarga»: el mismo camino que una respuesta.
+        self.record(host, 503)
     }
 
     /// Concurrencia vigente para un host.
@@ -79,12 +177,8 @@ impl Throttle {
         let Ok(mut guard) = self.hosts.lock() else {
             return None;
         };
-        let state = guard.entry(host.to_string()).or_insert(HostState {
-            limit: self.default_limit,
-            overload_streak: 0,
-            good_streak: 0,
-            ceiling: self.default_limit,
-        });
+        let state =
+            guard.entry(host.to_string()).or_insert_with(|| HostState::new(self.default_limit));
 
         if is_overload(status) {
             state.good_streak = 0;
@@ -92,6 +186,7 @@ impl Throttle {
             if state.overload_streak >= OVERLOAD_STREAK && state.limit > MIN_CONCURRENCY {
                 state.limit = (state.limit / 2).max(MIN_CONCURRENCY);
                 state.overload_streak = 0;
+                self.reductions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return Some(state.limit);
             }
             return None;
@@ -127,12 +222,8 @@ impl Throttle {
             // Mismo criterio que `limit_for`: un mutex envenenado no aborta el rastreo.
             return;
         };
-        let state = guard.entry(host.to_string()).or_insert(HostState {
-            limit: self.default_limit,
-            overload_streak: 0,
-            good_streak: 0,
-            ceiling: self.default_limit,
-        });
+        let state =
+            guard.entry(host.to_string()).or_insert_with(|| HostState::new(self.default_limit));
         state.limit = MIN_CONCURRENCY;
         state.ceiling = MIN_CONCURRENCY;
     }
@@ -332,6 +423,68 @@ mod tests {
         }
         assert_eq!(t.limit_for("pausado.es"), 1, "el techo bajó a 1 con el límite");
         assert_eq!(t.limit_for("otro.es"), 8, "los demás hosts conservan lo configurado");
+    }
+}
+
+#[cfg(test)]
+mod tests_fallos_y_pausas {
+    use super::*;
+    use crate::fetch::ErrorKind;
+
+    #[test]
+    fn las_conexiones_caidas_y_los_timeouts_son_sobrecarga_y_el_dns_no() {
+        assert!(is_overload_failure(ErrorKind::Timeout));
+        assert!(is_overload_failure(ErrorKind::Connection));
+        assert!(!is_overload_failure(ErrorKind::Dns), "un nombre que no resuelve no es carga");
+        assert!(!is_overload_failure(ErrorKind::Tls), "un certificado roto tampoco");
+        assert!(!is_overload_failure(ErrorKind::TooLarge));
+        assert!(!is_overload_failure(ErrorKind::Blocked), "el perímetro es decisión nuestra");
+    }
+
+    #[test]
+    fn tres_conexiones_caidas_reducen_a_la_mitad() {
+        let t = Throttle::new(10);
+        assert_eq!(t.record_failure("ejemplo.es", ErrorKind::Connection), None);
+        assert_eq!(t.record_failure("ejemplo.es", ErrorKind::Timeout), None);
+        assert_eq!(t.record_failure("ejemplo.es", ErrorKind::Connection), Some(5));
+        assert_eq!(t.reductions(), 1);
+    }
+
+    #[test]
+    fn un_fallo_de_dns_ni_suma_ni_rompe_la_racha() {
+        let t = Throttle::new(10);
+        t.record("ejemplo.es", 429);
+        t.record_failure("ejemplo.es", ErrorKind::Connection);
+        assert_eq!(t.record_failure("ejemplo.es", ErrorKind::Dns), None);
+        assert_eq!(t.record_failure("ejemplo.es", ErrorKind::Tls), None);
+        assert_eq!(t.limit_for("ejemplo.es"), 10, "DNS y TLS no cuentan");
+        assert_eq!(
+            t.record_failure("ejemplo.es", ErrorKind::Timeout),
+            Some(5),
+            "y tampoco rompieron la racha que llevaban el 429 y la conexión"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn un_host_en_pausa_no_tiene_hueco_hasta_que_vence() {
+        let t = Throttle::new(4);
+        assert!(t.has_room("ejemplo.es", 0));
+        t.pause("ejemplo.es", tokio::time::Instant::now() + Duration::from_secs(2));
+        assert!(!t.has_room("ejemplo.es", 0), "en pausa no se despacha ni la primera");
+        assert!(t.has_room("otro.es", 0), "la pausa es de un host, no del rastreo");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(t.has_room("ejemplo.es", 0), "vencida la pausa, vuelve a haber hueco");
+        assert!(!t.has_room("ejemplo.es", 4), "y el límite sigue mandando");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn una_pausa_mas_corta_no_acorta_la_vigente() {
+        let t = Throttle::new(4);
+        let ahora = tokio::time::Instant::now();
+        t.pause("ejemplo.es", ahora + Duration::from_secs(10));
+        t.pause("ejemplo.es", ahora + Duration::from_secs(1));
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert!(!t.has_room("ejemplo.es", 0), "manda la pausa más larga");
     }
 }
 
