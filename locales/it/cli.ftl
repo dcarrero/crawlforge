@@ -35,6 +35,17 @@ reason_4xx = 4xx
 reason_5xx = 5xx
 reason_not_html = non HTML
 
+## Exclusion reasons
+
+exclusion_robots = robots.txt
+exclusion_nofollow = nofollow
+exclusion_depth = profondità massima
+exclusion_pattern = pattern URL
+exclusion_limit = limite di URL
+exclusion_local_network = rete locale
+exclusion_external_check_off = verifica esterna disattivata
+exclusion_no_network = audit di cartella, senza rete
+
 ## Crawl summary (`report.rs`)
 
 crawl_finished = Scansione completata: { $urls } URL in { $secs } s

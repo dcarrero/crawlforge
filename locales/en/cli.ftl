@@ -32,6 +32,21 @@ reason_4xx = 4xx
 reason_5xx = 5xx
 reason_not_html = not_html
 
+## Exclusion reasons
+
+# Why a URL was left out of the crawl, in the "Excluded" table of `report` and in `inspect`
+# (`state_note_excluded`, `state_note_external_not_checked`). The crawl file stores the English
+# identifier (`external_check_off`); exports keep it, this is only what a person reads.
+# `robots.txt` and `nofollow` are names of the mechanism and usually stay.
+exclusion_robots = robots.txt
+exclusion_nofollow = nofollow
+exclusion_depth = max depth
+exclusion_pattern = URL pattern
+exclusion_limit = URL limit
+exclusion_local_network = local network
+exclusion_external_check_off = external check off
+exclusion_no_network = folder audit, no network
+
 ## Resumen del rastreo (`report.rs`)
 
 crawl_finished = Crawl finished: { $urls ->

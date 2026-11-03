@@ -26,6 +26,17 @@ reason_4xx = 4xx
 reason_5xx = 5xx
 reason_not_html = geen HTML
 
+## Exclusion reasons
+
+exclusion_robots = robots.txt
+exclusion_nofollow = nofollow
+exclusion_depth = maximale klikdiepte
+exclusion_pattern = URL-patroon
+exclusion_limit = URL-limiet
+exclusion_local_network = lokaal netwerk
+exclusion_external_check_off = externe controle uit
+exclusion_no_network = audit van een map, geen netwerk
+
 ## Crawl summary (`report.rs`)
 
 crawl_finished = Crawl voltooid: { $urls ->

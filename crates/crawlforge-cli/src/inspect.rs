@@ -537,10 +537,16 @@ fn status_section(w: &mut Writer<'_>, row: &UrlRow, lang: Lang) -> Result<()> {
                     if !row.is_internal
                         && matches!(reason.as_str(), "external_check_off" | "no_network") =>
                 {
-                    msg::state_note_external_not_checked(lang, sanitize(reason))
+                    msg::state_note_external_not_checked(
+                        lang,
+                        i18n::exclusion_reason(lang, &sanitize(reason)),
+                    )
                 }
-                // El motivo (`robots`, `pattern`) es un valor de columna y no se traduce.
-                Some(reason) => msg::state_note_excluded(lang, sanitize(reason)),
+                // The reason is stored as an identifier (`robots`, `pattern`) and shown
+                // translated; one this binary does not know is shown as is, sanitised.
+                Some(reason) => {
+                    msg::state_note_excluded(lang, i18n::exclusion_reason(lang, &sanitize(reason)))
+                }
                 None if !row.is_internal && probed => msg::state_note_external_checked(lang),
                 None if !row.is_internal => msg::state_note_external_unchecked(lang),
                 None => msg::state_note_out_of_scope(lang),
@@ -1526,8 +1532,39 @@ mod tests {
             )
             .expect("reason");
         let s = ficha(&store, "https://externo.com/");
-        assert!(s.contains("external URL — status not checked (external_check_off)"), "{s}");
+        assert!(s.contains("external URL — status not checked (external check off)"), "{s}");
         assert!(!s.contains("excluded from the crawl"), "{s}");
+    }
+
+    #[test]
+    fn the_exclusion_reason_is_shown_translated() {
+        // The stored value is an identifier; what a person reads follows --lang. Both notes
+        // carry it: the external one (`external_check_off`) and the plain exclusion.
+        let store = store_de_prueba("exclusion-traducida");
+        let conn = Connection::open(&store).expect("open");
+        conn.execute(
+            "UPDATE urls SET exclusion_reason = 'external_check_off' WHERE url = 'https://externo.com/'",
+            [],
+        )
+        .expect("update");
+        conn.execute(
+            "UPDATE urls SET crawl_state = 'excluded', exclusion_reason = 'pattern', status_code = NULL
+              WHERE url = 'https://ejemplo.es/pendiente'",
+            [],
+        )
+        .expect("update");
+        drop(conn);
+        let card = |url: &str, lang| {
+            render_card(&store, url, ListLimit::N(DEFAULT_LIMIT), "terminal", lang)
+                .expect("the card must render")
+        };
+        let es = card("https://externo.com/", Lang::Es);
+        assert!(es.contains("(comprobación externa apagada)"), "{es}");
+        assert!(!es.contains("external_check_off"), "{es}");
+        let es = card("https://ejemplo.es/pendiente", Lang::Es);
+        assert!(es.contains("excluida del rastreo (patrón de URL)"), "{es}");
+        let en = card("https://ejemplo.es/pendiente", Lang::En);
+        assert!(en.contains("excluded from the crawl (URL pattern)"), "{en}");
     }
 
     #[test]
