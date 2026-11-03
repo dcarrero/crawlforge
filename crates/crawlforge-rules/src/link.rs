@@ -221,12 +221,54 @@ pub const GENERIC_ANCHORS: &[GenericAnchors] = &[
         phrases: &[
             "buraya tıklayın", "buraya tıkla", "tıklayın", "devamı", "devamını oku",
             "devamını okuyun", "daha fazla", "daha fazlası", "daha fazla bilgi", "detaylı bilgi",
-            "bu bağlantı", "bu sayfa",
+            "bu bağlantı", "bu sayfa", "burayı tıklayın", "buraya tıklayınız", "tıklayınız",
+            "devamını gör", "devamını görüntüle", "devamı için tıklayın", "daha fazla oku",
+            "daha fazlasını gör", "daha fazlasını öğren", "ayrıntılı bilgi", "detaylar için tıklayın",
+            "detaylı bilgi için tıklayın", "bu link", "linke tıklayın",
         ],
         only_if_declared: &[
             "tıkla", "burada", "buraya", "oku", "incele", "detaylar", "ayrıntılar", "bağlantı",
-            "git",
+            "git", "link", "detay", "devam",
         ],
+    },
+    GenericAnchors {
+        lang: "pt",
+        phrases: &[
+            "clique aqui", "clique neste link", "leia mais", "leia mais aqui", "saiba mais",
+            "saiba mais aqui", "veja mais", "ver mais", "veja aqui", "mais", "continue lendo",
+            "continuar lendo", "leia o artigo", "mais informações", "mais detalhes", "ver detalhes",
+            "acesse aqui", "confira", "este link", "esta página", "aqui",
+        ],
+        // «Clique» is French and English for a clique (and a brand); «Veja» a Brazilian
+        // magazine and a sneaker brand.
+        only_if_declared: &[
+            "clique", "link", "ler", "leia", "veja", "detalhes", "continuar", "acesse", "informações",
+        ],
+    },
+    GenericAnchors {
+        lang: "pl",
+        phrases: &[
+            "kliknij tutaj", "kliknij tu", "kliknij", "kliknij w link", "tutaj", "czytaj więcej",
+            "czytaj dalej", "przeczytaj więcej", "dowiedz się więcej", "więcej", "zobacz więcej",
+            "pokaż więcej", "więcej informacji", "więcej szczegółów", "szczegóły",
+            "zobacz szczegóły", "zobacz", "sprawdź", "przejdź", "przejdź tutaj", "ten link",
+            "ta strona", "tę stronę",
+        ],
+        // «Tu» is French and Spanish for «you»; «info» and «link» are words in half the list.
+        only_if_declared: &["tu", "link", "czytaj", "info", "detale"],
+    },
+    GenericAnchors {
+        lang: "ja",
+        phrases: &[
+            "こちら", "コチラ", "ここ", "こちらをクリック", "ここをクリック", "クリック",
+            "クリックしてください", "こちらから", "続き", "続きを読む", "続きはこちら", "続きを見る",
+            "もっと", "もっと見る", "もっとみる", "もっと読む", "さらに表示", "詳しく",
+            "詳しくはこちら", "詳しく見る", "詳細はこちら", "詳細を見る", "全文を読む", "記事を読む",
+            "このリンク", "このページ",
+        ],
+        // The same ideographs mean the same in Chinese: «詳細» (details) and «情報»
+        // (information) are a section title on a Chinese page as often as a stock link.
+        only_if_declared: &["詳細", "詳細情報", "情報", "リンク", "参照"],
     },
 ];
 
@@ -266,23 +308,33 @@ fn folded_catalogue() -> &'static FoldedCatalogue {
 }
 
 /// The comparison form of an anchor text: lowercase, accents folded, curly apostrophes made
-/// straight, whitespace collapsed, and the decoration at both ends dropped —«Leer más »»,
-/// «[Read more]», «Read more…», «→ Ver más»—.
+/// straight, full-width Latin letters made ASCII, whitespace collapsed, and the decoration at
+/// both ends dropped —«Leer más »», «[Read more]», «Read more…», «→ Ver más»—.
 ///
 /// Folding is deliberately crude and only covers the letters of the languages in the
 /// catalogue: it exists to make «leer mas» equal «leer más», not to be a Unicode normaliser.
+/// The full-width forms (`ＲＥＡＤ ＭＯＲＥ`, the ideographic space) are the one piece of
+/// NFKC a Japanese page needs, and they are a fixed offset from ASCII.
 pub fn fold_anchor(text: &str) -> String {
     let mut plano = String::with_capacity(text.len());
-    for c in text.chars().flat_map(char::to_lowercase) {
+    let ancho_completo = |c: char| match c {
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+        '\u{3000}' => ' ',
+        otro => otro,
+    };
+    for c in text.chars().map(ancho_completo).flat_map(char::to_lowercase) {
         let c = match c {
-            'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' => 'a',
-            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' | 'ą' => 'a',
+            'é' | 'è' | 'ê' | 'ë' | 'ę' => 'e',
             'í' | 'ì' | 'î' | 'ï' | 'ı' => 'i',
             'ó' | 'ò' | 'ô' | 'ö' | 'õ' => 'o',
             'ú' | 'ù' | 'û' | 'ü' => 'u',
-            'ç' => 'c',
-            'ş' => 's',
+            'ç' | 'ć' => 'c',
+            'ş' | 'ś' => 's',
             'ğ' => 'g',
+            'ł' => 'l',
+            'ń' => 'n',
+            'ź' | 'ż' => 'z',
             '’' | '‘' | '´' | '`' => '\'',
             // What Turkish `İ` leaves behind when lowercased: `i` plus a combining dot.
             '\u{0307}' => continue,
@@ -326,14 +378,40 @@ pub fn is_generic_anchor(text: &str, page_lang: Option<&str>) -> bool {
 /// Is the anchor text the name of the target itself? `<a href="/tag/mas/">más</a>` is a tag
 /// someone called «más», and its link text names it exactly: the text is a poor tag name, not
 /// a generic link. Found on the first real crawl, a news site's tag cloud. Compares the last
-/// path segment of the `href`, with hyphens as spaces, against the folded text.
+/// path segment of the `href`, percent-decoded and with hyphens as spaces, against the folded
+/// text: a Japanese or Polish tag travels as `/tag/%E3%82%82%E3%81%A3%E3%81%A8/` or
+/// `/tag/wi%C4%99cej/`.
 fn names_its_slug(href: &str, texto: &str) -> bool {
     let ruta = href.split(['?', '#']).next().unwrap_or(href);
     let Some(slug) = ruta.split('/').rev().find(|s| !s.is_empty()) else {
         return false;
     };
-    // `%C3%A1` is how an accented slug travels; it is left as is and simply will not match.
-    fold_anchor(&slug.replace(['-', '_'], " ")) == fold_anchor(texto)
+    fold_anchor(&percent_decode(slug).replace(['-', '_'], " ")) == fold_anchor(texto)
+}
+
+/// `%XX` escapes to bytes, read as UTF-8 (lossily: a malformed escape is left as is and the
+/// comparison simply fails). This crate does not depend on `crawlforge-core`, whose fetcher
+/// has its own, private, for file paths.
+fn percent_decode(s: &str) -> String {
+    if !s.contains('%') {
+        return s.to_string();
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+            if let Some(v) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Internal links whose whole text is a stock phrase.
@@ -542,8 +620,81 @@ mod tests {
             "Lees meer", "Devamını oku"]
         {
             assert!(is_generic_anchor(texto, None), "{texto}");
-            assert!(is_generic_anchor(texto, Some("pt")), "{texto} on an uncatalogued language");
+            assert!(is_generic_anchor(texto, Some("ko")), "{texto} on an uncatalogued language");
         }
+    }
+
+    #[test]
+    fn generic_knows_portuguese() {
+        for texto in ["Leia mais", "Saiba mais", "Clique aqui", "Continue lendo", "Mais informações", "Confira"] {
+            assert!(is_generic_anchor(texto, Some("pt-BR")), "{texto}");
+            assert!(is_generic_anchor(texto, None), "{texto}: unmistakable anywhere");
+        }
+        // «Clique» is a clique in French and English, «Veja» a magazine: Portuguese pages only.
+        for texto in ["Clique", "Veja", "Leia", "Detalhes"] {
+            assert!(is_generic_anchor(texto, Some("pt")), "{texto}");
+            assert!(!is_generic_anchor(texto, Some("fr")), "{texto} on a French page");
+            assert!(!is_generic_anchor(texto, None), "{texto} with no language");
+        }
+    }
+
+    #[test]
+    fn generic_knows_polish() {
+        for texto in ["Czytaj więcej", "Kliknij tutaj", "Więcej", "Dowiedz się więcej", "WIĘCEJ SZCZEGÓŁÓW", "Tę stronę"] {
+            assert!(is_generic_anchor(texto, Some("pl")), "{texto}");
+            assert!(is_generic_anchor(texto, None), "{texto}: unmistakable anywhere");
+        }
+        assert!(is_generic_anchor("czytaj wiecej", Some("pl")), "typed without the ogonek");
+        // «Tu» is «you» in French and Spanish.
+        assert!(is_generic_anchor("Tu", Some("pl")));
+        assert!(!is_generic_anchor("Tu", Some("fr")));
+        assert!(!is_generic_anchor("Tu", None));
+    }
+
+    #[test]
+    fn generic_knows_japanese() {
+        for texto in ["こちら", "続きを読む", "詳しくはこちら", "もっと見る", "ここをクリック", "続きを読む »"] {
+            assert!(is_generic_anchor(texto, Some("ja")), "{texto}");
+            assert!(is_generic_anchor(texto, None), "{texto}: unmistakable anywhere");
+        }
+        // «詳細» and «情報» are ordinary headings in Chinese.
+        assert!(is_generic_anchor("詳細", Some("ja")));
+        assert!(!is_generic_anchor("詳細", Some("zh-TW")));
+        assert!(!is_generic_anchor("情報", None));
+    }
+
+    #[test]
+    fn generic_knows_the_turkish_additions() {
+        for texto in ["Devamını gör", "Burayı tıklayın", "Daha fazlasını öğren", "Detaylı bilgi için tıklayın"] {
+            assert!(is_generic_anchor(texto, Some("tr")), "{texto}");
+            assert!(is_generic_anchor(texto, None), "{texto}");
+        }
+        assert!(is_generic_anchor("Devam", Some("tr")));
+        assert!(!is_generic_anchor("Devam", None));
+    }
+
+    #[test]
+    fn generic_folds_full_width_latin() {
+        // A Japanese page typing the English phrase with its full-width keyboard.
+        assert!(is_generic_anchor("ＲＥＡＤ　ＭＯＲＥ", Some("ja")));
+        assert!(is_generic_anchor("Ｃｌｉｃｋ ｈｅｒｅ", None));
+    }
+
+    #[test]
+    fn generic_leaves_a_percent_encoded_tag_named_like_its_text() {
+        // The tag-name exception compared the encoded slug, so a non-ASCII tag never matched.
+        let links = [
+            enlace("/tag/%E3%82%82%E3%81%A3%E3%81%A8/", Some("もっと")),
+            enlace("https://przyklad.pl/tag/wi%C4%99cej/", Some("Więcej")),
+            enlace("/post-1/", Some("もっと")),
+        ];
+        let issues = LinkAnchorGeneric.evaluate(&ctx(&links, Some("ja")));
+        assert_eq!(issues.len(), 1);
+        let d = detalle(&issues[0]);
+        assert!(d.contains("\"links\":1"), "only the post link counts: {d}");
+        assert_eq!(percent_decode("wi%C4%99cej"), "więcej");
+        assert_eq!(percent_decode("100%"), "100%", "a stray percent is left as is");
+        assert_eq!(percent_decode("%4"), "%4");
     }
 
     #[test]

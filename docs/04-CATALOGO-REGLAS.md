@@ -312,14 +312,16 @@ the page. `ASSET-IMG-EMPTY-ALT-LINK` is `high` for the same missing name. The ga
 Aligning the two is reopened when there is field data for both.
 
 **`LINK-ANCHOR-GENERIC` keeps its phrases per language** (`link::GENERIC_ANCHORS`: English,
-Spanish, German, French, Italian, Dutch and Turkish today), and adding a language is adding one
-entry. Each language has two lists. The unmistakable phrases —«leer más», «click here», «klik
+Spanish, German, French, Italian, Dutch, Turkish, Portuguese, Polish and Japanese today), and
+adding a language is adding one entry. Each language has two lists. The unmistakable phrases —«leer más», «click here», «klik
 hier»— are checked on every page, because a Spanish theme that left «Read more» untranslated is
 the most common case of all. The words that can be a name elsewhere —«Go», «Link», «Plus»,
 «Suite», «Meer», «qui»— count only on a page whose `<html lang>` says it is in that language.
-Matches are whole-text and folded (case, accents, curly apostrophes, the »/…/→ decoration):
+Matches are whole-text and folded (case, accents, curly apostrophes, full-width Latin letters,
+the »/…/→ decoration):
 «Leer más sobre tarifas» names its target and is fine. A link whose text is its own target's slug
-(`<a href="/tag/mas/">más</a>`, a tag cloud) is a poor tag name, not a generic link, and is left
+(`<a href="/tag/mas/">más</a>`, a tag cloud; the slug is percent-decoded, so `/tag/wi%C4%99cej/`
+names «więcej») is a poor tag name, not a generic link, and is left
 out — found on the first real crawl. `aria-label` does not rescue a generic text: the claim is
 about what a search engine reads, and that is the text. Pagination («next», «siguiente») is not
 in the lists.
