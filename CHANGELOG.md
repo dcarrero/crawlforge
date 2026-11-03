@@ -19,6 +19,31 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## [Unreleased]
+
+The engine does not change: same rules, same crawl file, same output. What changes is how it is
+named and where you can get it.
+
+### Added
+
+- **On crates.io.** `cargo install crawlforge` installs the command line with Rust 1.88 or newer.
+  The engine and the rule catalog are published too, as `crawlforge-core` and `crawlforge-rules`,
+  always at the same version as the tool; their API is not stable while the version is 0.x. Each
+  tagged release publishes the three from the release workflow with crates.io Trusted Publishing.
+
+### Changed
+
+- **The command-line package is now `crawlforge`**, not `crawlforge-cli`, so the release assets
+  carry the name of the command: `crawlforge-installer.sh`, `crawlforge-installer.ps1` and
+  `crawlforge-<target>.tar.gz`/`.zip` replace the `crawlforge-cli-*` names of 0.21.2. Update any
+  script that downloads them by name. The Homebrew formula was already `crawlforge` and keeps its
+  name. Building from source is `cargo build --release -p crawlforge`; the binary is still
+  `crawlforge`.
+- **The translations moved to `crates/crawlforge-rules/locales/<lang>/`** (from `locales/` at the
+  root of the repository), with the same two files per language. A published crate contains only
+  its own folder, and the CLI's texts were embedded from outside it. They are still compiled into
+  the binary, and the completeness tests are the same.
+
 ## [0.21.2] — 2026-11-03
 
 The first release with prebuilt binaries. The engine does not change: same rules, same crawl
