@@ -36,11 +36,13 @@
 //! La medición es de cuando el libro tenía esas 13 hojas; `Resources` llegó después y no se
 //! ha vuelto a medir. El coste por hoja es constante en RAM, así que el pico no cambia.
 //!
-//! El gigabyte que queda no son las celdas: es el propio empaquetado del `.xlsx`, que comprime
-//! sobre un centenar de megabytes de XML. Se puede seguir bajando, pero conviene recordar el
-//! contexto: un libro con 1,5 millones de filas es un fichero que Excel abre con dificultad, y un
-//! SEO exporta subconjuntos. La `Summary` es la única hoja que no usa memoria constante, porque
-//! se rellena al final con los recuentos de las demás; son decenas de filas.
+//! The gigabyte that was left was not the cells but the packaging of the `.xlsx`, and it went
+//! away with the upgrade from `rust_xlsxwriter` 0.79 to 0.102, made to reach `zip` 9
+//! (RUSTSEC-2026-0367/0368/0369/0429); which release in between did it was not bisected.
+//! Measured on 2026-11-03 with a real crawl (`lamancha.sqlite`: 1,048,575 links, 464,513
+//! images, 195,926 URLs, 124 MB of output), 0.79.4 → 0.102.0: peak RSS **1.23 GB → 20 MB**,
+//! 18.0 s → 18.2 s, every cell of the 14 sheets identical. `Summary` is the only sheet without constant memory, because it is
+//! filled in last with the counts of the others; it is a few dozen rows.
 
 use crate::rule_config::{self, RulesChoice};
 use anyhow::{Context, Result};
@@ -378,7 +380,7 @@ pub fn to_xlsx_with_rules(store: &Path, out: &Path, rules: &RulesChoice) -> Resu
         // Memoria constante: la hoja se vuelca a un temporal fila a fila y no se queda en RAM.
         // Es lo que hace que exportar 500.000 URLs no cueste gigabytes, y su única condición
         // —escribir en orden de fila y no volver atrás— ya se cumplía aquí.
-        let worksheet = workbook.add_worksheet_with_constant_memory();
+        let worksheet = workbook.add_worksheet_with_constant_memory()?;
         worksheet.set_name(spec.name)?;
         let (rows, truncated) = if available {
             write_query(worksheet, &conn, spec, &styles)

@@ -107,15 +107,36 @@ fn decompress(body: &[u8]) -> std::io::Result<Option<Vec<u8>>> {
 fn parse_xml(xml: &[u8]) -> Sitemap {
     use quick_xml::events::Event;
 
-    let mut reader = quick_xml::Reader::from_reader(xml);
-    reader.config_mut().trim_text(true);
+    // A plain `Reader`, never `NsReader`: prefixes are stripped by `local_name` below, and the
+    // namespace bookkeeping of `NsReader` is exactly what RUSTSEC-2026-0195 makes a sitemap from
+    // a hostile site blow up. Attributes are never read either, so the duplicate-attribute check
+    // of RUSTSEC-2026-0194 never runs. `hostile_sitemap_*` in the tests guard both.
+    //
+    // No `trim_text`: since quick-xml 0.38 the text of a `<loc>` arrives in pieces around every
+    // `&amp;`, and trimming each piece would eat the spaces next to an entity. The whole value
+    // is trimmed once, when the `<loc>` closes.
+    //
+    // Since 0.38 the reader also works on `str`, and stops dead at the first byte that is not
+    // UTF-8, or at an `&` that is not an entity. Both are common in real sitemaps (an old site
+    // that declares ISO-8859-1 and writes `/café`, a plugin that writes `?a=1&b=2` raw), and
+    // before 0.38 each one cost only its own `<loc>`: the rest of the file was read. To keep that,
+    // invalid bytes become U+FFFD and a `<loc>` that contains one is dropped, and a bare `&` is
+    // let through as text and drops its `<loc>` the same way. The lossy copy is only made when
+    // the input is not UTF-8; a valid sitemap is read in place.
+    let xml = String::from_utf8_lossy(xml);
+    let mut reader = quick_xml::Reader::from_str(&xml);
+    reader.config_mut().allow_dangling_amp = true;
 
     let mut result = Sitemap::default();
-    let mut buf = Vec::new();
     // Un `<loc>` significa cosas distintas según su padre: dentro de `<sitemap>` es un
     // sitemap hijo; dentro de `<url>` es una página.
     let mut inside_sitemap_entry = false;
     let mut inside_loc = false;
+    // The text of the current `<loc>`, put back together from its `Text` and `GeneralRef`
+    // events. `loc_ok` turns false on an entity that is not one of the five predefined ones: the
+    // value cannot be rebuilt, and the `<loc>` is dropped, as `unescape()` did before 0.38.
+    let mut loc_text = String::new();
+    let mut loc_ok = true;
     // Profundidad dentro de una extensión del protocolo (`<image:image>`, `<video:video>`,
     // `<news:news>`). Sus hijos no declaran páginas, pero `local_name` recorta el prefijo y
     // deja el `<image:loc>` del sitemap de imágenes de WordPress indistinguible de un `<loc>`
@@ -128,8 +149,8 @@ fn parse_xml(xml: &[u8]) -> Sitemap {
     let mut extension_depth = 0usize;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => match local_name(e.name().as_ref()) {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => match local_name(e.name().as_ref().as_bytes()) {
                 b"sitemap" => inside_sitemap_entry = true,
                 b"url" => inside_sitemap_entry = false,
                 // `video` y `news` no tienen hoy un hijo que colisione con `loc` tras
@@ -137,27 +158,45 @@ fn parse_xml(xml: &[u8]) -> Sitemap {
                 // la lección de `image` es que el recorte de prefijos convierte cualquier
                 // hijo futuro `*:loc` en una página fantasma.
                 b"image" | b"video" | b"news" => extension_depth += 1,
-                b"loc" if extension_depth == 0 => inside_loc = true,
+                b"loc" if extension_depth == 0 => {
+                    inside_loc = true;
+                    loc_text.clear();
+                    loc_ok = true;
+                }
                 _ => {}
             },
-            Ok(Event::End(e)) => match local_name(e.name().as_ref()) {
+            Ok(Event::End(e)) => match local_name(e.name().as_ref().as_bytes()) {
                 b"sitemap" => inside_sitemap_entry = false,
                 b"image" | b"video" | b"news" => {
                     extension_depth = extension_depth.saturating_sub(1);
                 }
-                b"loc" => inside_loc = false,
-                _ => {}
-            },
-            Ok(Event::Text(e)) if inside_loc => {
-                if let Ok(text) = e.unescape() {
-                    let value = text.trim();
-                    if !value.is_empty() {
+                b"loc" if inside_loc => {
+                    inside_loc = false;
+                    let value = loc_text.trim();
+                    if loc_ok && !value.is_empty() {
                         if inside_sitemap_entry {
                             result.children.push(value.to_string());
                         } else {
                             result.urls.push(value.to_string());
                         }
                     }
+                }
+                _ => {}
+            },
+            Ok(Event::Text(e)) if inside_loc => {
+                let text = e.xml10_content();
+                if text.contains(['&', char::REPLACEMENT_CHARACTER]) {
+                    loc_ok = false;
+                }
+                loc_text.push_str(&text);
+            }
+            Ok(Event::GeneralRef(e)) if inside_loc => {
+                if let Ok(Some(c)) = e.resolve_char_ref() {
+                    loc_text.push(c);
+                } else if let Some(s) = quick_xml::escape::resolve_predefined_entity(&e) {
+                    loc_text.push_str(s);
+                } else {
+                    loc_ok = false;
                 }
             }
             Ok(Event::Eof) => break,
@@ -170,7 +209,6 @@ fn parse_xml(xml: &[u8]) -> Sitemap {
             }
             _ => {}
         }
-        buf.clear();
     }
 
     result
@@ -295,6 +333,68 @@ mod tests {
 
         assert!(is_gzip(&gz), "el buffer debería detectarse como gzip");
         assert_eq!(parse(&gz).urls.len(), 2);
+    }
+
+    #[test]
+    fn resolves_character_references_split_around_the_text() {
+        // Since quick-xml 0.38 each reference is its own event between two pieces of text.
+        let xml = br#"<urlset><url><loc>https://ejemplo.es/a&#38;b&#x26;c&amp;d</loc></url></urlset>"#;
+        assert_eq!(parse(xml).urls, vec!["https://ejemplo.es/a&b&c&d"]);
+    }
+
+    #[test]
+    fn a_bare_ampersand_costs_its_own_loc_not_the_rest_of_the_sitemap() {
+        let xml = br#"<urlset>
+            <url><loc>https://ejemplo.es/a?x=1&y=2</loc></url>
+            <url><loc>https://ejemplo.es/b</loc></url>
+        </urlset>"#;
+        let s = parse(xml);
+        assert_eq!(s.urls, vec!["https://ejemplo.es/b"]);
+        assert_eq!(s.parse_error, None);
+    }
+
+    #[test]
+    fn a_byte_that_is_not_utf8_costs_its_own_loc_not_the_rest_of_the_sitemap() {
+        // An old site that declares ISO-8859-1 and writes `/café` with a single 0xE9 byte.
+        let xml = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><urlset>\
+            <url><loc>https://ejemplo.es/caf\xe9</loc></url>\
+            <url><loc>https://ejemplo.es/b</loc></url></urlset>";
+        let s = parse(xml);
+        assert_eq!(s.urls, vec!["https://ejemplo.es/b"]);
+        assert_eq!(s.parse_error, None);
+    }
+
+    #[test]
+    fn hostile_sitemap_with_duplicate_attributes_parses_in_bounded_time() {
+        // RUSTSEC-2026-0194: checking a start tag for duplicate attribute names was quadratic.
+        // A sitemap comes from a site that is not ours; one tag with 100,000 copies of the same
+        // attribute must not stall the crawl.
+        let mut xml = String::from("<urlset><url");
+        for _ in 0..100_000 {
+            xml.push_str(r#" a="1""#);
+        }
+        xml.push_str("><loc>https://ejemplo.es/a</loc></url></urlset>");
+        let start = std::time::Instant::now();
+        assert_eq!(parse(xml.as_bytes()).urls, vec!["https://ejemplo.es/a"]);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn hostile_sitemap_with_thousands_of_namespaces_parses_in_bounded_time() {
+        // RUSTSEC-2026-0195: `NsReader` allocated without bound for namespace declarations. This
+        // parser does not resolve namespaces at all; the test keeps it that way.
+        let mut xml = String::from("<urlset");
+        for i in 0..100_000 {
+            xml.push_str(&format!(r#" xmlns:p{i}="urn:x:{i}""#));
+        }
+        xml.push('>');
+        for _ in 0..10_000 {
+            xml.push_str(r#"<url xmlns:p="urn:a" xmlns:q="urn:b"><loc>https://ejemplo.es/a</loc></url>"#);
+        }
+        xml.push_str("</urlset>");
+        let start = std::time::Instant::now();
+        assert_eq!(parse(xml.as_bytes()).urls.len(), 10_000);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
     }
 
     #[test]

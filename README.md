@@ -40,7 +40,7 @@ answer, SQL does.
 
 ## Install
 
-Requires Rust 1.85 or newer.
+Requires Rust 1.88 or newer.
 
 ```bash
 git clone https://github.com/dcarrero/crawlforge

@@ -41,7 +41,7 @@ responda, la responde SQL.
 
 ## Instalación
 
-Necesita Rust 1.85 o posterior.
+Necesita Rust 1.88 o posterior.
 
 ```bash
 git clone https://github.com/dcarrero/crawlforge
