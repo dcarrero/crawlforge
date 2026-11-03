@@ -19,12 +19,13 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
-## [Unreleased]
+## [0.21.0] — 2026-11-03
 
-A new rule, and two new columns in the crawl file to feed it. Minor bump when released: the
-catalog reports something it did not, and files from 0.20.0 and earlier open, migrate and resume
-as before (as with migration 011, an earlier binary refuses a file written by this one). The
-catalog has 72 rules.
+A new rule, a gentler crawler and a dependency audit. Minor bump: the catalog reports something it
+did not, and the crawl behaves differently under rate limiting. Files from 0.20.0 and earlier open,
+migrate and resume as before; as with migration 011, an earlier binary refuses a file written by
+this one (migration 012 adds `links.fragment` and `pages.fragment_ids`). The minimum Rust version
+to build from source goes from 1.85 to 1.88. The catalog has 72 rules.
 
 ### Added
 
