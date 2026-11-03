@@ -19,10 +19,14 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
-## [Unreleased]
+## [0.22.0] — 2026-11-03
 
 The engine does not change: same rules, same crawl file, same output. What changes is how it is
-named and where you can get it.
+named and where you can get it. Minor bump because names people may already use change: the
+package is now `crawlforge` (it was `crawlforge-cli`), and the release files are
+`crawlforge-<target>` and `crawlforge-installer.{sh,ps1}` (they were `crawlforge-cli-…`), so a
+link to `releases/latest/download/crawlforge-cli-installer.sh`, published with 0.21.2, stops
+working from this release on.
 
 ### Added
 

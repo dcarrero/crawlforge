@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.21.2"
+version = "0.22.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -83,8 +83,8 @@ libc = "0.2"
 # uses the path inside the workspace and the version in the published package, which has no
 # paths. It must be the one in `[workspace.package]`; a CLI test fails when they drift
 # (`internal_dependencies_follow_the_workspace_version`).
-crawlforge-core = { path = "crates/crawlforge-core", version = "0.21.2" }
-crawlforge-rules = { path = "crates/crawlforge-rules", version = "0.21.2" }
+crawlforge-core = { path = "crates/crawlforge-core", version = "0.22.0" }
+crawlforge-rules = { path = "crates/crawlforge-rules", version = "0.22.0" }
 crawlforge-adapters = { path = "crates/crawlforge-adapters" }
 crawlforge-hub = { path = "crates/crawlforge-hub" }
 

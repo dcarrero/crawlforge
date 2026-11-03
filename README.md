@@ -2,7 +2,7 @@
 
 **Technical SEO auditing for people who run many sites, not one.**
 
-CrawlForge crawls a site you own, extracts what matters for search, evaluates 59 audit rules and
+CrawlForge crawls a site you own, extracts what matters for search, evaluates 72 audit rules and
 writes everything to a single SQLite file. Then it can tell you what changed since the last crawl —
 which is the part that turns a one-off audit into something you can run every week.
 
@@ -133,7 +133,7 @@ concurrency, on different machines, against different sites are not comparisons.
 ```
 crates/
   crawlforge-core/      crawler, parser, rule engine, SQLite store
-  crawlforge-rules/     the 59 audit rules
+  crawlforge-rules/     the 72 audit rules
   crawlforge-cli/       the binary (package `crawlforge`)
   crawlforge-adapters/  WordPress and Astro
   crawlforge-ffi/       C and Swift bindings
