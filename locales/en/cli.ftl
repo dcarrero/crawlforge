@@ -21,15 +21,24 @@ severity_word_info = info
 
 ## Resumen del rastreo (`report.rs`)
 
-crawl_finished = Crawl finished: { $urls } URLs in { $secs } s
+crawl_finished = Crawl finished: { $urls ->
+        [one] { $urls } URL
+       *[other] { $urls } URLs
+    } in { $secs } s
 crawl_failed_suffix = {" "}({ $n } failed)
 crawl_truncated = Crawl truncated by { $reason }. The findings shown are those found up to that point.
 # A 429 is not a page's status: the site asked the crawler to slow down. The pages
 # were left pending, and the useful thing to say is how to get them.
-crawl_rate_limited_note = The site rate-limited the crawl: { $n } pages still answered 429 Too Many Requests after the retries and were left pending, not reported as broken. Rules that need the whole site are not evaluated until they are fetched. Later, run:
+crawl_rate_limited_note = The site rate-limited the crawl: { $n ->
+        [one] { $n } page still answered 429 Too Many Requests after the retries and was left pending
+       *[other] { $n } pages still answered 429 Too Many Requests after the retries and were left pending
+    }, not reported as broken. Rules that need the whole site are not evaluated until they are fetched. Later, run:
     {"    "}crawlforge resume { $path }
     or crawl again with a lower --concurrency, or let the CrawlForge user-agent through the site's firewall.
-report_rate_limited_note = > **The site rate-limited the crawl.** { $n } pages answered 429 Too Many Requests and were left pending: they are not counted or reported as broken, and rules that need the whole site are not evaluated. `crawlforge resume` fetches them.
+report_rate_limited_note = > **The site rate-limited the crawl.** { $n ->
+        [one] { $n } page answered 429 Too Many Requests and was left pending: it is not counted or reported as broken
+       *[other] { $n } pages answered 429 Too Many Requests and were left pending: they are not counted or reported as broken
+    }, and rules that need the whole site are not evaluated. `crawlforge resume` fetches the pending pages.
 # `list_mode` no es un corte: el rastreo hizo exactamente lo que se le pidió, así que
 # decirle al usuario «tu rastreo se truncó» sería mentir. Lo que sí hay que decirle es
 # la consecuencia de auditar un conjunto y no un sitio.
@@ -37,22 +46,37 @@ crawl_list_mode_note = List crawl: only the URLs you provided were audited. Rule
 # El tope de externas no trunca el rastreo del sitio —ese es `crawl_truncated`— pero
 # dejar enlaces sin comprobar en silencio haría que el informe pareciera completo sin
 # serlo, así que se dice cuántos quedaron fuera.
-external_unchecked = { $n } external links were not checked: the max_external cap was reached. Raise it with --max-external.
+external_unchecked = { $n ->
+        [one] { $n } external link was
+       *[other] { $n } external links were
+    } not checked: the max_external cap was reached. Raise it with --max-external.
 # El otro tope de externas: el del registro. Estas no están en el fichero, así que sin
 # este aviso el informe no tendría ni una fila que delatara que faltan.
-external_unregistered = { $n } external links were not even recorded: the max_external_urls cap was reached. A single page linking to hundreds of thousands of hosts is what this cap is for.
+external_unregistered = { $n ->
+        [one] { $n } external link was
+       *[other] { $n } external links were
+    } not even recorded: the max_external_urls cap was reached. A single page linking to hundreds of thousands of hosts is what this cap is for.
 # La variante de fichero para un rastreo cortado: aquí no se puede afirmar que el
 # tope fuera el motivo — un truncado deja externas sin sondear igualmente.
-external_never_checked = { $n } external links were recorded but never checked.
+external_never_checked = { $n ->
+        [one] { $n } external link was recorded but never checked.
+       *[other] { $n } external links were recorded but never checked.
+    }
 # Una auditoría de carpeta no tiene red: el motivo no es el tope, y `audit` no acepta
 # --max-external. Lo que sí sirve es rastrear lo publicado.
-external_offline = { $n } external links were not checked: auditing a folder makes no network requests. To check them, crawl the published site with `crawlforge crawl <URL>`.
+external_offline = { $n ->
+        [one] { $n } external link was
+       *[other] { $n } external links were
+    } not checked: auditing a folder makes no network requests. To check external links, crawl the published site with `crawlforge crawl <URL>`.
 # La otra mitad de la honestidad de las externas: cuando la comprobación estaba
 # apagada, «cero enlaces externos rotos» no significa que no los haya.
 external_check_disabled = External links were not checked (--no-external-check): the absence of broken external links in this report does not mean there are none.
 # El resumen del rastreo dice cuántas externas se sondearon aunque todo fuera bien:
 # es el tiempo que el cierre atribuía en silencio al rastreo del sitio.
-external_checked_note = { $n } external links checked.
+external_checked_note = { $n ->
+        [one] { $n } external link checked.
+       *[other] { $n } external links checked.
+    }
 # Qué reglas calló el truncado, por su ID: sin la lista, «las reglas que necesitan el
 # grafo» obliga a adivinar cuáles son.
 rules_not_evaluated = Rules that need the complete link graph were not evaluated: { $rules }.
@@ -162,7 +186,10 @@ label_canonical = Canonical
 canonical_self = self
 label_indexable = Indexable
 indexable_no = no — { $reason }
-chars_suffix = { $n } chars
+chars_suffix = { $n ->
+        [one] { $n } char
+       *[other] { $n } chars
+    }
 inspect_redirects_title = Redirect chain
 inlinks_title = Inlinks ({ $n })
 inlinks_by_region = By region: { $breakdown } · { $nofollow } nofollow
@@ -194,15 +221,21 @@ label_before = Before
 label_after = After
 label_site = Site
 label_common = Common
-diff_crawl_counts = { $urls } URLs, { $findings } findings
+diff_crawl_counts = { $urls ->
+        [one] { $urls } URL
+       *[other] { $urls } URLs
+    }, { $findings ->
+        [one] { $findings } finding
+       *[other] { $findings } findings
+    }
 diff_common_note = { $n } URLs present in both crawls
 warnings_title = Warnings
 tag_inconclusive = INCONCLUSIVE
 tag_warning = WARNING
 side_before = before
 side_after = after
-warn_truncated = The '{ $side }' crawl is truncated{ $reason_suffix }. What disappeared or got resolved cannot be asserted: the crawl may simply not have reached it.
-warn_truncated_by = {" "}by { $reason }
+warn_truncated = The '{ $side }' crawl is truncated. What disappeared or got resolved cannot be asserted: the crawl may simply not have reached it.
+warn_truncated_by = The '{ $side }' crawl is truncated by { $reason }. What disappeared or got resolved cannot be asserted: the crawl may simply not have reached it.
 # La variante de `warn_truncated` para `list_mode`: el rastreo no se cortó — es que
 # un rastreo en modo lista nunca ve más que su lista. La consecuencia para el diff es
 # la misma (las ausencias no se pueden afirmar) y el motivo, distinto.
@@ -246,7 +279,10 @@ gate_title = CI gate
 # Multilínea: el punto de llamada imprime cada línea con su sangría.
 gate_inconclusive = The 'before' crawl is incomplete: new findings cannot be asserted and
     --fail-on takes no stance. This is not a pass.
-gate_fail_detail = { $n } new finding(s) [{ $severity }] — matches --fail-on { $token }
+gate_fail_detail = { $n ->
+        [one] { $n } new finding
+       *[other] { $n } new findings
+    } [{ $severity }] — matches --fail-on { $token }
 gate_pass = PASS   nothing watched shows up as a new finding.
 
 ## Reabrir un diff guardado y listar sus filas (`diff_file.rs`)
@@ -256,7 +292,10 @@ diff_saved_note = diff generated { $generated_at } by crawlforge { $version } ·
 # Multilínea: el punto de llamada imprime cada línea con su sangría.
 hint_diff_full_lists = The lists above show only a few examples. For every row, add --rule <ID> or
     --change <type> to the same command (e.g. --change url_removed).
-warn_unknown_change_types = { $n } change(s) of a type this crawlforge does not know ({ $types }) were left out. The file was written by a newer version.
+warn_unknown_change_types = { $n ->
+        [one] { $n } change of a type this crawlforge does not know ({ $types }) was left out.
+       *[other] { $n } changes of a type this crawlforge does not know ({ $types }) were left out.
+    } The file was written by a newer version.
 label_status_changed = Status codes changed
 diff_no_matching_changes = No change in this diff matches.
 error_diff_missing = { $path } does not exist. Diff files are saved by `crawlforge diff <before> <after> --out <file>`.
@@ -450,7 +489,10 @@ resume_counts = Picking up where it stopped: { $done } URLs already crawled, { $
 resume_config_note = Using the configuration saved in the file: the original run's settings apply.
 error_resume_schema_blocking = { $file } is a schema v{ $version } crawl, and migration { $blocking } changes what the engine writes: half of it would say one thing and half another. Run the crawl again. You can still open this file with `report`, `export` and `diff`.
 resume_robots_not_inherited = Note: the original crawl ignored robots.txt. This one does not — that permission is granted by you, not by a file. Re-run the original crawl command if you need it.
-resume_finished = Crawl resumed and completed: { $urls } more URLs in { $secs } s
+resume_finished = Crawl resumed and completed: { $urls ->
+        [one] { $urls } more URL
+       *[other] { $urls } more URLs
+    } in { $secs } s
 interrupt_flushing = Interrupted: saving what is already crawled… (Ctrl+C again to quit without waiting)
 # Un Ctrl+C cuando el motor ya terminó —durante un export largo, por ejemplo— no
 # tiene nada que guardar: se sale ya, diciendo que el rastreo no corre peligro.

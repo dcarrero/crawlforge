@@ -629,11 +629,11 @@ fn findings_lines(
                             msg::deep_pages_summary(
                                 lang,
                                 n(f.pages),
-                                f.max_click_depth,
+                                n(f.max_click_depth),
                                 pct,
-                                f.typical_min,
-                                f.typical_max,
-                                f.deepest
+                                n(f.typical_min),
+                                n(f.typical_max),
+                                n(f.deepest)
                             )
                         ));
                         continue;
@@ -663,7 +663,7 @@ fn findings_lines(
         // rastreo real están cada uno en ~540 páginas, pero son las mismas 567 páginas trece
         // veces, no 6.998.
         let collapsed = pages_in_groups(conn, &rule, &severity, &claves)?;
-        let mut texto = msg::template_issues(lang, template.len(), n(collapsed));
+        let mut texto = msg::template_issues(lang, i18n::count_usize(lang, template.len()), n(collapsed));
         if rest > 0 {
             texto.push_str(&msg::plus_more_findings(lang, n(rest)));
         }
@@ -1068,7 +1068,13 @@ fn detect_base_mismatch<'a>(
     if cuantos * 100 < total * BASE_MISMATCH_THRESHOLD_PCT {
         return None;
     }
-    Some(msg::warn_base_mismatch(lang, cuantos, total, origin, base))
+    Some(msg::warn_base_mismatch(
+        lang,
+        i18n::count_usize(lang, cuantos),
+        i18n::count_usize(lang, total),
+        origin,
+        base,
+    ))
 }
 
 fn human_bytes(bytes: u64) -> String {

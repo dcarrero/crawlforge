@@ -138,7 +138,7 @@ impl PortfolioWarning {
             Self::MixedRulesVersions(v) => msg::warn_portfolio_rules_versions(lang, v.join(", ")),
             Self::MixedCoreVersions(v) => msg::warn_portfolio_core_versions(lang, v.join(", ")),
             Self::DateSpread { oldest, newest, days } => {
-                msg::warn_portfolio_date_spread(lang, days, oldest, newest)
+                msg::warn_portfolio_date_spread(lang, i18n::count(lang, *days), oldest, newest)
             }
             Self::SiteRulesConfig(sites) => {
                 let list: Vec<String> = sites
@@ -349,7 +349,11 @@ pub fn check_site_cap(
 ) -> Result<()> {
     if let Some(max) = source.limits().max_portfolio_sites {
         if n_sites > max as usize {
-            bail!(msg::error_portfolio_too_many(lang, n_sites, max));
+            bail!(msg::error_portfolio_too_many(
+                lang,
+                i18n::count_usize(lang, n_sites),
+                i18n::group_thousands(lang, u64::from(max))
+            ));
         }
     }
     Ok(())

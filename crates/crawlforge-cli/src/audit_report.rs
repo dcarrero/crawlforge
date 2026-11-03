@@ -85,11 +85,11 @@ impl Group {
                     return msg::deep_pages_summary(
                         lang,
                         i18n::count(lang, f.pages),
-                        f.max_click_depth,
+                        i18n::count(lang, f.max_click_depth),
                         pct,
-                        f.typical_min,
-                        f.typical_max,
-                        f.deepest,
+                        i18n::count(lang, f.typical_min),
+                        i18n::count(lang, f.typical_max),
+                        i18n::count(lang, f.deepest),
                     );
                 }
                 return format!(
@@ -101,7 +101,7 @@ impl Group {
             return i18n::count(lang, self.total);
         }
         let mut texto =
-            msg::template_issues(lang, self.template_count, i18n::count(lang, self.template_pages));
+            msg::template_issues(lang, i18n::count_usize(lang, self.template_count), i18n::count(lang, self.template_pages));
         if self.template_rest > 0 {
             texto.push_str(&msg::plus_more_findings(lang, i18n::count(lang, self.template_rest)));
         }
@@ -802,6 +802,23 @@ fn inline(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_template_headline_groups_its_counts() {
+        // `$k` reached Fluent as a raw `usize`: «1234 Template-Probleme» instead of «1.234».
+        let group = Group {
+            rule_id: "ASSET-IMG-NO-ALT".into(),
+            severity: Severity::Medium,
+            total: 5000,
+            examples: Vec::new(),
+            template_count: 1234,
+            template_pages: 2000,
+            template_rest: 0,
+            pervasive_pct: None,
+            deep: None,
+        };
+        assert_eq!(group.headline(Lang::De), "1.234 Template-Probleme (2.000 Seiten)");
+    }
 
     /// A crawl file with the real schema —all the migrations, via `test_schema.rs`— and known
     /// findings.

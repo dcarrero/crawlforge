@@ -181,7 +181,13 @@ label_before = Voor
 label_after = Na
 label_site = Site
 label_common = Gedeeld
-diff_crawl_counts = { $urls } URL's, { $findings } bevindingen
+diff_crawl_counts = { $urls ->
+        [one] { $urls } URL
+       *[other] { $urls } URL's
+    }, { $findings ->
+        [one] { $findings } bevinding
+       *[other] { $findings } bevindingen
+    }
 diff_common_note = { $n ->
         [one] { $n } URL komt in beide crawls voor
        *[other] { $n } URL's komen in beide crawls voor
@@ -191,8 +197,8 @@ tag_inconclusive = NIET SLUITEND
 tag_warning = WAARSCHUWING
 side_before = voor
 side_after = na
-warn_truncated = De crawl ‘{ $side }’ is afgebroken{ $reason_suffix }. Wat verdwenen of opgelost is, valt niet vast te stellen: de crawl is er misschien gewoon niet aan toegekomen.
-warn_truncated_by = {" "}door { $reason }
+warn_truncated = De crawl ‘{ $side }’ is afgebroken. Wat verdwenen of opgelost is, valt niet vast te stellen: de crawl is er misschien gewoon niet aan toegekomen.
+warn_truncated_by = De crawl ‘{ $side }’ is afgebroken door { $reason }. Wat verdwenen of opgelost is, valt niet vast te stellen: de crawl is er misschien gewoon niet aan toegekomen.
 warn_list_mode = De crawl ‘{ $side }’ is een lijstcrawl: hij zag alleen de URL's die hij kreeg. Wat verdwenen of opgelost is, valt niet vast te stellen.
 warn_unfinished = De crawl ‘{ $side }’ is niet voltooid (status ‘{ $status }’). Wat erin ontbreekt, zegt niets.
 warn_rules_changed = De regelcatalogus is gewijzigd ({ $before } → { $after }). Een deel van de nieuwe of opgeloste bevindingen kan van de regels komen, niet van de site.

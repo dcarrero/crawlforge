@@ -261,14 +261,10 @@ impl Warning {
             Self::Truncated { side, reason } if reason.as_deref() == Some("list_mode") => {
                 msg::warn_list_mode(lang, side.label(lang))
             }
-            Self::Truncated { side, reason } => msg::warn_truncated(
-                lang,
-                side.label(lang),
-                reason
-                    .as_deref()
-                    .map(|r| msg::warn_truncated_by(lang, r))
-                    .unwrap_or_default(),
-            ),
+            Self::Truncated { side, reason } => match reason.as_deref() {
+                Some(r) => msg::warn_truncated_by(lang, side.label(lang), r),
+                None => msg::warn_truncated(lang, side.label(lang)),
+            },
             Self::Unfinished { side, status } => {
                 msg::warn_unfinished(lang, side.label(lang), status)
             }
@@ -1681,18 +1677,27 @@ fn count_line(indent: usize, label: &str, value: &str) -> String {
 
 fn print_header(outcome: &DiffOutcome, lang: Lang) {
     println!("{}", i18n::section(&msg::diff_title(lang)));
-    for (etiqueta, info) in
+    // The counts reach the message as numbers, so its plurals agree («1 finding»); the
+    // alignment the old right-padded numbers gave is kept by padding the whole phrase to the
+    // wider of the two, which lines the paths up.
+    let recuentos = [&outcome.before, &outcome.after].map(|info| {
+        msg::diff_crawl_counts(
+            lang,
+            i18n::count(lang, info.urls_total),
+            i18n::count(lang, info.issues_total),
+        )
+    });
+    let ancho_recuentos = recuentos.iter().map(|r| i18n::display_width(r)).max().unwrap_or(0);
+    for ((etiqueta, info), recuento) in
         [(msg::label_before(lang), &outcome.before), (msg::label_after(lang), &outcome.after)]
+            .into_iter()
+            .zip(&recuentos)
     {
         println!(
             "  {} {:<19} {}   {}",
             i18n::pad(&etiqueta, 9),
             info.started_at,
-            msg::diff_crawl_counts(
-                lang,
-                format!("{:>7}", i18n::count(lang, info.urls_total)),
-                format!("{:>6}", i18n::count(lang, info.issues_total)),
-            ),
+            i18n::pad(recuento, ancho_recuentos),
             info.path
         );
     }
@@ -1972,7 +1977,7 @@ fn print_gate(outcome: &DiffOutcome, lang: Lang) {
         println!(
             "  FAIL   {:<30} {}",
             hit.rule_id,
-            msg::gate_fail_detail(lang, hit.count, &hit.severity, &hit.token)
+            msg::gate_fail_detail(lang, i18n::count_usize(lang, hit.count), &hit.severity, &hit.token)
         );
     }
     if outcome.fail_on.is_empty() && !outcome.fail_on_inconclusive {
@@ -2024,6 +2029,20 @@ pub(crate) fn status_rank(code: Option<&str>) -> u8 {
 pub(crate) mod tests {
     use super::*;
     use rusqlite::params;
+
+    #[test]
+    fn the_truncation_reason_goes_where_each_language_puts_it() {
+        // It used to be glued after the sentence as a suffix («… truncated{ by max_urls }»),
+        // which forced the English order: Japanese said «打ち切られています (理由: max_urls)».
+        let con = Warning::Truncated { side: Side::Before, reason: Some("max_urls".into()) };
+        let ja = con.message(Lang::Ja);
+        let motivo = ja.find("max_urls").expect("the reason is there");
+        let verbo = ja.find("打ち切られて").expect("and the verb");
+        assert!(motivo < verbo, "the reason comes before the verb in Japanese: {ja}");
+        assert!(con.message(Lang::En).contains("crawl is truncated by max_urls."));
+        let sin = Warning::Truncated { side: Side::After, reason: None };
+        assert!(sin.message(Lang::En).contains("crawl is truncated. What"));
+    }
 
     /// A crawl file with the **real schema**: every published migration, from the shared
     /// helper in `test_schema.rs`, whose guard test keeps it in sync with `migrations/`.

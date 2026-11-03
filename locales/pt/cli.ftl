@@ -216,7 +216,15 @@ label_after = Depois
 label_site = Site
 label_common = Em comum
 # $urls and $findings arrive right-padded as text: no selector can work on them.
-diff_crawl_counts = { $urls } URLs, { $findings } ocorrências
+diff_crawl_counts = { $urls ->
+        [0] { $urls } URLs
+        [one] { $urls } URL
+       *[other] { $urls } URLs
+    }, { $findings ->
+        [0] { $findings } ocorrências
+        [one] { $findings } ocorrência
+       *[other] { $findings } ocorrências
+    }
 diff_common_note = { $n ->
         [0] nenhuma URL presente nos dois rastreamentos
         [one] { $n } URL presente nos dois rastreamentos
@@ -227,8 +235,8 @@ tag_inconclusive = INCONCLUSIVO
 tag_warning = AVISO
 side_before = antes
 side_after = depois
-warn_truncated = O rastreamento “{ $side }” está truncado{ $reason_suffix }. Não é possível afirmar o que desapareceu ou foi resolvido: talvez o rastreamento simplesmente não tenha chegado lá.
-warn_truncated_by = {" "}por { $reason }
+warn_truncated = O rastreamento “{ $side }” está truncado. Não é possível afirmar o que desapareceu ou foi resolvido: talvez o rastreamento simplesmente não tenha chegado lá.
+warn_truncated_by = O rastreamento “{ $side }” está truncado por { $reason }. Não é possível afirmar o que desapareceu ou foi resolvido: talvez o rastreamento simplesmente não tenha chegado lá.
 warn_list_mode = O rastreamento “{ $side }” é um rastreamento de lista: só viu as URLs que recebeu. Não é possível afirmar o que desapareceu ou foi resolvido.
 warn_unfinished = O rastreamento “{ $side }” não terminou (status “{ $status }”). As ausências nele não significam nada.
 warn_rules_changed = O catálogo de regras mudou ({ $before } → { $after }). Parte das ocorrências novas ou resolvidas pode vir das regras, não do site.

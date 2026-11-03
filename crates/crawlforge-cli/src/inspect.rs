@@ -613,7 +613,7 @@ fn page_section(w: &mut Writer<'_>, conn: &Connection, row: &UrlRow, lang: Lang)
             Some(t) if !t.is_empty() => {
                 let t = sanitize(t);
                 match len {
-                    Some(len) => format!("{t} ({})", msg::chars_suffix(lang, len)),
+                    Some(len) => format!("{t} ({})", msg::chars_suffix(lang, i18n::count(lang, len))),
                     None => t,
                 }
             }

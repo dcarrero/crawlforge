@@ -178,7 +178,13 @@ label_before = Vorher
 label_after = Nachher
 label_site = Website
 label_common = Gemeinsam
-diff_crawl_counts = { $urls } URLs, { $findings } Befunde
+diff_crawl_counts = { $urls ->
+        [one] { $urls } URL
+       *[other] { $urls } URLs
+    }, { $findings ->
+        [one] { $findings } Befund
+       *[other] { $findings } Befunde
+    }
 diff_common_note = { $n ->
         [one] { $n } URL in beiden Crawls vorhanden
        *[other] { $n } URLs in beiden Crawls vorhanden
@@ -188,8 +194,8 @@ tag_inconclusive = NICHT SCHLÜSSIG
 tag_warning = WARNUNG
 side_before = vorher
 side_after = nachher
-warn_truncated = Der Crawl „{ $side }“ wurde{ $reason_suffix } abgebrochen. Was verschwunden ist oder behoben wurde, lässt sich nicht feststellen: Der Crawl hat es womöglich einfach nicht erreicht.
-warn_truncated_by = {" "}durch { $reason }
+warn_truncated = Der Crawl „{ $side }“ wurde abgebrochen. Was verschwunden ist oder behoben wurde, lässt sich nicht feststellen: Der Crawl hat es womöglich einfach nicht erreicht.
+warn_truncated_by = Der Crawl „{ $side }“ wurde durch { $reason } abgebrochen. Was verschwunden ist oder behoben wurde, lässt sich nicht feststellen: Der Crawl hat es womöglich einfach nicht erreicht.
 warn_list_mode = Der Crawl „{ $side }“ ist ein Listen-Crawl: Er hat nur die übergebenen URLs gesehen. Was verschwunden ist oder behoben wurde, lässt sich nicht feststellen.
 warn_unfinished = Der Crawl „{ $side }“ wurde nicht abgeschlossen (Status „{ $status }“). Was darin fehlt, sagt nichts aus.
 warn_rules_changed = Der Regelkatalog hat sich geändert ({ $before } → { $after }). Manche neuen oder behobenen Befunde können von den Regeln stammen, nicht von der Website.

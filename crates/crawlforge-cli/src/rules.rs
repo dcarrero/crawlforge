@@ -192,7 +192,13 @@ fn print_resumen(reglas: &[&'static RuleMeta], lang: Lang) {
     let de_pagina = reglas.iter().filter(|m| m.scope == Scope::Page).count();
     println!(
         "\n{}",
-        msg::rules_summary(lang, reglas.len(), free, de_pagina, reglas.len() - de_pagina)
+        msg::rules_summary(
+            lang,
+            i18n::count_usize(lang, reglas.len()),
+            i18n::count_usize(lang, free),
+            i18n::count_usize(lang, de_pagina),
+            i18n::count_usize(lang, reglas.len() - de_pagina)
+        )
     );
 }
 

@@ -256,7 +256,17 @@ label_after = Po
 label_site = Witryna
 label_common = Wspólne
 # $urls and $findings arrive right-padded as text: no selector can work on them.
-diff_crawl_counts = URL: { $urls }, problemy: { $findings }
+diff_crawl_counts = { $urls ->
+        [one] { $urls } adres URL
+        [few] { $urls } adresy URL
+        [many] { $urls } adresów URL
+       *[other] { $urls } adresów URL
+    }, { $findings ->
+        [one] { $findings } problem
+        [few] { $findings } problemy
+        [many] { $findings } problemów
+       *[other] { $findings } problemów
+    }
 diff_common_note = { $n ->
         [one] { $n } adres URL obecny w obu skanowaniach
         [few] { $n } adresy URL obecne w obu skanowaniach
@@ -268,8 +278,8 @@ tag_inconclusive = NIEPEWNE
 tag_warning = UWAGA
 side_before = przed
 side_after = po
-warn_truncated = Skanowanie „{ $side }” zostało przerwane{ $reason_suffix }. Nie można stwierdzić, co zniknęło lub zostało rozwiązane: skanowanie mogło po prostu tam nie dotrzeć.
-warn_truncated_by = {" "}z powodu { $reason }
+warn_truncated = Skanowanie „{ $side }” zostało przerwane. Nie można stwierdzić, co zniknęło lub zostało rozwiązane: skanowanie mogło po prostu tam nie dotrzeć.
+warn_truncated_by = Skanowanie „{ $side }” zostało przerwane z powodu { $reason }. Nie można stwierdzić, co zniknęło lub zostało rozwiązane: skanowanie mogło po prostu tam nie dotrzeć.
 warn_list_mode = Skanowanie „{ $side }” to skanowanie listy: widziało tylko podane mu adresy URL. Nie można stwierdzić, co zniknęło lub zostało rozwiązane.
 warn_unfinished = Skanowanie „{ $side }” nie zostało ukończone (stan „{ $status }”). Braki w nim nic nie znaczą.
 warn_rules_changed = Katalog reguł się zmienił ({ $before } → { $after }). Część nowych lub rozwiązanych problemów może wynikać ze zmiany reguł, a nie z witryny.
@@ -309,7 +319,12 @@ gate_title = Bramka CI
 gate_inconclusive = Skanowanie „przed” jest niepełne: nie można stwierdzić nowych problemów, a
     --fail-on nie rozstrzyga. To nie jest wynik pozytywny.
 # $n arrives as a raw, ungrouped integer: from 1000 up it is text and would take the default.
-gate_fail_detail = Nowe problemy: { $n } [{ $severity }] — pasuje do --fail-on { $token }
+gate_fail_detail = { $n ->
+        [one] { $n } nowy problem
+        [few] { $n } nowe problemy
+        [many] { $n } nowych problemów
+       *[other] { $n } nowych problemów
+    } [{ $severity }] — pasuje do --fail-on { $token }
 gate_pass = PASS   nic z obserwowanego nie pojawia się jako nowy problem.
 
 ## Reabrir un diff guardado y listar sus filas (`diff_file.rs`)

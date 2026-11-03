@@ -136,6 +136,11 @@ pub fn count(lang: Lang, n: i64) -> String {
     u64::try_from(n).map_or_else(|_| n.to_string(), |v| group_thousands(lang, v))
 }
 
+/// [`count`] para los recuentos `usize` de Rust (`Vec::len`, contadores en memoria).
+pub fn count_usize(lang: Lang, n: usize) -> String {
+    group_thousands(lang, n as u64)
+}
+
 /// Un número con un decimal, con la coma decimal donde el idioma la usa: `12.3` / `12,3`.
 ///
 /// Va a la vez que [`group_thousands`]: un `3.816` de millares junto a un `1.5` de decimal
@@ -434,8 +439,10 @@ pub mod msg {
         tag_warning();
         side_before();
         side_after();
-        warn_truncated(side, reason_suffix);
-        warn_truncated_by(reason);
+        // Two complete sentences, not one with a glued «by …» suffix: where the reason goes
+        // is the translation's business.
+        warn_truncated(side);
+        warn_truncated_by(side, reason);
         // La variante de `warn_truncated` para `list_mode`: el rastreo no se cortó — es que
         // un rastreo en modo lista nunca ve más que su lista. La consecuencia para el diff es
         // la misma (las ausencias no se pueden afirmar) y el motivo, distinto.
@@ -707,6 +714,7 @@ pub mod msg {
 
     /// "{n} sites" with the plural resolved per language.
     pub fn portfolio_sites_count(lang: Lang, n: usize) -> String {
+        let n = super::count_usize(lang, n);
         super::format(lang, "portfolio_sites_count", &[("n", &n)])
     }
 
@@ -717,6 +725,8 @@ pub mod msg {
         disabled: usize,
         changed: usize,
     ) -> String {
+        let (disabled, changed) =
+            (super::count_usize(lang, disabled), super::count_usize(lang, changed));
         super::format(
             lang,
             "rules_config_note",
@@ -726,6 +736,7 @@ pub mod msg {
 
     /// "9 of 12 sites" — the numerator of the spread table.
     pub fn portfolio_sites_of(lang: Lang, fired: usize, total: usize) -> String {
+        let (fired, total) = (super::count_usize(lang, fired), super::count_usize(lang, total));
         super::format(lang, "portfolio_sites_of", &[("fired", &fired), ("total", &total)])
     }
 
@@ -736,12 +747,14 @@ pub mod msg {
         if n == 0 {
             return String::new();
         }
+        let n = super::count_usize(lang, n);
         super::format(lang, "portfolio_inconclusive_suffix", &[("n", &n)])
     }
 
     /// "3 of 5 sites have a previous crawl (.prev.sqlite) to compare against." The noun
     /// follows the total and the verb follows the pair count: "1 of 5 sites has".
     pub fn portfolio_pairs_line(lang: Lang, pairs: usize, total: usize) -> String {
+        let (pairs, total) = (super::count_usize(lang, pairs), super::count_usize(lang, total));
         super::format(lang, "portfolio_pairs_line", &[("pairs", &pairs), ("total", &total)])
     }
 }
@@ -1055,6 +1068,42 @@ mod tests {
         // pick the plural form.
         assert_eq!(msg::image_usage_line(Lang::Es, 1234, 1), "incrustada 1.234 veces en 1 página");
         assert_eq!(msg::note_external_status(Lang::En, 12_345), "+12,345 external");
+    }
+
+    #[test]
+    fn english_counts_agree_in_number() {
+        // «1 new finding(s)», «1 URLs», «1 external links were»: English had no selectors
+        // where the other languages already had theirs.
+        let en = Lang::En;
+        assert!(msg::gate_fail_detail(en, "1", "high", "high").starts_with("1 new finding ["));
+        assert!(msg::gate_fail_detail(en, count(en, 1234), "high", "high")
+            .starts_with("1,234 new findings ["));
+        assert_eq!(msg::crawl_finished(en, "1", "2"), "Crawl finished: 1 URL in 2 s");
+        assert_eq!(msg::resume_finished(en, "1", "2"), "Crawl resumed and completed: 1 more URL in 2 s");
+        assert!(msg::external_unchecked(en, "1").starts_with("1 external link was not"));
+        assert!(msg::external_offline(en, "1").starts_with("1 external link was not"));
+        assert!(msg::external_unregistered(en, "1").starts_with("1 external link was not"));
+        assert_eq!(msg::external_never_checked(en, "1"), "1 external link was recorded but never checked.");
+        assert_eq!(msg::external_checked_note(en, "1"), "1 external link checked.");
+        assert!(msg::crawl_rate_limited_note(en, "1", "x").contains("1 page still answered"));
+        assert!(msg::report_rate_limited_note(en, "1").contains("1 page answered"));
+        assert!(msg::warn_unknown_change_types(en, "1", "x").starts_with("1 change of a type"));
+        assert_eq!(msg::diff_crawl_counts(en, "1", "1"), "1 URL, 1 finding");
+        assert_eq!(msg::chars_suffix(en, "1"), "1 char");
+        assert_eq!(msg::diff_crawl_counts(en, count(en, 1234), "0"), "1,234 URLs, 0 findings");
+    }
+
+    #[test]
+    fn hand_written_counts_reach_fluent_grouped() {
+        // A raw `usize` of four digits was not a number for Fluent («1234» is not how German
+        // writes it), so it showed ungrouped and fell to the default plural form.
+        assert_eq!(msg::portfolio_sites_count(Lang::De, 1234), "1.234 Websites");
+        assert_eq!(msg::portfolio_sites_of(Lang::En, 1000, 1001), "1,000 of 1,001 sites");
+        assert_eq!(msg::portfolio_inconclusive_suffix(Lang::En, 2000), " (2,000 inconclusive)");
+        assert!(msg::portfolio_pairs_line(Lang::En, 1000, 1200).starts_with("1,000 of 1,200 sites have"));
+        assert!(msg::rules_config_note(Lang::En, "x", 1000, 0).contains("1,000"));
+        // Polish 1002 is `few` («witryny»); as raw text it fell to the default («witryn»).
+        assert_eq!(msg::portfolio_sites_count(Lang::Pl, 1002), "1\u{A0}002 witryny");
     }
 
     #[test]
