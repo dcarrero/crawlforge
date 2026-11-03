@@ -258,9 +258,10 @@ contenido es un `<img alt="">` es `ASSET-IMG-EMPTY-ALT-LINK`, uno con un `<img>`
 icono pintado con CSS y la tarjeta entera convertida en un enlace vacío superpuesto. El texto
 oculto con CSS y el `<title>` de un `<svg>` en línea cuentan como texto. Es `medium`: la falta de
 nombre es un fallo de accesibilidad real (WCAG 2.4.4), pero para el buscador cuesta la señal de un
-enlace, no la página. `ASSET-IMG-EMPTY-ALT-LINK` es `high` por la misma falta de nombre, y esa
-diferencia se hereda, no se argumenta aquí: si las dos deben quedar en la misma severidad es una
-pregunta abierta.
+enlace, no la página. `ASSET-IMG-EMPTY-ALT-LINK` es `high` por la misma falta de nombre. La diferencia se mantiene a
+propósito (decidido el 2026-11-03): una regla nueva que aún no ha saltado en un sitio real no debe
+romper una puerta `--fail-on high` al actualizar, y el sitio que la quiera más alta la sube en su
+bloque `rules:`. Igualar las dos se reabre cuando haya datos de campo de ambas.
 
 **`LINK-ANCHOR-GENERIC` guarda sus fórmulas por idioma** (`link::GENERIC_ANCHORS`: inglés,
 español, alemán, francés, italiano, neerlandés y turco hoy), y añadir un idioma es añadir una

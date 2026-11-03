@@ -306,8 +306,10 @@ link's clothing) and give **one finding per page with the count**, not one per l
 the icon drawn with CSS and the whole card turned into an empty overlay link. Text hidden with
 CSS and an inline `<svg><title>` count as text. It is `medium`: the missing name is a real
 accessibility failure (WCAG 2.4.4), but for search it costs the anchor signal of one link, not
-the page. `ASSET-IMG-EMPTY-ALT-LINK` is `high` for the same missing name, and that difference is
-inherited, not argued here: whether both should meet at one severity is an open question.
+the page. `ASSET-IMG-EMPTY-ALT-LINK` is `high` for the same missing name. The gap is kept on purpose
+(decided 2026-11-03): a new rule that has not yet fired on a real site should not break a
+`--fail-on high` gate on upgrade, and a site that wants it higher sets it in its `rules:` block.
+Aligning the two is reopened when there is field data for both.
 
 **`LINK-ANCHOR-GENERIC` keeps its phrases per language** (`link::GENERIC_ANCHORS`: English,
 Spanish, German, French, Italian, Dutch and Turkish today), and adding a language is adding one
