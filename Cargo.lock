@@ -305,19 +305,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "crawlforge-adapters"
-version = "0.21.2"
-dependencies = [
- "crawlforge-core",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
-]
-
-[[package]]
-name = "crawlforge-cli"
+name = "crawlforge"
 version = "0.21.2"
 dependencies = [
  "anyhow",
@@ -338,6 +326,18 @@ dependencies = [
  "tracing-subscriber",
  "unicode-width",
  "url",
+]
+
+[[package]]
+name = "crawlforge-adapters"
+version = "0.21.2"
+dependencies = [
+ "crawlforge-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]

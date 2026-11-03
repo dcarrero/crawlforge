@@ -27,7 +27,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-BIN="cargo run -q -p crawlforge-cli --"
+BIN="cargo run -q -p crawlforge --"
 command -v cargo > /dev/null || { printf '\033[31m✗ hace falta cargo para regenerar estos ficheros\033[0m\n'; exit 1; }
 
 # ── El catálogo ───────────────────────────────────────────────────────────────

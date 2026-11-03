@@ -121,7 +121,15 @@ callback registrado o por polling.
 
 ### `crawlforge-cli`
 Interfaz de línea de comandos con `clap`. Es a la vez herramienta interna, producto del nivel Agency
-y banco de pruebas.
+y banco de pruebas. La carpeta conserva este nombre; el paquete es `crawlforge`, así que
+`cargo install crawlforge` y los archivos de cada versión llevan el nombre del comando. La
+biblioteca de dentro sigue siendo `crawlforge_cli`.
+
+**Publicados en crates.io:** `crawlforge-rules`, `crawlforge-core` y `crawlforge`, siempre con la
+versión del workspace. `crawlforge-adapters` y `crawlforge-ffi` son `publish = false`. Un crate
+publicado solo contiene su carpeta, así que ningún crate puede hacer `include_str!` de un fichero
+de fuera en código que no sea de test: por eso los ficheros Fluent de todos los idiomas viven en
+`crawlforge-rules/locales/`, y la CLI toma sus textos de `crawlforge_rules::l10n::CLI_SOURCES`.
 
 ## 3.bis Decisión sobre `spider-rs` — cerrada
 

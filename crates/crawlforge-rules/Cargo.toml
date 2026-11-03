@@ -4,7 +4,17 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = true
+repository.workspace = true
+homepage.workspace = true
+description = "The audit rule catalog of CrawlForge: rule metadata, SQL site rules over a crawl store, and the Fluent texts of every language"
+readme = "README.md"
+keywords = ["seo", "audit", "rules", "html", "fluent"]
+categories = ["web-programming", "development-tools"]
+# The fixtures are the test cases of each rule; `crawlforge-core` crawls them in its own tests
+# from the repository. A crate built from crates.io does not need them, and `fixture_path`
+# already answers `None` when the folder is missing.
+exclude = ["fixtures/"]
 
 [dependencies]
 serde.workspace = true

@@ -22,7 +22,7 @@ Si no responde, se reinstala desde el repositorio:
 
 ```bash
 cd ~/Desarrollos/proyectos/proyectos-mini/crawlforge
-cargo build --release -p crawlforge-cli && cp target/release/crawlforge ~/.cargo/bin/
+cargo build --release -p crawlforge && cp target/release/crawlforge ~/.cargo/bin/
 ```
 
 **La salida de la herramienta está en inglés.** Es el idioma de origen; los demás son

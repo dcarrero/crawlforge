@@ -121,7 +121,15 @@ registered callback or by polling.
 
 ### `crawlforge-cli`
 Command-line interface built on `clap`. It is at once internal tool, Agency-tier product and
-test bench.
+test bench. The folder keeps this name; the package is `crawlforge`, so `cargo install crawlforge`
+and the release archives carry the name of the command. The library inside stays
+`crawlforge_cli`.
+
+**Published on crates.io:** `crawlforge-rules`, `crawlforge-core` and `crawlforge`, always at the
+workspace version. `crawlforge-adapters` and `crawlforge-ffi` are `publish = false`. A published
+crate contains only its own folder, so no crate may `include_str!` a file outside it in non-test
+code: that is why the Fluent files of every language live in `crawlforge-rules/locales/`, and the
+CLI takes its own texts from `crawlforge_rules::l10n::CLI_SOURCES`.
 
 ## 3.bis The `spider-rs` decision — closed
 

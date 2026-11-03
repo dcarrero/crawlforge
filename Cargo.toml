@@ -13,6 +13,8 @@ version = "0.21.2"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
+# `publish = false` is the default: only `crawlforge-rules`, `crawlforge-core` and the CLI
+# (package `crawlforge`) override it, the three crates published on crates.io.
 publish = false
 repository = "https://github.com/dcarrero/crawlforge"
 homepage = "https://crawlforge.org/"
@@ -64,9 +66,9 @@ rand = "0.8"
 futures = "0.3"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 walkdir = "2"
-# Localización: los textos de la CLI y del catálogo de reglas viven en `locales/<idioma>/*.ftl`,
-# incrustados en el binario. `fluent-bundle` resuelve los plurales CLDR (el polaco tiene cuatro
-# formas, el japonés una) y la vuelta al inglés. `fluent-syntax` ya viene con él: se nombra
+# Localización: los textos de la CLI y del catálogo de reglas viven en
+# `crates/crawlforge-rules/locales/<idioma>/*.ftl`, incrustados en el binario. `fluent-bundle`
+# resuelve los plurales CLDR (el polaco tiene cuatro formas, el japonés una) y la vuelta al inglés. `fluent-syntax` ya viene con él: se nombra
 # para recorrer el AST en el test de completitud y para saber si un idioma tiene traducción.
 # Razonamiento completo en `crawlforge-rules/src/l10n.rs`.
 fluent-bundle = "0.16"
@@ -77,9 +79,12 @@ unicode-width = "0.2"
 # the tree through tokio, so it adds no crate. Unix only.
 libc = "0.2"
 
-# Miembros internos
-crawlforge-core = { path = "crates/crawlforge-core" }
-crawlforge-rules = { path = "crates/crawlforge-rules" }
+# Internal members. The two published on crates.io carry a `version` besides the `path`: cargo
+# uses the path inside the workspace and the version in the published package, which has no
+# paths. It must be the one in `[workspace.package]`; a CLI test fails when they drift
+# (`internal_dependencies_follow_the_workspace_version`).
+crawlforge-core = { path = "crates/crawlforge-core", version = "0.21.2" }
+crawlforge-rules = { path = "crates/crawlforge-rules", version = "0.21.2" }
 crawlforge-adapters = { path = "crates/crawlforge-adapters" }
 crawlforge-hub = { path = "crates/crawlforge-hub" }
 

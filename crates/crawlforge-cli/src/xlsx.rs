@@ -1350,7 +1350,7 @@ mod prueba_manual {
     /// primera hoja responde «¿qué está mal?».
     ///
     /// `CRAWLFORGE_STORE=x.sqlite CRAWLFORGE_XLSX=/tmp/x.xlsx \
-    ///  cargo test -p crawlforge-cli -- --ignored --nocapture ver_xlsx_real`
+    ///  cargo test -p crawlforge -- --ignored --nocapture ver_xlsx_real`
     #[test]
     #[ignore = "necesita un fichero de rastreo real; se lanza a mano"]
     fn ver_xlsx_real() {

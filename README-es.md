@@ -52,12 +52,12 @@ O el binario ya compilado para tu sistema, de la
 
 ```bash
 # macOS y Linux
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-cli-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-installer.sh | sh
 ```
 
 ```powershell
 # Windows
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-cli-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/dcarrero/crawlforge/releases/latest/download/crawlforge-installer.ps1 | iex"
 ```
 
 Los binarios los compila el flujo de publicación para macOS (Apple Silicon e Intel), Linux
@@ -65,12 +65,18 @@ Los binarios los compila el flujo de publicación para macOS (Apple Silicon e In
 instala sin aviso, pero uno descargado a mano necesita `xattr -d com.apple.quarantine crawlforge`
 antes de que Gatekeeper lo deje arrancar.
 
-Desde el código, con Rust 1.88 o posterior:
+Con Rust 1.88 o posterior, desde [crates.io](https://crates.io/crates/crawlforge):
+
+```bash
+cargo install crawlforge
+```
+
+O desde el código:
 
 ```bash
 git clone https://github.com/dcarrero/crawlforge
 cd crawlforge
-cargo build --release -p crawlforge-cli
+cargo build --release -p crawlforge
 cp target/release/crawlforge ~/.cargo/bin/
 ```
 
@@ -131,7 +137,7 @@ comparar.
 crates/
   crawlforge-core/      rastreo, parseo, motor de reglas, almacén SQLite
   crawlforge-rules/     las 72 reglas de auditoría
-  crawlforge-cli/       el binario
+  crawlforge-cli/       el binario (paquete `crawlforge`)
   crawlforge-adapters/  WordPress y Astro
   crawlforge-ffi/       bindings C y Swift
 ```
