@@ -53,6 +53,10 @@ pub(crate) const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../../crawlforge-core/migrations/010_indice_links_element.sql"),
     ),
     ("011_text_minhash.sql", include_str!("../../crawlforge-core/migrations/011_text_minhash.sql")),
+    (
+        "012_link_fragments.sql",
+        include_str!("../../crawlforge-core/migrations/012_link_fragments.sql"),
+    ),
 ];
 
 /// Creates `path` as a crawl file with the complete published schema.

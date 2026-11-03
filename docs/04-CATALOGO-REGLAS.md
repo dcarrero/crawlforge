@@ -296,9 +296,11 @@ absent. A `twitter:image` that differs and is broken is a known gap.
 |---|---|---|---|---|
 | `LINK-ANCHOR-EMPTY` | medium | page | free | Internal `<a href>` with no text, no image inside and no `aria-label`/`aria-labelledby`/`title` (nor an `<svg aria-label>`) |
 | `LINK-ANCHOR-GENERIC` | low | page | free | Internal `<a href>` whose whole text is a stock phrase: «read more», «click here», «leer más», «aquí»… |
+| `LINK-FRAGMENT-BROKEN` | low | site | free | Internal `<a href="…#fragment">` to an HTML page answering 200 where no element has that `id` and no `<a>` that `name` |
 
-Both read internal `<a>` links only, skip same-page fragments (`href="#…"`, which are buttons in
-link's clothing) and give **one finding per page with the count**, not one per link.
+The two `LINK-ANCHOR-*` rules read internal `<a>` links only, skip same-page fragments
+(`href="#…"`, which are buttons in link's clothing) and give **one finding per page with the
+count**, not one per link.
 
 **`LINK-ANCHOR-EMPTY` leaves image links to the `ASSET` rules.** An `<a>` whose only content is an
 `<img alt="">` is `ASSET-IMG-EMPTY-ALT-LINK`, one with an `<img>` without `alt` is
@@ -325,6 +327,28 @@ names «więcej») is a poor tag name, not a generic link, and is left
 out — found on the first real crawl. `aria-label` does not rescue a generic text: the claim is
 about what a search engine reads, and that is the text. Pagination («next», «siguiente») is not
 in the lists.
+
+**`LINK-FRAGMENT-BROKEN` judges where a link lands, not what it says**, so it does read
+same-page links: a «skip to content» to an id the theme no longer prints is the most common case,
+and it was the first one a real crawl found (396 of 400 pages of a WordPress site, one template
+group in the report). The matching is the HTML standard's: the fragment as written, then
+percent-decoded, against every `id` and every `<a name>`, exactly and case-sensitively. Never
+judged: `#` and `#top` (the top of the page), text fragments (`#:~:text=…`; `#x:~:text=…` is judged
+as `#x`), and hash routes of JavaScript applications (`#/…`, `#!…`), which never look for an element.
+**One finding per target page and fragment**, on the target page like `HTTP-404-INTERNAL`, with
+the number of links and source pages and a sample of them; the `group_key` is the fragment, so a
+template defect collapses into one line. The target must be internal, HTML and 200 —a redirect or
+a 404 is someone else's finding— and the source a 2xx page. CDN infrastructure is left out:
+Cloudflare's `/cdn-cgi/l/email-protection#…` carries the encoded address in the fragment.
+
+It needs two things the URL graph throws away on purpose (`/a#x` and `/a#y` are one page):
+`links.fragment` and `pages.fragment_ids`, migration 012 (`02-MODELO-DATOS.md §3.3`, `§3.4`). A
+crawl written before them, or the older half of a resumed one, has them NULL and the rule stays
+silent there instead of calling every link broken. The ids are found by a byte scan for `id=`
+rather than a `[id]` selector, which cost 9-16% of the parse of a long Wikipedia article; the scan
+cannot see `ID="x"` in capitals or `id = "x"` with spaces, valid HTML that no generator writes. It
+is `low`, and not more, because an id added by JavaScript (some table-of-contents and tab widgets)
+is not in the served HTML: that jump works for a visitor and the finding says it does not.
 
 **Not copied: «image without `title`».** Some crawlers flag images without a `title` attribute;
 Google does not use it, so it is not a finding here.

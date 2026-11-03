@@ -247,9 +247,10 @@ todavía: suele ser la misma URL que `og:image`, y X recurre a `og:image` cuando
 |---|---|---|---|---|
 | `LINK-ANCHOR-EMPTY` | medium | page | free | `<a href>` interno sin texto, sin imagen dentro y sin `aria-label`/`aria-labelledby`/`title` (ni un `<svg aria-label>`) |
 | `LINK-ANCHOR-GENERIC` | low | page | free | `<a href>` interno cuyo texto entero es una fórmula: «leer más», «aquí», «read more», «click here»… |
+| `LINK-FRAGMENT-BROKEN` | low | site | free | `<a href="…#fragmento">` interno hacia una página HTML que responde 200 donde ningún elemento tiene ese `id` ni ningún `<a>` ese `name` |
 
-Las dos leen solo enlaces `<a>` internos, se saltan los fragmentos de la misma página
-(`href="#…"`, que son botones vestidos de enlace) y dan **un hallazgo por página con el
+Las dos `LINK-ANCHOR-*` leen solo enlaces `<a>` internos, se saltan los fragmentos de la misma
+página (`href="#…"`, que son botones vestidos de enlace) y dan **un hallazgo por página con el
 recuento**, no uno por enlace.
 
 **`LINK-ANCHOR-EMPTY` deja los enlaces con imagen a las reglas `ASSET`.** Un `<a>` cuyo único
@@ -275,6 +276,30 @@ bien. Un enlace cuyo texto es el slug de su propio destino (`<a href="/tag/mas/"
 nube de etiquetas) es un mal nombre de etiqueta, no un enlace genérico, y queda fuera —apareció en
 el primer rastreo real—. El `aria-label` no salva un texto genérico: lo que se afirma es lo que lee
 el buscador, y eso es el texto. La paginación («siguiente», «next») no está en las listas.
+
+**`LINK-FRAGMENT-BROKEN` juzga adónde llega un enlace, no lo que dice**, así que sí lee los
+enlaces de la misma página: un «saltar al contenido» hacia un id que el tema ya no imprime es el
+caso más común, y fue el primero que encontró un rastreo real (396 de 400 páginas de un WordPress,
+un solo grupo de plantilla en el informe). La comparación es la del estándar HTML: el fragmento tal
+cual y luego descodificado de `%XX`, contra cada `id` y cada `<a name>`, exacta y distinguiendo
+mayúsculas. Nunca se juzgan `#` ni `#top` (el principio de la página), los fragmentos de texto
+(`#:~:text=…`; `#x:~:text=…` se juzga como `#x`) ni las rutas de aplicaciones JavaScript (`#/…`,
+`#!…`), que nunca buscan un elemento. **Un hallazgo por página de destino y fragmento**, en la
+página de destino como `HTTP-404-INTERNAL`, con el número de enlaces y de páginas de origen y una
+muestra; el `group_key` es el fragmento, así que un defecto de plantilla se colapsa en una línea.
+El destino tiene que ser interno, HTML y 200 —una redirección o un 404 son hallazgo de otra regla—
+y el origen una página 2xx. La infraestructura de CDN queda fuera: el
+`/cdn-cgi/l/email-protection#…` de Cloudflare lleva la dirección codificada en el fragmento.
+
+Necesita dos cosas que el grafo de URLs tira a propósito (`/a#x` y `/a#y` son la misma página):
+`links.fragment` y `pages.fragment_ids`, migración 012 (`02-MODELO-DATOS.md §3.3`, `§3.4`). Un
+rastreo escrito antes, o la mitad antigua de uno reanudado, los tiene a NULL y la regla calla ahí
+en vez de dar por rotos todos los enlaces. Los ids se encuentran buscando `id=` en los bytes y no
+con un selector `[id]`, que costaba entre el 9 y el 16 % del parseo de un artículo largo de
+Wikipedia; la búsqueda no ve `ID="x"` en mayúsculas ni `id = "x"` con espacios, HTML válido que
+ningún generador escribe. Es `low`, y no más, porque un id que añade JavaScript (algunos índices
+de contenido y pestañas) no está en el HTML servido: ese salto funciona para el visitante y el
+hallazgo dice que no.
 
 **No se copia: «imagen sin `title`».** Algunos rastreadores avisan de imágenes sin atributo
 `title`; Google no lo usa, así que aquí no es un hallazgo.

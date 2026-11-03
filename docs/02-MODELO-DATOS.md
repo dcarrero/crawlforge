@@ -173,7 +173,8 @@ CREATE TABLE pages (
     internal_links_out  INTEGER,
     internal_links_in   INTEGER,      -- filled in during the final pass
     crawl_depth_source  TEXT,         -- 'link'|'sitemap'|'list'|'adapter'
-    text_minhash        BLOB          -- migration 011: 128-byte b-bit MinHash, for near-duplicates
+    text_minhash        BLOB,         -- migration 011: 128-byte b-bit MinHash, for near-duplicates
+    fragment_ids        BLOB          -- migration 012: what a #fragment can land on, hashed (below)
 );
 
 CREATE INDEX idx_pages_title_len  ON pages(title_len);
@@ -188,6 +189,14 @@ bytes, NULL when the text has fewer than 50 shingles or the file predates 0.18.0
 (`crawlforge-core/src/minhash.rs`). `text_hash` was meant for the same job and described as a
 simhash until 0.18.0, but never was one: it is an exact hash of the body text, filled only when
 the Pro full-text index is on, and no rule reads it.
+
+**`fragment_ids`:** every `id` and every `<a name>` of the page, as the low 32 bits of their
+xxh3, sorted, deduplicated and written as little-endian `u32`s (`crawlforge-core/src/parse.rs`,
+`encode_fragment_ids`). It is what `LINK-FRAGMENT-BROKEN` looks a link's fragment up in, with a
+binary search. Hashes and not the names: a long Wikipedia article has 9,187 ids, 107 KB as text and
+36 KB this way; on three WordPress sites it averaged between 12 and 480 bytes per page. A collision can only hide a broken
+fragment, never invent one. An empty blob is "no ids"; NULL is "not recorded" —a file from
+before migration 012— and the rule skips it.
 
 **`title_px` and `meta_desc_px`:** Google truncates by pixel width, not by character count.
 Computing it with the Arial 20px/14px metrics gives a much more useful warning than "over 60
@@ -205,12 +214,22 @@ CREATE TABLE links (
     is_nofollow  INTEGER NOT NULL DEFAULT 0,
     element      TEXT NOT NULL,     -- 'a'|'link'|'img'|'script'|'iframe'|'form'|'meta'
     region       TEXT,              -- 'nav'|'main'|'footer'|'aside'|'unknown'
-    position     INTEGER            -- order of appearance in the document
+    position     INTEGER,           -- order of appearance in the document
+    fragment     TEXT               -- migration 012: the #fragment of an <a href>, without the #
 );
 
 CREATE INDEX idx_links_from ON links(from_url_id);
 CREATE INDEX idx_links_to   ON links(to_url_id);
+CREATE INDEX idx_links_fragment ON links(to_url_id) WHERE fragment IS NOT NULL;  -- 012
 ```
+
+`fragment` is what the URL graph leaves out on purpose: `to_url_id` is fragment-free, because
+`/a#x` and `/a#y` are one page, crawled once. It is filled for internal `<a>` links only, and not for CDN infrastructure
+(Cloudflare's `/cdn-cgi/l/email-protection#…` carries up to a kilobyte of encoded address there),
+percent-encoded as a
+browser leaves it in the URL (`#café` is stored `caf%C3%A9`), and NULL without a fragment, with an
+empty one, and in files from before migration 012. `LINK-FRAGMENT-BROKEN` reads it through the
+partial index.
 
 `element = 'meta'` (added after 0.19.0) is the page's first `og:image`, with `rel = 'og:image'`. It is
 not something the page links or loads, but writing it here is what gets it requested —or probed,

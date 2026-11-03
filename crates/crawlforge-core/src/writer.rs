@@ -93,6 +93,9 @@ pub struct PageRow {
     pub text_hash: Option<i64>,
     /// MinHash signature of the visible text, for `DUP-CONTENT-NEAR` (migration 011).
     pub text_minhash: Option<Vec<u8>>,
+    /// `pages.fragment_ids`: see `parse::ParsedPage::fragment_ids`. `None` only for rows built
+    /// without a parse; an empty vector is "this page has no ids".
+    pub fragment_ids: Option<Vec<u8>>,
     pub html_hash: Option<i64>,
     pub content_ratio: f64,
     pub viewport: Option<String>,
@@ -116,6 +119,8 @@ pub struct LinkRow {
     pub element: LinkElement,
     pub region: Region,
     pub position: u32,
+    /// `links.fragment`: see `parse::RawLink::fragment`.
+    pub fragment: Option<String>,
 }
 
 /// Fila de `images`.
@@ -362,9 +367,10 @@ fn insert_pages(tx: &Transaction<'_>, rows: &[PageRow], index: &IdIndex) -> Resu
              h1, h1_count, h2_count, heading_json, canonical, canonical_is_self, meta_robots,
              x_robots_tag, is_indexable, indexability_reason, lang, hreflang_json, word_count,
              text_hash, html_hash, content_ratio, viewport, og_json, twitter_json, schema_types,
-             amp_url, internal_links_out, internal_links_in, crawl_depth_source, text_minhash)
+             amp_url, internal_links_out, internal_links_in, crawl_depth_source, text_minhash,
+             fragment_ids)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,
-                 ?21,?22,?23,?24,?25,?26,?27,?28,?29, NULL, ?30, ?31)",
+                 ?21,?22,?23,?24,?25,?26,?27,?28,?29, NULL, ?30, ?31, ?32)",
     )?;
 
     for r in rows {
@@ -411,6 +417,7 @@ fn insert_pages(tx: &Transaction<'_>, rows: &[PageRow], index: &IdIndex) -> Resu
             r.internal_links_out,
             r.crawl_depth_source.as_str(),
             r.text_minhash,
+            r.fragment_ids,
         ])?;
     }
     Ok(())
@@ -421,8 +428,9 @@ fn insert_links(tx: &Transaction<'_>, rows: &[LinkRow], index: &IdIndex) -> Resu
         return Ok(());
     }
     let mut stmt = tx.prepare_cached(
-        "INSERT INTO links (from_url_id, to_url_id, anchor, rel, is_nofollow, element, region, position)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        "INSERT INTO links (from_url_id, to_url_id, anchor, rel, is_nofollow, element, region, position,
+                            fragment)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
     )?;
     for r in rows {
         // Un enlace cuyo destino aún no se ha escrito se omite. No debería ocurrir —el motor
@@ -441,6 +449,7 @@ fn insert_links(tx: &Transaction<'_>, rows: &[LinkRow], index: &IdIndex) -> Resu
             r.element.as_str(),
             r.region.as_str(),
             r.position,
+            r.fragment,
         ])?;
     }
     Ok(())
@@ -829,6 +838,7 @@ mod tests {
             word_count: 100,
             text_hash: None,
             text_minhash: None,
+            fragment_ids: None,
             html_hash: None,
             content_ratio: 0.2,
             viewport: None,
@@ -897,6 +907,52 @@ mod tests {
     }
 
     #[test]
+    fn a_link_keeps_its_fragment_and_a_page_its_targets_with_empty_distinct_from_unknown() {
+        let mut c = conn();
+        let mut idx = idx();
+        let mut batch = Batch::default();
+        let mut con_ids = page_row(1, Some("A"));
+        con_ids.fragment_ids = Some(vec![1, 0, 0, 0]);
+        let mut sin_ids = page_row(2, Some("B"));
+        sin_ids.fragment_ids = Some(Vec::new());
+        batch.push(CrawlResult {
+            url: Some(url_row("https://ejemplo.es/a", 1, Some(200))),
+            page: Some(con_ids),
+            ..Default::default()
+        });
+        batch.push(CrawlResult {
+            url: Some(url_row("https://ejemplo.es/b", 2, Some(200))),
+            page: Some(sin_ids),
+            links: vec![LinkRow {
+                from_hash: 2,
+                to_hash: 1,
+                anchor: Some("ir".into()),
+                rel: None,
+                is_nofollow: false,
+                element: LinkElement::A,
+                region: Region::Main,
+                position: 0,
+                fragment: Some("planes".into()),
+            }],
+            ..Default::default()
+        });
+        write_batch(&mut c, &batch, &mut idx).expect("escribir");
+
+        let fragment: Option<String> =
+            c.query_row("SELECT fragment FROM links", [], |r| r.get(0)).expect("leer enlace");
+        assert_eq!(fragment.as_deref(), Some("planes"));
+        let ids: Vec<(String, Option<Vec<u8>>)> = c
+            .prepare("SELECT u.url, p.fragment_ids FROM pages p JOIN urls u ON u.id = p.url_id ORDER BY u.url")
+            .expect("preparar")
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .expect("consultar")
+            .collect::<rusqlite::Result<_>>()
+            .expect("leer");
+        assert_eq!(ids[0].1.as_deref(), Some(&[1u8, 0, 0, 0][..]));
+        assert_eq!(ids[1].1.as_deref(), Some(&[][..]), "an empty set is stored, not NULL");
+    }
+
+    #[test]
     fn resuelve_los_extremos_de_un_enlace_por_hash() {
         let mut c = conn();
         let mut idx = idx();
@@ -916,6 +972,7 @@ mod tests {
                 element: LinkElement::A,
                 region: Region::Main,
                 position: 0,
+                fragment: None,
             }],
             ..Default::default()
         });
@@ -1163,6 +1220,7 @@ mod tests {
                 element: LinkElement::A,
                 region: Region::Unknown,
                 position: 0,
+                fragment: None,
             }],
             ..Default::default()
         });
@@ -1242,6 +1300,7 @@ mod tests {
                 element: LinkElement::A,
                 region: Region::Main,
                 position: 0,
+                fragment: None,
             }],
             ..Default::default()
         })

@@ -91,6 +91,14 @@ pub struct RawLink {
     /// it. `LINK-ANCHOR-EMPTY` needs it to tell an icon link with a label from one with nothing
     /// at all. Always `false` for anything that is not an `<a>`.
     pub labelled: bool,
+    /// The `#fragment` of an `<a href>`, as the URL parser would leave it: without the `#`,
+    /// percent-encoded the way a browser encodes it. `None` with no `#`, with an empty one, and
+    /// for anything that is not an `<a>`. See [`link_fragment`]. The engine stores it only for
+    /// internal links outside CDN infrastructure.
+    ///
+    /// It is kept apart because the URL graph is fragment-free on purpose —`/a#x` and `/a#y`
+    /// are the same page— and `LINK-FRAGMENT-BROKEN` needs exactly what that throws away.
+    pub fragment: Option<String>,
 }
 
 /// Una imagen con sus atributos de accesibilidad y rendimiento.
@@ -160,6 +168,11 @@ pub struct ParsedPage {
     /// attribute that identifies it, `<img src="…">`) or the first visible text. `None` if the
     /// document never left the head.
     pub head_closed_by: Option<String>,
+    /// What a `#fragment` can land on in this page —every `id` and every `<a name>`—, as the
+    /// sorted, deduplicated 32-bit hashes of [`fragment_id_hash`], four little-endian bytes each.
+    /// It is what `pages.fragment_ids` stores. See [`encode_fragment_ids`] for why hashes and
+    /// not the names.
+    pub fragment_ids: Vec<u8>,
     /// Longitud del HTML en bytes, para `content_ratio`.
     pub html_bytes: u64,
     /// Longitud del texto visible en bytes, para `content_ratio`.
@@ -223,6 +236,9 @@ struct PageAccumulator {
     /// Depth inside head elements whose content is not markup for this purpose (`<title>`,
     /// `<script>`, `<noscript>`…): neither their text nor their children close the head.
     head_raw_depth: u32,
+    /// [`fragment_id_hash`] of every `id` and `<a name>`, in document order, with repeats.
+    /// Sorted and encoded once at the end, into [`ParsedPage::fragment_ids`].
+    fragment_ids: Vec<u32>,
 }
 
 impl PageAccumulator {
@@ -425,6 +441,164 @@ fn on_end(
     f: impl FnOnce(&mut lol_html::html_content::EndTag<'_>) -> lol_html::HandlerResult + 'static,
 ) -> lol_html::EndTagHandler<'static> {
     Box::new(f)
+}
+
+/// Notes one `id` or `<a name>` value as a place a `#fragment` can land on.
+///
+/// The value is compared as it is, after entity decoding: the standard matches a fragment
+/// against an ID exactly, with no trimming and no case folding. An empty value is no target at
+/// all: an empty fragment means the top of the page, whatever the page holds.
+fn note_fragment_id(acc: &Rc<RefCell<PageAccumulator>>, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    let hash = if value.contains('&') {
+        fragment_id_hash(&decode_entities(value))
+    } else {
+        fragment_id_hash(value)
+    };
+    acc.borrow_mut().fragment_ids.push(hash);
+}
+
+/// Every `id` attribute in the raw document, hashed into `out`: what `[id]` would select,
+/// found without asking `lol_html`.
+///
+/// **Why not a selector.** `element!("[id]")` has no tag name to filter on first, so
+/// `lol_html` parses the attributes of every element in the page to test it: on a 2 MB
+/// Wikipedia article (*World War II*, 9,187 ids) that cost 9% of the parse with an empty handler
+/// and 16% with the `get_attribute` in it, and it doubled the allocations of a page of plain
+/// paragraphs (measured 2026-11-03). Scanning the bytes for `id=` runs at memory speed —the
+/// literal search is `regex`'s SIMD one— and costs 0.5 ms on that same article, a third of it
+/// hashing and sorting.
+///
+/// **What it gets wrong, and in which direction.** It reads `id=` anywhere, so an `id="x"`
+/// inside a script, a comment or an attribute value is taken for an id too. That can only hide a
+/// broken fragment, never invent one. What it misses is `ID="x"` in capitals and `id = "x"`
+/// with spaces, which are valid HTML that no CMS, framework or minifier writes; a hand-written
+/// page that spells its ids that way can get a false `LINK-FRAGMENT-BROKEN`. A case-insensitive
+/// search doubled the cost of the scan and allowing the spaces tripled it, for a form nobody
+/// generates. `data-id=` and `?id=` are told apart by the byte before the name.
+fn scan_ids(html: &[u8], out: &mut Vec<u32>) {
+    static ID_ATTRIBUTE: std::sync::OnceLock<Option<regex::bytes::Regex>> =
+        std::sync::OnceLock::new();
+    let Some(re) = ID_ATTRIBUTE
+        .get_or_init(|| regex::bytes::Regex::new(r"id=").ok())
+        .as_ref()
+    else {
+        return;
+    };
+    for m in re.find_iter(html) {
+        // What comes before the name has to end the previous attribute or the tag name:
+        // `data-id=` and `xml:id=` are not `id`.
+        let start = m.start();
+        let before = start.checked_sub(1).and_then(|i| html.get(i));
+        if !matches!(before, Some(b' ' | b'\t' | b'\n' | b'\r' | 0x0C | b'"' | b'\'' | b'/')) {
+            continue;
+        }
+        let mut i = m.end();
+        while i < html.len() && matches!(html[i], b' ' | b'\t' | b'\n' | b'\r' | 0x0C) {
+            i += 1;
+        }
+        let value = match html.get(i) {
+            Some(&q @ (b'"' | b'\'')) => {
+                let rest = &html[i + 1..];
+                match rest.iter().position(|&b| b == q) {
+                    Some(end) => &rest[..end],
+                    None => continue,
+                }
+            }
+            Some(_) => {
+                let rest = &html[i..];
+                let end = rest
+                    .iter()
+                    .position(|&b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0C | b'>'))
+                    .unwrap_or(rest.len());
+                &rest[..end]
+            }
+            None => continue,
+        };
+        if value.is_empty() {
+            continue;
+        }
+        // The bytes are hashed as they are when there is nothing to decode: that is the common
+        // case, and it skips validating UTF-8 that `fragment_id_hash` would hash unchanged.
+        // Bytes that are not UTF-8 can never equal a fragment, which always is.
+        if value.contains(&b'&') {
+            let value = String::from_utf8_lossy(value);
+            out.push(fragment_id_hash(&decode_entities(&value)));
+        } else {
+            out.push(xxhash_rust::xxh3::xxh3_64(value) as u32);
+        }
+    }
+}
+
+/// The hash a fragment target is stored under: the low 32 bits of the xxh3 of its UTF-8 bytes.
+///
+/// **`crawlforge_rules::link::fragment_id_hash` duplicates it on purpose**, because that crate
+/// does not know the core: the two have to hash the same way, and the rule's fixture test, which
+/// crawls a real page with this parser and judges it with that rule, is what says they still do.
+pub fn fragment_id_hash(value: &str) -> u32 {
+    xxhash_rust::xxh3::xxh3_64(value.as_bytes()) as u32
+}
+
+/// Sorts and deduplicates the hashes and writes them as little-endian `u32`s: the format of
+/// `pages.fragment_ids`, which the rule reads with a binary search.
+///
+/// **Hashes and not the names**, because of what a long page carries: a Wikipedia article
+/// measured on 2026-11-03 (*World War II*, 2 MB) has 9,187 ids —one per citation and per
+/// back-reference— that take 107 KB as text and 36 KB as hashes. Thirty-two bits are enough for
+/// what the rule asks, "is this fragment among them": with 9,187 ids, a missing fragment
+/// collides with one of them once in about 470,000 checks, and a collision can only hide a
+/// broken link, never invent one. What is lost is reading the ids back, which no rule needs.
+pub fn encode_fragment_ids(mut hashes: Vec<u32>) -> Vec<u8> {
+    hashes.sort_unstable();
+    hashes.dedup();
+    let mut out = Vec::with_capacity(hashes.len() * 4);
+    for h in hashes {
+        out.extend_from_slice(&h.to_le_bytes());
+    }
+    out
+}
+
+/// The fragment of an `href`, the way the URL parser leaves it in the URL a browser navigates
+/// to: what follows the first `#`, with tabs and newlines removed, trailing spaces trimmed and
+/// the fragment percent-encode set applied (controls, space, `"`, `<`, `>`, `` ` `` and every
+/// non-ASCII byte). An `%XX` already there is kept as written.
+///
+/// `None` without a `#` or with nothing after it: `href="#"` goes to the top of the page and
+/// cannot be broken. Entities are decoded first, as the HTML parser does before the URL parser
+/// ever sees the attribute.
+///
+/// Encoding it here and not later keeps the stored value in the same form whatever the page
+/// wrote —`#café` and `#caf%C3%A9` are the same fragment— and lets the rule apply the
+/// standard's two lookups, as written and percent-decoded, with one function.
+pub fn link_fragment(href: &str) -> Option<String> {
+    // Entities go before looking for the `#`, not after: WordPress writes `&` in a query as
+    // `&#038;`, and `/?p=1&#038;q=2` has no fragment. Cutting first made `038;q=2` one, which
+    // the first real crawl showed by the hundred (2026-11-03).
+    href.find('#')?;
+    let decoded;
+    let href = if href.contains('&') {
+        decoded = decode_entities(href);
+        decoded.as_str()
+    } else {
+        href
+    };
+    let raw = &href[href.find('#')? + 1..];
+    // The URL parser trims leading and trailing C0 controls and spaces from the whole input,
+    // so only the end of the fragment is affected; tabs and newlines go from anywhere.
+    let raw = raw.trim_end_matches(|c: char| c <= ' ');
+    let mut out = String::with_capacity(raw.len());
+    for &b in raw.as_bytes() {
+        match b {
+            b'\t' | b'\n' | b'\r' => {}
+            0x00..=0x20 | b'"' | b'<' | b'>' | b'`' | 0x7F..=0xFF => {
+                out.push_str(&format!("%{b:02X}"));
+            }
+            _ => out.push(b as char),
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Elementos cuyo texto no es contenido visible y no debe contar para `word_count`.
@@ -722,6 +896,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                                     region,
                                                     position,
                                                     labelled: false,
+                                                    fragment: None,
                                                 });
                                             }
                                             a.page.og.push((property, c));
@@ -774,6 +949,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                         region,
                                         position,
                                         labelled: false,
+                                        fragment: None,
                                     });
                                 }
                                 _ => {}
@@ -843,6 +1019,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                             let region = a.current_region();
                             let position = a.link_position;
                             a.link_position += 1;
+                            let fragment = link_fragment(&href);
                             a.page.links.push(RawLink {
                                 href,
                                 anchor: None,
@@ -853,6 +1030,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 position,
                                 // Set by the handler right below when the link has a label.
                                 labelled: false,
+                                fragment,
                             });
                             let index = a.page.links.len() - 1;
                             a.current_anchor = Some((index, String::new()));
@@ -892,6 +1070,22 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                             let en_enlace = a.current_anchor.as_ref().map(|(i, _)| *i);
                             if let Some(link) = en_enlace.and_then(|i| a.page.links.get_mut(i)) {
                                 link.labelled = true;
+                            }
+                            Ok(())
+                        }
+                    }),
+                    // --- Where a `#fragment` can land: `LINK-FRAGMENT-BROKEN` ---
+                    //
+                    // The HTML standard looks for an element with that `id` and then for an
+                    // `<a name>`. The ids are found by `scan_ids` over the raw bytes, after the
+                    // rewriter; see why there. `<a name>` stays a selector: it starts with a
+                    // tag name, so only the `<a>` get their attributes read, and `a[href]`
+                    // already reads them.
+                    element!("a[name]", {
+                        let acc = Rc::clone(&acc);
+                        move |el| {
+                            if let Some(name) = el.get_attribute("name") {
+                                note_fragment_id(&acc, &name);
                             }
                             Ok(())
                         }
@@ -990,6 +1184,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                     region,
                                     position,
                                     labelled: false,
+                                    fragment: None,
                                 });
                             }
                             Ok(())
@@ -1016,6 +1211,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 region,
                                 position,
                                 labelled: false,
+                                fragment: None,
                             });
                             Ok(())
                         }
@@ -1062,6 +1258,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 region,
                                 position,
                                 labelled: false,
+                                fragment: None,
                             });
                             Ok(())
                         }
@@ -1086,6 +1283,7 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
                                 region,
                                 position,
                                 labelled: false,
+                                fragment: None,
                             });
                             Ok(())
                         }
@@ -1179,6 +1377,9 @@ pub fn parse_html(html: &[u8], collect_body_text: bool) -> ParsedPage {
     let acc = Rc::try_unwrap(acc).map(RefCell::into_inner).unwrap_or_default();
     let mut page = acc.page;
     page.text_minhash = acc.minhash.finish();
+    let mut fragment_ids = acc.fragment_ids;
+    scan_ids(html, &mut fragment_ids);
+    page.fragment_ids = encode_fragment_ids(fragment_ids);
 
     page.html_bytes = html_len;
     page.title = page
@@ -2184,5 +2385,102 @@ mod tests {
                <body><svg><title>Icono</title></svg></body></html>"#,
         );
         assert!(p.outside_head.is_empty(), "{:?}", p.outside_head);
+    }
+
+    // --- Fragments: LINK-FRAGMENT-BROKEN ---
+
+    fn ids_of(p: &ParsedPage) -> Vec<u32> {
+        p.fragment_ids
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
+    }
+
+    #[test]
+    fn every_id_and_every_a_name_is_a_fragment_target() {
+        let p = parse(
+            r#"<body><h2 id="precios">Precios</h2><section id="faq"></section>
+               <a name="viejo"></a><div name="no-cuenta"></div><svg><g id="icono"/></svg></body>"#,
+        );
+        let ids = ids_of(&p);
+        for target in ["precios", "faq", "viejo", "icono"] {
+            assert!(ids.contains(&fragment_id_hash(target)), "{target} should be a target");
+        }
+        assert!(
+            !ids.contains(&fragment_id_hash("no-cuenta")),
+            "a `name` on anything but an `<a>` is not a target in the HTML standard"
+        );
+        assert_eq!(ids.len(), 4);
+    }
+
+    #[test]
+    fn fragment_targets_are_sorted_deduplicated_and_entity_decoded() {
+        let p = parse(r#"<body><p id="b"></p><p id="a"></p><a id="b" name="b"></a><i id="t&amp;c"></i><i id=""></i><a name=""></a></body>"#);
+        let ids = ids_of(&p);
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(ids, sorted, "stored sorted and once each, for the binary search");
+        assert_eq!(ids.len(), 3, "an empty id or name is no target: {ids:?}");
+        assert!(ids.contains(&fragment_id_hash("t&c")), "the id is compared after decoding");
+    }
+
+    #[test]
+    fn the_id_scan_reads_every_quoting_and_skips_lookalike_attributes() {
+        let p = parse(
+            r#"<body><p id=suelto></p><p class="x"id='simple'></p><p
+               id="nueva-linea"></p><p data-id="dato"></p><p xml:id="xml"></p>
+               <a href="/p?id=consulta&amp;id=otra">q</a></body>"#,
+        );
+        let ids = ids_of(&p);
+        for target in ["suelto", "simple", "nueva-linea"] {
+            assert!(ids.contains(&fragment_id_hash(target)), "{target} should be a target");
+        }
+        for not_an_id in ["dato", "xml", "consulta", "otra"] {
+            assert!(!ids.contains(&fragment_id_hash(not_an_id)), "{not_an_id} is not an id");
+        }
+    }
+
+    #[test]
+    fn a_page_without_ids_stores_an_empty_set_not_nothing() {
+        // Empty is "this page has no targets", which the rule can judge; `None` would be "not
+        // known", which is what a crawl written before the column existed has.
+        let p = parse("<body><p>Sin anclas</p></body>");
+        assert!(p.fragment_ids.is_empty());
+    }
+
+    #[test]
+    fn the_fragment_of_a_link_is_kept_apart_from_its_href() {
+        let p = parse(
+            r##"<body><a href="/precios#planes">a</a><a href="#arriba">b</a><a href="/sin">c</a>
+                <a href="#">d</a><a href="/x?a=1&amp;b=2#t&amp;c">e</a></body>"##,
+        );
+        let fragments: Vec<Option<&str>> = p.links.iter().map(|l| l.fragment.as_deref()).collect();
+        assert_eq!(
+            fragments,
+            vec![Some("planes"), Some("arriba"), None, None, Some("t&c")],
+        );
+        assert_eq!(p.links[0].href, "/precios#planes", "the href itself is untouched");
+    }
+
+    #[test]
+    fn a_fragment_is_percent_encoded_as_a_browser_encodes_it() {
+        assert_eq!(link_fragment("#café").as_deref(), Some("caf%C3%A9"));
+        assert_eq!(link_fragment("#caf%C3%A9").as_deref(), Some("caf%C3%A9"), "kept as written");
+        assert_eq!(link_fragment("#a b").as_deref(), Some("a%20b"));
+        assert_eq!(link_fragment("#a\n b ").as_deref(), Some("a%20b"), "tabs and newlines go");
+        assert_eq!(link_fragment("/p#x#y").as_deref(), Some("x#y"), "the first `#` starts it");
+        assert_eq!(link_fragment("#:~:text=hola").as_deref(), Some(":~:text=hola"));
+        assert_eq!(link_fragment("/?p=1&#038;q=2"), None, "an entity's `#` is no fragment");
+        assert_eq!(link_fragment("/?p=1&#038;q=2#x").as_deref(), Some("x"));
+        assert_eq!(link_fragment("/p#a&#038;b").as_deref(), Some("a&b"));
+        assert_eq!(link_fragment("#   "), None);
+        assert_eq!(link_fragment("/p"), None);
+    }
+
+    #[test]
+    fn resources_never_carry_a_fragment() {
+        let p = parse(r##"<head><link rel="stylesheet" href="/a.css#x"></head><body><img src="/i.svg#icono"></body>"##);
+        assert!(p.links.iter().all(|l| l.fragment.is_none()), "{:?}", p.links);
     }
 }

@@ -41,6 +41,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (9, include_str!("../migrations/009_broken_links_sigue_redirecciones.sql")),
     (10, include_str!("../migrations/010_indice_links_element.sql")),
     (11, include_str!("../migrations/011_text_minhash.sql")),
+    (12, include_str!("../migrations/012_link_fragments.sql")),
 ];
 
 struct Dir {
@@ -183,6 +184,18 @@ fn verificar_datos_y_vistas(conn: &Connection) {
     // Las tablas de la 004 existen y se consultan, aunque un fichero antiguo no tenga filas.
     assert_eq!(count(conn, "SELECT COUNT(*) FROM robots_txt"), 0);
     assert_eq!(count(conn, "SELECT COUNT(*) FROM sitemaps"), 0);
+
+    // The 012 columns exist and an old file has them NULL — "not known" —, so the rule that
+    // reads them stays silent instead of calling every old link broken.
+    assert_eq!(count(conn, "SELECT COUNT(*) FROM links WHERE fragment IS NULL"), 2);
+    assert_eq!(count(conn, "SELECT COUNT(*) FROM pages WHERE fragment_ids IS NULL"), 3);
+    {
+        use crawlforge_rules::SiteRule;
+        let findings = crawlforge_rules::link::LinkFragmentBroken
+            .evaluate(conn)
+            .expect("LINK-FRAGMENT-BROKEN over an old file");
+        assert!(findings.is_empty(), "an old file has no fragment data: {findings:?}");
+    }
 
     // Las vistas de la UI siguen funcionando sobre los datos antiguos.
     assert_eq!(count(conn, "SELECT COUNT(*) FROM v_indexable_pages"), 3);

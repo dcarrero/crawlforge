@@ -30,6 +30,10 @@ const MIGRATIONS: &[(i64, &str, ResumeSafety)] = &[
     // A nullable column: the pages written before it keep NULL and `DUP-CONTENT-NEAR` skips
     // them, so a resumed crawl can miss a near-duplicate in its older half but never invent one.
     (11, include_str!("../migrations/011_text_minhash.sql"), ResumeSafety::Safe),
+    // Two nullable columns and an index: the rows written before it keep NULL, which
+    // `LINK-FRAGMENT-BROKEN` reads as "not known" and skips. A resumed crawl can miss a broken
+    // fragment in its older half; it cannot report one that is not broken.
+    (12, include_str!("../migrations/012_link_fragments.sql"), ResumeSafety::Safe),
 ];
 
 /// ¿Puede un rastreo a medias cruzar esta migración y seguir reanudándose?
