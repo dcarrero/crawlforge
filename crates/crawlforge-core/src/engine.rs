@@ -3848,6 +3848,7 @@ fn build_result<F: Fetcher>(
             .as_ref()
             .map(|t| xxhash_rust::xxh3::xxh3_64(t.as_bytes()) as i64),
         text_minhash: parsed.text_minhash.clone(),
+        fragment_ids: Some(parsed.fragment_ids.clone()),
         html_hash: Some(xxhash_rust::xxh3::xxh3_64(&doc.body) as i64),
         content_ratio: parsed.content_ratio(),
         viewport: parsed.viewport.clone(),
@@ -3992,6 +3993,15 @@ fn build_result<F: Fetcher>(
                 element: l.element,
                 region: l.region,
                 position: l.position,
+                // Only the fragments `LINK-FRAGMENT-BROKEN` can read: internal and not CDN
+                // infrastructure. Cloudflare's `/cdn-cgi/l/email-protection#…` carries the whole
+                // encoded `mailto:` there, up to a kilobyte a link: on a real WordPress crawl
+                // those were 6% of the file (2026-11-03). The checks run only for a link that has
+                // a fragment.
+                fragment: l.fragment.clone().filter(|_| {
+                    scope.is_internal_link(&doc.url, &n.normalized)
+                        && !crate::frontier::is_infrastructure_path(n.normalized.path())
+                }),
             })
         })
         .collect();

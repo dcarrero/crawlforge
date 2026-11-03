@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<!-- LINK-FRAGMENT-BROKEN: two links land on nothing —/guia/#precios, whose section was removed,
+     and #principal, a skip link to an id this page never prints—. Every other fragment lands:
+     an id, an <a name>, an accented id written as is and percent-encoded, and this page's own
+     #contenido. The rest are never judged: #, #top, a text fragment and two hash routes. The
+     link to /no-existe/#x is a 404, which is HTTP-404-INTERNAL's business, not this rule's. The
+     fragments of an external link and of Cloudflare's email protection are not even stored. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Guía de instalación del producto con anclas</title>
+<link rel="canonical" href="/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<a href="#principal">Saltar al contenido</a>
+<main id="contenido"><h1>Índice de la guía</h1>
+<ul>
+<li><a href="/guia/#instalacion">Instalación</a></li>
+<li><a href="/guia/#precios">Precios</a></li>
+<li><a href="/guia/#viejo">Una sección antigua</a></li>
+<li><a href="/guia/#café">Café, con tilde</a></li>
+<li><a href="/guia/#caf%C3%A9">Café, codificado</a></li>
+<li><a href="/guia/#:~:text=configurar">Un fragmento de texto</a></li>
+<li><a href="#contenido">Volver al contenido</a></li>
+<li><a href="#top">Arriba</a></li>
+<li><a href="#">Arriba también</a></li>
+<li><a href="#/carrito">Ruta de una aplicación</a></li>
+<li><a href="#!/cuenta">Ruta con hashbang</a></li>
+<li><a href="/no-existe/#x">Una página que no existe</a></li>
+<li><a href="https://otro.example/guia/#precios">Otro sitio</a></li>
+<li><a href="/cdn-cgi/l/email-protection#4d2d3e0d28352c203d2128632e2220">Correo protegido</a></li>
+</ul></main>
+</body>
+</html>

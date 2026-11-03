@@ -21,8 +21,32 @@ Rule IDs never change meaning. A historical diff between two crawls depends on i
 
 ## [Unreleased]
 
+A new rule, and two new columns in the crawl file to feed it. Minor bump when released: the
+catalog reports something it did not, and files from 0.20.0 and earlier open, migrate and resume
+as before (as with migration 011, an earlier binary refuses a file written by this one). The
+catalog has 72 rules.
+
 ### Added
 
+- **`LINK-FRAGMENT-BROKEN`** (low, free). An internal link to `/page/#section` where nothing in
+  that page is called `section`: no element with that `id`, no `<a name>`. The link opens the page
+  at the top instead of the section it promised. Matching follows the HTML standard: the fragment
+  as written, then percent-decoded, exact and case-sensitive. Same-page links count. Never judged:
+  `#`, `#top`, text fragments (`#:~:text=…`), hash routes of JavaScript apps (`#/…`, `#!…`), CDN
+  infrastructure (`/cdn-cgi/l/email-protection#…`), and targets that are not internal HTML pages
+  answering 200. One finding per target page and fragment, with the number of links and source
+  pages and a sample, grouped by fragment so a template's broken skip link reads as one defect.
+  On its first real crawl it found exactly that: the «skip to content» link of a WordPress theme
+  pointing to `#content` on 396 of 400 pages whose article template has no such id. `low` because
+  an id added by JavaScript is not in the served HTML, and that jump works for a visitor.
+
+- **`links.fragment` and `pages.fragment_ids`** (migration 012), plus a partial index on the links
+  that have a fragment. The URL graph stays fragment-free. Ids are stored as sorted 32-bit hashes:
+  36 KB for a Wikipedia article with 9,187 ids, between 12 and 480 bytes per page on average on
+  three WordPress sites. NULL in files from earlier versions, where the rule stays silent.
+  The ids are found by scanning the bytes for `id=` instead of a `[id]` selector, which cost 9-16 %
+  of the parse of a long Wikipedia article; the scan adds about 0.5-0.7 ms there (+7 %) and 2-4 %
+  on WordPress pages. It does not see `ID="x"` in capitals or `id = "x"` with spaces.
 - **`crawlforge config schema`** prints the JSON Schema (draft 2020-12) of the `--config` YAML:
   every key with its type, default and description, and the rule IDs and severities `rules:`
   accepts, taken from the catalog. It is also published as `docs/crawl-config.schema.json`, and

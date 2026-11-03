@@ -381,3 +381,50 @@ fn las_reglas_del_servidor_apuntan_a_un_test_que_existe() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_broken_fragment_is_found_through_the_parser_and_only_the_broken_ones() {
+    // The seam this guards: `parse.rs` records each link's fragment and each page's ids, hashed
+    // with `parse::fragment_id_hash`, and the rule looks them up with its own copy of that hash.
+    // If the two drift apart, or the parser stops seeing an id, every fragment of the fixture
+    // comes out broken; if the fragment stops reaching `links`, none does.
+    let filas = detalles_de("LINK-FRAGMENT-BROKEN").await;
+    let mut fragmentos: Vec<String> = filas
+        .iter()
+        .filter_map(|(detalle, _)| {
+            let v: serde_json::Value = serde_json::from_str(detalle.as_deref()?).ok()?;
+            Some(v["fragment"].as_str()?.to_string())
+        })
+        .collect();
+    fragmentos.sort();
+    assert_eq!(fragmentos, vec!["precios", "principal"], "{filas:?}");
+}
+
+#[tokio::test]
+async fn only_the_fragments_the_rule_can_read_are_stored() {
+    // External links and CDN infrastructure keep no fragment: the rule never reads them, and
+    // Cloudflare's email protection puts up to a kilobyte of encoded address in each one.
+    let fixture = crawlforge_rules::fixture_path("LINK-FRAGMENT-BROKEN").expect("fixture");
+    let tmp = Temporal::new("fragmentos-guardados");
+    let sitio = tmp.path.join("sitio");
+    copiar(&fixture, &sitio).expect("copiar el fixture");
+    let job = CrawlJob::filesystem(&sitio, "https://fixture.local/");
+    let outcome = engine::run(job, &tmp.path.join("crawl.sqlite")).await.expect("rastrear");
+    let conn = Connection::open(&outcome.store_path).expect("abrir el rastreo");
+    let guardados: Vec<(String, Option<String>)> = conn
+        .prepare(
+            "SELECT t.url, l.fragment FROM links l JOIN urls t ON t.id = l.to_url_id
+             WHERE t.is_internal = 0 OR t.path LIKE '/cdn-cgi/%'",
+        )
+        .expect("preparar")
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .expect("consultar")
+        .collect::<rusqlite::Result<_>>()
+        .expect("leer");
+    assert_eq!(guardados.len(), 2, "both links are stored, as links: {guardados:?}");
+    assert!(guardados.iter().all(|(_, f)| f.is_none()), "{guardados:?}");
+    let internos: i64 = conn
+        .query_row("SELECT COUNT(*) FROM links WHERE fragment IS NOT NULL", [], |r| r.get(0))
+        .expect("contar");
+    assert!(internos > 0, "the internal ones are stored");
+}

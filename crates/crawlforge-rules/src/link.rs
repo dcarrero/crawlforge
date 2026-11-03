@@ -14,10 +14,15 @@
 //! **One finding per page, with the count**, not one per link: the cause is a template or an
 //! editor's habit, and forty rows from the same archive page say no more than one row with
 //! `"links": 40`.
+//!
+//! `LINK-FRAGMENT-BROKEN` is the third, and the odd one out: it is about where a link lands, not
+//! what it says, so it does read same-page fragments, and it is a site rule. See
+//! [`LinkFragmentBroken`].
 
 use crate::{
     Category, Issue, LinkView, PageContext, PageRule, RuleMeta, Scope, Severity, SiteRule, Tier,
 };
+use rusqlite::Connection;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
@@ -39,6 +44,15 @@ pub static LINK_ANCHOR_GENERIC: RuleMeta = RuleMeta {
     category: Category::Links,
     min_tier: Tier::Free,
     scope: Scope::Page,
+    references: &[],
+};
+
+pub static LINK_FRAGMENT_BROKEN: RuleMeta = RuleMeta {
+    id: "LINK-FRAGMENT-BROKEN",
+    severity: Severity::Low,
+    category: Category::Links,
+    min_tier: Tier::Free,
+    scope: Scope::Site,
     references: &[],
 };
 
@@ -396,6 +410,11 @@ fn percent_decode(s: &str) -> String {
     if !s.contains('%') {
         return s.to_string();
     }
+    String::from_utf8_lossy(&percent_decode_bytes(s)).into_owned()
+}
+
+/// `%XX` escapes to bytes; a malformed escape is kept as written, as the URL standard does.
+fn percent_decode_bytes(s: &str) -> Vec<u8> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -411,7 +430,7 @@ fn percent_decode(s: &str) -> String {
         out.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
 /// Internal links whose whole text is a stock phrase.
@@ -463,7 +482,238 @@ pub(crate) fn page_rules() -> Vec<Box<dyn PageRule>> {
 }
 
 pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
-    Vec::new()
+    vec![Box::new(LinkFragmentBroken)]
+}
+
+// ---------------------------------------------------------------------------------------------
+// LINK-FRAGMENT-BROKEN
+// ---------------------------------------------------------------------------------------------
+
+/// How long a fragment may be in a finding's detail. A fragment is the site's own text, but a
+/// broken template can glue a whole URL or a JSON blob after the `#`.
+const FRAGMENT_DETAIL_CHARS: usize = 200;
+
+/// The hash a fragment target is stored under in `pages.fragment_ids`: the low 32 bits of the
+/// xxh3 of its UTF-8 bytes.
+///
+/// **Duplicates `crawlforge_core::parse::fragment_id_hash` on purpose**, as
+/// [`crate::INFRASTRUCTURE_PATH_PREFIXES`] duplicates the frontier's list: this crate does not
+/// know the core. The fixture of `LINK-FRAGMENT-BROKEN` is crawled with the core's parser and
+/// judged with this function, so the day they disagree that test reports every fragment broken.
+pub fn fragment_id_hash(value: &str) -> u32 {
+    xxhash_rust::xxh3::xxh3_64(value.as_bytes()) as u32
+}
+
+/// Is `hash` in a `pages.fragment_ids` blob? The blob is sorted little-endian `u32`s.
+fn has_fragment_id(ids: &[u8], hash: u32) -> bool {
+    let at = |i: usize| {
+        let c = &ids[i * 4..i * 4 + 4];
+        u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+    };
+    let (mut lo, mut hi) = (0, ids.len() / 4);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        match at(mid).cmp(&hash) {
+            std::cmp::Ordering::Equal => return true,
+            std::cmp::Ordering::Less => lo = mid + 1,
+            std::cmp::Ordering::Greater => hi = mid,
+        }
+    }
+    false
+}
+
+/// Does a link to `#fragment` land on something in a page whose targets are `ids`? `true` also
+/// for the fragments that cannot be broken, so `false` is exactly the finding.
+///
+/// It follows the HTML standard's "find a potential indicated element" and "select the indicated
+/// part" (html.spec.whatwg.org/multipage/browsing-the-web.html#the-indicated-part-of-the-document):
+///
+/// 1. **A text fragment directive is cut first.** Everything from `:~:` on is for the browser's
+///    text search, not an element: `#:~:text=precio` lands on the top of the page if the text is
+///    gone, and `#planes:~:text=precio` is judged as `#planes`.
+/// 2. **An empty fragment is the top of the page**, always valid.
+/// 3. **Hash routing is not a fragment**: `#/carrito` and `#!/carrito` are routes of a
+///    JavaScript application, which reads them itself and never looks for an element with that
+///    id. Judging them would report every route of a single-page app as broken.
+/// 4. **The fragment as written, then percent-decoded**: an element whose `id` —or an `<a>`
+///    whose `name`— is exactly that, case and all. `#caf%C3%A9` finds `id="café"`.
+/// 5. **`top`**, in any case, is the top of the page when nothing is called that.
+pub fn fragment_lands(fragment: &str, ids: &[u8]) -> bool {
+    let fragment = fragment.find(":~:").map_or(fragment, |i| &fragment[..i]);
+    if fragment.is_empty() || fragment.starts_with('/') || fragment.starts_with('!') {
+        return true;
+    }
+    if has_fragment_id(ids, fragment_id_hash(fragment)) {
+        return true;
+    }
+    // "UTF-8 decode without BOM or fail": invalid bytes make no second lookup.
+    let decoded = if fragment.contains('%') {
+        String::from_utf8(percent_decode_bytes(fragment)).ok()
+    } else {
+        None
+    };
+    if let Some(d) = decoded.as_deref() {
+        if has_fragment_id(ids, fragment_id_hash(d)) {
+            return true;
+        }
+    }
+    decoded.as_deref().unwrap_or(fragment).eq_ignore_ascii_case("top")
+}
+
+/// The fragment as a person reads it: percent-decoded when that is valid UTF-8, and cut to
+/// [`FRAGMENT_DETAIL_CHARS`].
+fn readable_fragment(fragment: &str) -> String {
+    let decoded = String::from_utf8(percent_decode_bytes(fragment))
+        .unwrap_or_else(|_| fragment.to_string());
+    decoded.chars().take(FRAGMENT_DETAIL_CHARS).collect()
+}
+
+/// The links [`LinkFragmentBroken`] judges, ordered so each (target, fragment) pair streams
+/// past in one run.
+///
+/// `l.fragment IS NOT NULL` is a literal so SQLite can use the partial index
+/// `idx_links_fragment` (migration 012): the links with a fragment are a sliver of `links`. The
+/// `+` in `+l.element` keeps it from picking `idx_links_element` instead, which it did on the
+/// test schema: with no statistics an equality looks selective, and `element = 'a'` is most of
+/// the table.
+fn fragment_links_sql() -> String {
+    format!(
+        "SELECT t.id, t.url_hash, l.fragment, f.url
+         FROM links l
+         JOIN urls t ON t.id = l.to_url_id
+         JOIN pages p ON p.url_id = t.id
+         JOIN urls f ON f.id = l.from_url_id
+         WHERE l.fragment IS NOT NULL AND +l.element = 'a'
+           AND t.is_internal = 1 AND t.status_code = 200 AND p.fragment_ids IS NOT NULL
+           AND f.status_code BETWEEN 200 AND 299
+           AND {no_infra}
+         ORDER BY t.id, l.fragment, f.url",
+        no_infra = crate::sql_not_infrastructure("t.path"),
+    )
+}
+
+/// Internal links to a `#fragment` that nothing in the target page is called.
+///
+/// The link reaches the page and stops at the top instead of the section it promised: a table
+/// of contents whose heading was renamed, a «see pricing» to a block that was removed, a «skip to
+/// content» to an id the theme no longer prints. Google uses those anchors for its "jump to"
+/// links in results, and a visitor lands somewhere else than the text said.
+///
+/// **One finding per target page and fragment**, on the target page, like `HTTP-404-INTERNAL`
+/// —the page that lacks the anchor is where it is fixed, or where it is decided that the links
+/// have to change—, with how many links and source pages lead there and a sample of them. The
+/// `group_key` is the fragment: a template's skip link to a missing `#content` gives the same
+/// key on every page and the report collapses it into one defect, while two pages that each lack
+/// `#precios` stay apart in a diff, which tells findings apart by URL and key.
+///
+/// What counts, and what is left out on purpose:
+///
+/// - **`<a href>` only**, internal and from a 2xx page, as every link rule here. A
+///   **same-page link** (`href="#section"`) counts: its target is the page itself.
+/// - **The target must have been fetched as HTML with a 200** and parsed by a binary that
+///   records its ids (schema 12 onward). A redirect, a 404 or a PDF is judged by other rules, and a
+///   page with no recorded ids —an old file, the older half of a resumed crawl— is unknown, not
+///   empty: the rule stays silent rather than calling every link to it broken.
+/// - **What [`fragment_lands`] says is never broken**: `#`, `#top`, text fragments and hash
+///   routes.
+/// - **CDN infrastructure**: Cloudflare's `/cdn-cgi/l/email-protection#…` carries the encoded
+///   address in the fragment.
+///
+/// What it cannot see: **an id added by JavaScript** —some table-of-contents plugins and tab
+/// widgets do it in the browser— is not in the served HTML, and the finding says "not in the
+/// page" about a jump that works for a visitor. That is why the severity is `low`, and why the
+/// first real crawls are the measure of it.
+pub struct LinkFragmentBroken;
+
+impl SiteRule for LinkFragmentBroken {
+    fn meta(&self) -> &'static RuleMeta {
+        &LINK_FRAGMENT_BROKEN
+    }
+
+    fn evaluate(&self, conn: &Connection) -> rusqlite::Result<Vec<(Option<i64>, Issue)>> {
+        let sql = fragment_links_sql();
+        let mut stmt = conn.prepare(&sql)?;
+        let mut ids_of = conn.prepare("SELECT fragment_ids FROM pages WHERE url_id = ?1")?;
+
+        /// The links to one (target, fragment) pair, as they stream past in order.
+        struct Pair {
+            target_id: i64,
+            target_hash: i64,
+            fragment: String,
+            links: usize,
+            sources: usize,
+            sample: Vec<String>,
+            last_source: String,
+        }
+
+        let mut out = Vec::new();
+        let mut ids: (i64, Vec<u8>) = (i64::MIN, Vec::new());
+        let mut current: Option<Pair> = None;
+        let close = |pair: Pair, ids: &[u8], out: &mut Vec<(Option<i64>, Issue)>| {
+            if fragment_lands(&pair.fragment, ids) {
+                return;
+            }
+            let fragment = readable_fragment(&pair.fragment);
+            let clave = xxhash_rust::xxh3::xxh3_64(pair.fragment.as_bytes());
+            out.push((
+                Some(pair.target_hash),
+                Issue::new(&LINK_FRAGMENT_BROKEN)
+                    .with_detail(serde_json::json!({
+                        "fragment": fragment,
+                        "links": pair.links,
+                        "linked_from": pair.sources,
+                        "sample": pair.sample,
+                    }))
+                    .with_group(format!("link-fragment-broken:{clave:016x}")),
+            ));
+        };
+
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let target_id: i64 = row.get(0)?;
+            let target_hash: i64 = row.get(1)?;
+            let fragment: String = row.get(2)?;
+            let source: String = row.get(3)?;
+
+            let same = current
+                .as_ref()
+                .is_some_and(|c| c.target_id == target_id && c.fragment == fragment);
+            if !same {
+                if let Some(pair) = current.take() {
+                    close(pair, &ids.1, &mut out);
+                }
+                if ids.0 != target_id {
+                    let blob: Option<Vec<u8>> =
+                        ids_of.query_row([target_id], |r| r.get(0))?;
+                    ids = (target_id, blob.unwrap_or_default());
+                }
+                current = Some(Pair {
+                    target_id,
+                    target_hash,
+                    fragment,
+                    links: 0,
+                    sources: 0,
+                    sample: Vec::new(),
+                    last_source: String::new(),
+                });
+            }
+            if let Some(pair) = current.as_mut() {
+                pair.links += 1;
+                // Sorted by source within the pair, so a repeated source is the previous row.
+                if pair.last_source != source {
+                    pair.sources += 1;
+                    if pair.sample.len() < SAMPLE_LIMIT {
+                        pair.sample.push(source.clone());
+                    }
+                    pair.last_source = source;
+                }
+            }
+        }
+        if let Some(pair) = current.take() {
+            close(pair, &ids.1, &mut out);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -753,5 +1003,190 @@ mod tests {
             );
             assert!(vistos.insert(idioma.lang), "{} is listed twice", idioma.lang);
         }
+    }
+
+    // ---------------------------------------------------------------- LINK-FRAGMENT-BROKEN
+
+    fn ids(names: &[&str]) -> Vec<u8> {
+        let mut hashes: Vec<u32> = names.iter().map(|n| fragment_id_hash(n)).collect();
+        hashes.sort_unstable();
+        hashes.dedup();
+        hashes.iter().flat_map(|h| h.to_le_bytes()).collect()
+    }
+
+    struct Sitio(Connection);
+
+    impl Sitio {
+        fn new() -> Self {
+            Self(crate::test_schema::full_schema())
+        }
+
+        /// A URL; `ids` is its `pages` row: `None` for no row, `Some(None)` for a row written
+        /// before migration 012.
+        fn url(&self, id: i64, path: &str, status: i64, internal: bool, ids: Option<Option<Vec<u8>>>) {
+            let host = if internal { "ejemplo.es" } else { "otro.example" };
+            self.0
+                .execute(
+                    "INSERT INTO urls (id, url, url_hash, scheme, host, path, is_internal, in_sitemap,
+                                       crawl_state, status_code, redirect_chain_len)
+                     VALUES (?1, ?2, ?1 * 1000, 'https', ?3, ?4, ?5, 0, 'done', ?6, 0)",
+                    rusqlite::params![
+                        id,
+                        format!("https://{host}{path}"),
+                        host,
+                        path,
+                        internal as i64,
+                        status
+                    ],
+                )
+                .expect("insert url");
+            if let Some(blob) = ids {
+                self.0
+                    .execute(
+                        "INSERT INTO pages (url_id, is_indexable, fragment_ids) VALUES (?1, 1, ?2)",
+                        rusqlite::params![id, blob],
+                    )
+                    .expect("insert page");
+            }
+        }
+
+        fn link(&self, from: i64, to: i64, element: &str, fragment: Option<&str>) {
+            self.0
+                .execute(
+                    "INSERT INTO links (from_url_id, to_url_id, element, fragment)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![from, to, element, fragment],
+                )
+                .expect("insert link");
+        }
+
+        fn findings(&self) -> Vec<(Option<i64>, Issue)> {
+            LinkFragmentBroken.evaluate(&self.0).expect("evaluate")
+        }
+    }
+
+    /// Home (1) and a guide (2) with `#instalacion` and an `<a name="viejo">`, both crawled.
+    fn sitio_con_guia() -> Sitio {
+        let s = Sitio::new();
+        s.url(1, "/", 200, true, Some(Some(ids(&["contenido"]))));
+        s.url(2, "/guia/", 200, true, Some(Some(ids(&["instalacion", "viejo", "café", "Planes"]))));
+        s
+    }
+
+    #[test]
+    fn fragment_reports_a_missing_target_once_per_page_and_fragment_with_counts() {
+        let s = sitio_con_guia();
+        s.url(3, "/blog/", 200, true, Some(Some(Vec::new())));
+        s.link(1, 2, "a", Some("precios"));
+        s.link(1, 2, "a", Some("precios"));
+        s.link(3, 2, "a", Some("precios"));
+        s.link(1, 2, "a", Some("instalacion"));
+        let found = s.findings();
+        assert_eq!(found.len(), 1, "{found:?}");
+        let (hash, issue) = &found[0];
+        assert_eq!(*hash, Some(2000), "on the target page, like HTTP-404-INTERNAL");
+        let d = detalle(issue);
+        assert!(d.contains("\"fragment\":\"precios\""), "{d}");
+        assert!(d.contains("\"links\":3"), "{d}");
+        assert!(d.contains("\"linked_from\":2"), "{d}");
+        assert!(d.contains("https://ejemplo.es/blog/"), "{d}");
+        let clave = xxhash_rust::xxh3::xxh3_64(b"precios");
+        assert_eq!(issue.group_key, Some(format!("link-fragment-broken:{clave:016x}")));
+    }
+
+    #[test]
+    fn fragment_finds_ids_and_a_names_as_written_or_percent_decoded_case_and_all() {
+        let s = sitio_con_guia();
+        s.link(1, 2, "a", Some("instalacion"));
+        s.link(1, 2, "a", Some("viejo"));
+        s.link(1, 2, "a", Some("caf%C3%A9"));
+        s.link(1, 2, "a", Some("Planes"));
+        s.link(1, 2, "a", Some("planes"));
+        let found = s.findings();
+        assert_eq!(found.len(), 1, "only the wrong case is broken: {found:?}");
+        assert!(detalle(&found[0].1).contains("\"fragment\":\"planes\""));
+    }
+
+    #[test]
+    fn fragment_never_judges_the_top_text_fragments_or_hash_routes() {
+        for never in ["", "top", "TOP", "Top", ":~:text=precio", "/carrito", "!/carrito", "%74op"] {
+            assert!(fragment_lands(never, &ids(&[])), "{never:?} is never broken");
+        }
+        assert!(!fragment_lands("planes:~:text=precio", &ids(&[])), "judged as #planes");
+        assert!(fragment_lands("planes:~:text=precio", &ids(&["planes"])));
+        assert!(!fragment_lands("%FF", &ids(&[])), "invalid UTF-8 is looked up only as written");
+    }
+
+    #[test]
+    fn fragment_a_same_page_link_is_judged_against_its_own_page() {
+        let s = sitio_con_guia();
+        s.link(1, 1, "a", Some("contenido"));
+        s.link(1, 1, "a", Some("principal"));
+        let found = s.findings();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, Some(1000));
+        assert!(detalle(&found[0].1).contains("\"fragment\":\"principal\""));
+    }
+
+    #[test]
+    fn fragment_a_page_with_no_ids_is_judged_but_one_with_unknown_ids_is_not() {
+        // An empty set is "this page has no anchors"; NULL is a page written before the column
+        // existed —an old file, or the older half of a resumed crawl—, and judging it would call
+        // every link to it broken.
+        let s = sitio_con_guia();
+        s.url(3, "/vacia/", 200, true, Some(Some(Vec::new())));
+        s.url(4, "/antigua/", 200, true, Some(None));
+        s.link(1, 3, "a", Some("x"));
+        s.link(1, 4, "a", Some("x"));
+        let found = s.findings();
+        assert_eq!(found.iter().map(|(h, _)| *h).collect::<Vec<_>>(), vec![Some(3000)]);
+    }
+
+    #[test]
+    fn fragment_only_judges_internal_html_targets_that_answered_200() {
+        let s = sitio_con_guia();
+        s.url(3, "/movida/", 301, true, Some(Some(Vec::new())));
+        s.url(4, "/rota/", 404, true, Some(Some(Vec::new())));
+        s.url(5, "/fuera/", 200, false, Some(Some(Vec::new())));
+        s.url(6, "/doc.pdf", 200, true, None);
+        for target in 3..=6 {
+            s.link(1, target, "a", Some("x"));
+        }
+        assert!(s.findings().is_empty());
+    }
+
+    #[test]
+    fn fragment_ignores_links_from_error_pages_resources_and_cdn_infrastructure() {
+        let s = sitio_con_guia();
+        s.url(3, "/rota/", 404, true, Some(Some(Vec::new())));
+        s.link(3, 2, "a", Some("desde-un-404"));
+        s.link(1, 2, "link", Some("una-hoja"));
+        s.url(4, "/cdn-cgi/l/email-protection", 200, true, Some(Some(Vec::new())));
+        s.link(1, 4, "a", Some("a1b2c3"));
+        assert!(s.findings().is_empty(), "{:?}", s.findings());
+    }
+
+    #[test]
+    fn fragment_links_without_a_fragment_are_not_read() {
+        let s = sitio_con_guia();
+        s.link(1, 2, "a", None);
+        assert!(s.findings().is_empty());
+    }
+
+    #[test]
+    fn fragment_query_uses_the_partial_index() {
+        // A real crawl has millions of links and a sliver of them with a fragment: a scan of
+        // `links` would be the whole cost of the rule.
+        let s = sitio_con_guia();
+        let sql = format!("EXPLAIN QUERY PLAN {}", fragment_links_sql());
+        let plan: Vec<String> = s
+            .0
+            .prepare(&sql)
+            .expect("prepare")
+            .query_map([], |r| r.get::<_, String>(3))
+            .expect("plan")
+            .collect::<rusqlite::Result<_>>()
+            .expect("read");
+        assert!(plan.iter().any(|p| p.contains("idx_links_fragment")), "{plan:?}");
     }
 }

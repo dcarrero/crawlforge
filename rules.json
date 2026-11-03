@@ -1,5 +1,5 @@
 {
-  "count": 71,
+  "count": 72,
   "rules": [
     {
       "category": "asset",
@@ -2143,6 +2143,38 @@
       },
       "references": [],
       "scope": "page",
+      "severity": "low"
+    },
+    {
+      "category": "links",
+      "description": {
+        "de": "Einige interne Links verweisen auf ein `#fragment`, das kein Element der Zielseite als `id` oder als `<a name>` trägt. Der Link öffnet die Seite ganz oben statt an dem Abschnitt, den er versprochen hat: ein Inhaltsverzeichnis, dessen Überschrift umbenannt wurde, ein Link auf einen entfernten Block, ein „Zum Inhalt springen“ auf eine id, die das Theme nicht mehr ausgibt. Eine per JavaScript hinzugefügte id steht nicht im ausgelieferten HTML und wird trotzdem gemeldet; prüfen Sie diesen Fall im Browser. Korrigieren Sie den Link oder geben Sie dem Abschnitt seine id zurück.",
+        "en": "Some internal links point to a `#fragment` that no element of the target page carries as its `id` or as an `<a name>`. The link opens the page at the top instead of at the section it promised: a table of contents whose heading was renamed, a link to a block that was removed, a “skip to content” to an id the theme no longer prints. An id added by JavaScript is not in the served HTML and is reported anyway, so check that case in a browser. Fix the link or give the section its id back.",
+        "es": "Hay enlaces internos que apuntan a un `#fragmento` que ningún elemento de la página de destino lleva como `id` ni como `<a name>`. El enlace abre la página arriba del todo en vez de en la sección que prometía: un índice cuyo encabezado se renombró, un enlace a un bloque que se quitó, un «saltar al contenido» hacia un id que el tema ya no imprime. Un id que añade JavaScript no está en el HTML servido y se informa igualmente, así que ese caso compruébalo en un navegador. Corrige el enlace o devuelve el id a la sección.",
+        "fr": "Certains liens internes pointent vers un `#fragment` qu'aucun élément de la page cible ne porte comme `id` ni comme `<a name>`. Le lien ouvre la page tout en haut au lieu de la section promise : une table des matières dont le titre a été renommé, un lien vers un bloc supprimé, un « aller au contenu » vers un id que le thème n'imprime plus. Un id ajouté par JavaScript n'est pas dans le HTML servi et est tout de même signalé : vérifiez ce cas dans un navigateur. Corrigez le lien ou rendez son id à la section.",
+        "it": "Alcuni link interni puntano a un `#frammento` che nessun elemento della pagina di destinazione porta come `id` né come `<a name>`. Il link apre la pagina in cima invece che alla sezione promessa: un indice il cui titolo è stato rinominato, un link a un blocco rimosso, un «salta al contenuto» verso un id che il tema non stampa più. Un id aggiunto da JavaScript non è nell'HTML servito e viene segnalato comunque: verifica quel caso in un browser. Correggi il link o restituisci l'id alla sezione.",
+        "ja": "リンク先ページのどの要素も `id` や `<a name>` として持っていない `#フラグメント` を指す内部リンクがあります。リンクは約束したセクションではなくページの先頭を開きます。見出しの名前が変わった目次、削除されたブロックへのリンク、テーマが出力しなくなった id への「本文へスキップ」などです。JavaScript で追加される id は配信される HTML に含まれないため、それでも報告されます。その場合はブラウザで確認してください。リンクを修正するか、セクションに id を戻してください。",
+        "nl": "Sommige interne links verwijzen naar een `#fragment` dat geen enkel element van de doelpagina als `id` of als `<a name>` draagt. De link opent de pagina bovenaan in plaats van bij de beloofde sectie: een inhoudsopgave waarvan de kop is hernoemd, een link naar een verwijderd blok, een ‘naar de inhoud’ naar een id die het thema niet meer uitvoert. Een id die JavaScript toevoegt, staat niet in de geleverde HTML en wordt toch gemeld; controleer dat geval in een browser. Herstel de link of geef de sectie haar id terug.",
+        "pl": "Niektóre linki wewnętrzne prowadzą do `#fragmentu`, którego żaden element strony docelowej nie ma jako `id` ani jako `<a name>`. Link otwiera stronę na samej górze zamiast w obiecanej sekcji: spis treści, w którym zmieniono nagłówek, link do usuniętego bloku, „przejdź do treści” do id, którego motyw już nie wypisuje. Id dodawane przez JavaScript nie występuje w serwowanym HTML i mimo to zostaje zgłoszone, więc taki przypadek sprawdź w przeglądarce. Popraw link albo przywróć sekcji jej id.",
+        "pt": "Alguns links internos apontam para um `#fragmento` que nenhum elemento da página de destino tem como `id` nem como `<a name>`. O link abre a página no topo em vez de na seção prometida: um sumário cujo título foi renomeado, um link para um bloco que foi removido, um “pular para o conteúdo” para um id que o tema não imprime mais. Um id adicionado por JavaScript não está no HTML servido e é informado mesmo assim; confira esse caso em um navegador. Corrija o link ou devolva o id à seção.",
+        "tr": "Bazı dahili bağlantılar, hedef sayfadaki hiçbir öğenin `id` ya da `<a name>` olarak taşımadığı bir `#parça` değerine işaret ediyor. Bağlantı sayfayı vaat ettiği bölümde değil, en üstte açar: başlığı yeniden adlandırılmış bir içindekiler tablosu, kaldırılmış bir bloğa giden bir bağlantı, temanın artık yazdırmadığı bir id'ye giden bir «içeriğe atla». JavaScript ile eklenen bir id, sunulan HTML'de yer almaz ve yine de bildirilir; bu durumu bir tarayıcıda kontrol edin. Bağlantıyı düzeltin ya da bölüme id'sini geri verin."
+      },
+      "id": "LINK-FRAGMENT-BROKEN",
+      "min_tier": "free",
+      "name": {
+        "de": "Link auf einen fehlenden Anker",
+        "en": "Link to a missing anchor",
+        "es": "Enlace a un ancla inexistente",
+        "fr": "Lien vers une ancre inexistante",
+        "it": "Link a un'ancora inesistente",
+        "ja": "存在しないアンカーへのリンク",
+        "nl": "Link naar een ontbrekend anker",
+        "pl": "Link do nieistniejącej kotwicy",
+        "pt": "Link para uma âncora inexistente",
+        "tr": "Var olmayan bir çapaya bağlantı"
+      },
+      "references": [],
+      "scope": "site",
       "severity": "low"
     },
     {
