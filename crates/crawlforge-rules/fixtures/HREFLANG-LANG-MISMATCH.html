@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<!-- HREFLANG-LANG-MISMATCH: the page is in Spanish and says so in <html lang>, but its own
+     hreflang entry declares it English. It is the translation plugin that copied the English
+     page's set without swapping the codes: the Spanish URL appears as `en` and the English one
+     as `es`. The set is otherwise valid —self-reference, valid codes— so the finding is this. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Página en español anunciada como inglesa</title>
+<meta name="description" content="Esta página está en español, pero su anotación hreflang propia dice que es la versión inglesa del conjunto.">
+<link rel="canonical" href="https://fixture.local/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="alternate" hreflang="en" href="https://fixture.local/">
+<link rel="alternate" hreflang="es" href="https://fixture.local/en/">
+<meta property="og:title" content="Página en español anunciada como inglesa">
+<meta property="og:description" content="Hreflang propio en otro idioma.">
+</head>
+<body>
+<main>
+<h1>Versión en español</h1>
+<p>Google ofrecería esta página a quien busca en inglés, y la inglesa a quien busca en español.</p>
+</main>
+</body>
+</html>

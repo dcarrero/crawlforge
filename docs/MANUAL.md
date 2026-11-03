@@ -279,7 +279,7 @@ crawlforge report cliente.sqlite --config otro.yaml          # applies otro.yaml
 ### See what the tool checks
 
 ```bash
-crawlforge rules --lang es                    # all 59, as a table
+crawlforge rules --lang es                    # the whole catalog, as a table
 crawlforge rules INDEX-ORPHAN-PAGE            # one rule's card, by its ID
 crawlforge rules --lang es --category canonical
 crawlforge rules --lang es --detail           # with each rule's full explanation

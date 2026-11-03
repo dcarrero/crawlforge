@@ -203,7 +203,7 @@ CREATE TABLE links (
     anchor       TEXT,
     rel          TEXT,
     is_nofollow  INTEGER NOT NULL DEFAULT 0,
-    element      TEXT NOT NULL,     -- 'a'|'link'|'img'|'script'|'iframe'|'form'
+    element      TEXT NOT NULL,     -- 'a'|'link'|'img'|'script'|'iframe'|'form'|'meta'
     region       TEXT,              -- 'nav'|'main'|'footer'|'aside'|'unknown'
     position     INTEGER            -- order of appearance in the document
 );
@@ -211,6 +211,11 @@ CREATE TABLE links (
 CREATE INDEX idx_links_from ON links(from_url_id);
 CREATE INDEX idx_links_to   ON links(to_url_id);
 ```
+
+`element = 'meta'` (added after 0.19.0) is the page's first `og:image`, with `rel = 'og:image'`. It is
+not something the page links or loads, but writing it here is what gets it requested —or probed,
+on another host— like an `<img>`, so `SOCIAL-OG-IMAGE-BROKEN` can read its status. Whoever counts
+a page's links should filter on `element = 'a'`, as every rule already does.
 
 `region` is inferred from the nearest semantic ancestor (`<nav>`, `<main>`, `<footer>`). It lets
 you tell template links from content links, which is the difference that matters in internal

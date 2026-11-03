@@ -30,6 +30,7 @@ pub mod content;
 pub mod hreflang;
 pub mod http;
 pub mod index;
+pub mod link;
 pub mod meta;
 pub mod social;
 
@@ -315,6 +316,13 @@ pub struct LinkView<'a> {
     /// put there and nobody can remove. A rule that talks about the site's links must ignore
     /// them.
     pub is_infrastructure: bool,
+    /// An `<a>` with at least one `<img>` inside. Its name, if any, is the image's `alt`, and
+    /// the `ASSET-IMG-*` rules already judge that `alt`: a link rule that also looked at it
+    /// would report the same `<img>` twice.
+    pub has_image: bool,
+    /// An `<a>` named by something other than its text: `aria-label`, `aria-labelledby` or
+    /// `title` on the link, or an `<svg aria-label>` inside it.
+    pub labelled: bool,
 }
 
 /// What a page rule needs to know in order to decide.
@@ -464,6 +472,7 @@ pub fn page_rules() -> Vec<Box<dyn PageRule>> {
     out.extend(asset::page_rules());
     out.extend(hreflang::page_rules());
     out.extend(social::page_rules());
+    out.extend(link::page_rules());
     out
 }
 
@@ -478,6 +487,7 @@ pub fn site_rules() -> Vec<Box<dyn SiteRule>> {
     out.extend(asset::site_rules());
     out.extend(hreflang::site_rules());
     out.extend(social::site_rules());
+    out.extend(link::site_rules());
     out
 }
 

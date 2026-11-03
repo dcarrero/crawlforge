@@ -97,6 +97,46 @@ pub static HREFLANG_TO_4XX: RuleMeta = RuleMeta {
     references: &[],
 };
 
+pub static HREFLANG_LANG_MISMATCH: RuleMeta = RuleMeta {
+    id: "HREFLANG-LANG-MISMATCH",
+    severity: Severity::Medium,
+    category: Category::Hreflang,
+    min_tier: Tier::Free,
+    scope: Scope::Page,
+    name_es: "Hreflang propio en otro idioma que la página",
+    name_en: "Self hreflang in another language than the page",
+    desc_es: "La anotación hreflang que apunta a la propia página declara un idioma distinto \
+              del que dice su `<html lang>`: una página en español que se anuncia como inglesa, \
+              por ejemplo. Una de las dos está mal, y si es el hreflang, Google ofrece la página \
+              a quien busca en el otro idioma. Suele ser un plugin de traducción que copia el \
+              conjunto de la página original sin cambiar el código.",
+    desc_en: "The hreflang annotation pointing at the page itself declares a different language \
+              from its `<html lang>`: a page in Spanish announcing itself as English, for \
+              example. One of the two is wrong, and if it is the hreflang, Google serves the page \
+              to people searching in the other language. It is usually a translation plugin that \
+              copies the original page's set without changing the code.",
+    references: &[],
+};
+
+pub static HREFLANG_SELF_ONLY: RuleMeta = RuleMeta {
+    id: "HREFLANG-SELF-ONLY",
+    severity: Severity::Low,
+    category: Category::Hreflang,
+    min_tier: Tier::Free,
+    scope: Scope::Page,
+    name_es: "Hreflang sin alternativas",
+    name_en: "Hreflang with no alternates",
+    desc_es: "La página declara hreflang, pero todas las anotaciones apuntan a ella misma: no hay \
+              ninguna traducción en el conjunto, así que no hace nada. Si la página no tiene \
+              traducción, sobra; si la tiene, faltan sus enlaces, que es lo que de verdad hay que \
+              mirar: suele ser una traducción que el plugin dejó de vincular.",
+    desc_en: "The page declares hreflang, but every annotation points at the page itself: there \
+              is no translation in the set, so it does nothing. If the page has no translation, \
+              the annotation is unnecessary; if it does, its links are missing, and that is what \
+              really needs checking: it is usually a translation the plugin stopped linking.",
+    references: &[],
+};
+
 // ---------------------------------------------------------------------------------------------
 // Code validation
 // ---------------------------------------------------------------------------------------------
@@ -510,17 +550,9 @@ impl PageRule for HreflangNoSelf {
             return Vec::new();
         }
 
-        let mut propias = HashSet::new();
-        propias.insert(url_key(ctx.url));
-        if let Some(canonical) = ctx.canonical.filter(|c| !c.trim().is_empty()) {
-            if let Some(absoluto) = resolve_href(ctx.url, canonical) {
-                propias.insert(url_key(&absoluto));
-            }
-        }
-
-        let se_referencia = ctx.hreflang.iter().any(|(_, href)| {
-            resolve_href(ctx.url, href).map(|a| propias.contains(&url_key(&a))).unwrap_or(false)
-        });
+        let propias = own_keys(ctx);
+        let se_referencia =
+            ctx.hreflang.iter().any(|(_, href)| points_at_self(ctx, &propias, href));
         if se_referencia {
             return Vec::new();
         }
@@ -577,6 +609,169 @@ impl PageRule for HreflangInvalidCode {
             );
         }
         salida
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The page's own entries
+// ---------------------------------------------------------------------------------------------
+
+/// Comparison keys of the page itself: its URL and, if it has one, its canonical. The same set
+/// `HREFLANG-NO-SELF` uses, so the three page rules agree on what "itself" means.
+fn own_keys(ctx: &PageContext<'_>) -> HashSet<String> {
+    let mut propias = HashSet::new();
+    propias.insert(url_key(ctx.url));
+    if let Some(canonical) = ctx.canonical.filter(|c| !c.trim().is_empty()) {
+        if let Some(absoluto) = resolve_href(ctx.url, canonical) {
+            propias.insert(url_key(&absoluto));
+        }
+    }
+    propias
+}
+
+/// Does this `href` designate the page itself?
+fn points_at_self(ctx: &PageContext<'_>, propias: &HashSet<String>, href: &str) -> bool {
+    resolve_href(ctx.url, href).is_some_and(|a| propias.contains(&url_key(&a)))
+}
+
+/// The language subtag of a code, lowercased: `es-ES` → `es`, `es_ES` → `es`.
+///
+/// `None` for what is not shaped like a language subtag —two or three ASCII letters—: an
+/// `<html lang="español">` or an empty `lang=""` is not a language this rule can compare, and
+/// other rules already speak about them.
+pub(crate) fn primary_language(code: &str) -> Option<String> {
+    let primera = code.trim().split(['-', '_']).next()?.to_ascii_lowercase();
+    let forma_valida =
+        (2..=3).contains(&primera.len()) && primera.bytes().all(|b| b.is_ascii_lowercase());
+    forma_valida.then_some(primera)
+}
+
+/// Codes that name the same language, folded to one. Withdrawn ISO 639-1 aliases that old CMSs
+/// still emit (`iw`, `in`, `ji`, `jw`, `mo`), Norwegian's umbrella and its two written
+/// standards, and Filipino's two codes. Without this a page with `<html lang="he">` and hreflang
+/// `iw` would be reported as being in two languages, and it is one.
+fn same_language_key(idioma: &str) -> &str {
+    match idioma {
+        "iw" => "he",
+        "in" => "id",
+        "ji" => "yi",
+        "jw" => "jv",
+        "mo" => "ro",
+        "nb" | "nn" => "no",
+        "tl" => "fil",
+        otro => otro,
+    }
+}
+
+/// Are two language subtags the same language?
+///
+/// `sh`, the withdrawn Serbo-Croatian, matches Serbian, Croatian, Bosnian and Montenegrin: a
+/// page saying `sh` on one side and `hr` on the other is under-specified, not contradictory.
+fn same_language(a: &str, b: &str) -> bool {
+    const SERBOCROATA: &[&str] = &["sr", "hr", "bs", "cnr"];
+    if a == "sh" || b == "sh" {
+        let otro = if a == "sh" { b } else { a };
+        return otro == "sh" || SERBOCROATA.contains(&otro);
+    }
+    same_language_key(a) == same_language_key(b)
+}
+
+// ---------------------------------------------------------------------------------------------
+// HREFLANG-LANG-MISMATCH
+// ---------------------------------------------------------------------------------------------
+
+/// The hreflang that points at the page itself names another language than its `<html lang>`.
+///
+/// Only the **primary language subtag** is compared, case-insensitively: `es-ES` against `es`
+/// is the same language with more detail, and the region is a targeting choice, not a
+/// contradiction. `x-default` is not a language and does not count.
+///
+/// It stays quiet whenever another rule already owns the problem or the comparison cannot be
+/// made: no `<html lang>` (`CONTENT-LANG-MISSING`), no self-reference (`HREFLANG-NO-SELF`), a
+/// malformed code (`HREFLANG-INVALID-CODE`), or a `lang` that is not shaped like a language.
+/// And if the page lists itself under several codes, one of them matching is enough: that set
+/// is odd, but it is not saying the page is in another language.
+pub struct HreflangLangMismatch;
+
+impl PageRule for HreflangLangMismatch {
+    fn meta(&self) -> &'static RuleMeta {
+        &HREFLANG_LANG_MISMATCH
+    }
+
+    fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
+        if !ctx.is_html || !ctx.is_success() || !ctx.is_indexable || ctx.hreflang.is_empty() {
+            return Vec::new();
+        }
+        let Some(lang) = ctx.lang else {
+            return Vec::new();
+        };
+        let Some(idioma_pagina) = primary_language(lang) else {
+            return Vec::new();
+        };
+
+        let propias = own_keys(ctx);
+        let propias_con_idioma: Vec<(&str, &str, String)> = ctx
+            .hreflang
+            .iter()
+            .filter(|(codigo, _)| !codigo.trim().eq_ignore_ascii_case("x-default"))
+            .filter(|(codigo, _)| check_code(codigo).is_none())
+            .filter(|(_, href)| points_at_self(ctx, &propias, href))
+            .filter_map(|(codigo, href)| Some((*codigo, *href, primary_language(codigo)?)))
+            .collect();
+
+        let Some((codigo, href, idioma_hreflang)) = propias_con_idioma.first() else {
+            return Vec::new();
+        };
+        if propias_con_idioma.iter().any(|(_, _, idioma)| same_language(idioma, &idioma_pagina)) {
+            return Vec::new();
+        }
+
+        vec![Issue::new(&HREFLANG_LANG_MISMATCH)
+            .with_detail(serde_json::json!({
+                "html_lang": lang,
+                "hreflang": codigo,
+                "href": href,
+            }))
+            .with_group(format!("hreflang-lang:{idioma_hreflang}>{idioma_pagina}"))]
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// HREFLANG-SELF-ONLY
+// ---------------------------------------------------------------------------------------------
+
+/// Every hreflang annotation points at the page itself: a set of one, which does nothing.
+///
+/// It is the exact complement of [`HreflangNoSelf`] —that one fires when **no** entry is the
+/// page, this one when **all** of them are— so the two can never fire on the same page. Nor
+/// does it overlap `HREFLANG-NOT-RECIPROCAL`, which only judges the entries pointing elsewhere,
+/// and here there are none. `x-default` pointing at the page counts as the page.
+///
+/// If any `href` cannot be resolved, nothing is said: an entry we cannot place might be the
+/// missing alternate, and this rule only speaks when it is sure the set has none.
+pub struct HreflangSelfOnly;
+
+impl PageRule for HreflangSelfOnly {
+    fn meta(&self) -> &'static RuleMeta {
+        &HREFLANG_SELF_ONLY
+    }
+
+    fn evaluate(&self, ctx: &PageContext<'_>) -> Vec<Issue> {
+        if !ctx.is_html || !ctx.is_success() || !ctx.is_indexable || ctx.hreflang.is_empty() {
+            return Vec::new();
+        }
+        let propias = own_keys(ctx);
+        if !ctx.hreflang.iter().all(|(_, href)| points_at_self(ctx, &propias, href)) {
+            return Vec::new();
+        }
+
+        let mut codigos: Vec<String> =
+            ctx.hreflang.iter().map(|(codigo, _)| codigo.trim().to_ascii_lowercase()).collect();
+        codigos.sort();
+        codigos.dedup();
+        vec![Issue::new(&HREFLANG_SELF_ONLY)
+            .with_detail(serde_json::json!({ "codes": codigos }))
+            .with_group(format!("hreflang-self-only:{}", codigos.join(",")))]
     }
 }
 
@@ -798,7 +993,12 @@ impl SiteRule for HreflangTo4xx {
 }
 
 pub(crate) fn page_rules() -> Vec<Box<dyn PageRule>> {
-    vec![Box::new(HreflangNoSelf), Box::new(HreflangInvalidCode)]
+    vec![
+        Box::new(HreflangNoSelf),
+        Box::new(HreflangInvalidCode),
+        Box::new(HreflangLangMismatch),
+        Box::new(HreflangSelfOnly),
+    ]
 }
 
 pub(crate) fn site_rules() -> Vec<Box<dyn SiteRule>> {
@@ -1053,6 +1253,173 @@ mod tests {
                 "should not audit the HTML of a {status}"
             );
         }
+    }
+
+    // ----------------------------------------------------------------------------- LANG-MISMATCH
+
+    /// The page `/es/` with `<html lang>` set, and its hreflang set.
+    fn ctx_lang<'a>(lang: Option<&'a str>, hreflang: &'a [(&'a str, &'a str)]) -> PageContext<'a> {
+        let mut c = ctx(hreflang);
+        c.lang = lang;
+        c
+    }
+
+    #[test]
+    fn lang_mismatch_reports_a_self_entry_in_another_language() {
+        // The translation plugin that copied the English page's set into the Spanish one.
+        let c = ctx_lang(
+            Some("es"),
+            &[("en", "https://ejemplo.es/es/"), ("es", "https://ejemplo.es/en/")],
+        );
+        let issues = HreflangLangMismatch.evaluate(&c);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].rule_id, "HREFLANG-LANG-MISMATCH");
+        assert_eq!(issues[0].severity, Severity::Medium);
+        assert_eq!(issues[0].group_key.as_deref(), Some("hreflang-lang:en>es"));
+        let detalle = issues[0].detail_json.as_deref().unwrap_or_default();
+        assert!(detalle.contains("\"html_lang\":\"es\""), "{detalle}");
+        assert!(detalle.contains("\"hreflang\":\"en\""), "{detalle}");
+    }
+
+    #[test]
+    fn lang_mismatch_compares_only_the_language_subtag() {
+        // `es-ES` against `es`, `ES` against `es-mx`, `es_ES` (the locale typo): the same
+        // language with more or less detail. The region is targeting, not a contradiction.
+        for (lang, codigo) in [("es", "es-ES"), ("es-MX", "ES"), ("es_ES", "es-419"), ("ES", "es")] {
+            let entradas = [(codigo, "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")];
+            let c = ctx_lang(Some(lang), &entradas);
+            assert!(HreflangLangMismatch.evaluate(&c).is_empty(), "{lang} vs {codigo}");
+        }
+    }
+
+    #[test]
+    fn lang_mismatch_still_fires_between_regional_codes() {
+        // The other half of the subtag comparison: regions do not hide a real mismatch.
+        // `es-ES` against `en-GB` is Spanish against English.
+        for (lang, codigo) in [("es-ES", "en-GB"), ("pt_BR", "es-419"), ("DE", "fr-ch")] {
+            let entradas = [(codigo, "https://ejemplo.es/es/"), ("it", "https://ejemplo.es/it/")];
+            let c = ctx_lang(Some(lang), &entradas);
+            assert_eq!(HreflangLangMismatch.evaluate(&c).len(), 1, "{lang} vs {codigo}");
+        }
+    }
+
+    #[test]
+    fn lang_mismatch_accepts_the_aliases_of_the_same_language() {
+        // `iw` is the withdrawn code for Hebrew that old CMSs still emit; `nb` is a written
+        // Norwegian; `sh` is the withdrawn Serbo-Croatian. None of them is another language.
+        for (lang, codigo) in [("he", "iw"), ("nb", "no"), ("no", "nn"), ("hr", "sh"), ("fil", "tl")]
+        {
+            let entradas = [(codigo, "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")];
+            let c = ctx_lang(Some(lang), &entradas);
+            assert!(HreflangLangMismatch.evaluate(&c).is_empty(), "{lang} vs {codigo}");
+        }
+    }
+
+    #[test]
+    fn lang_mismatch_stays_quiet_when_one_self_entry_matches() {
+        // The page lists itself twice; one of them is right. Odd, but not "in another language".
+        let c = ctx_lang(
+            Some("es"),
+            &[("en", "https://ejemplo.es/es/"), ("es", "https://ejemplo.es/es/")],
+        );
+        assert!(HreflangLangMismatch.evaluate(&c).is_empty());
+    }
+
+    #[test]
+    fn lang_mismatch_ignores_x_default_and_the_other_entries() {
+        // x-default to itself is not a language, and the alternates may be in any language.
+        let c = ctx_lang(
+            Some("es"),
+            &[
+                ("x-default", "https://ejemplo.es/es/"),
+                ("es", "/es/"),
+                ("en", "https://ejemplo.es/en/"),
+            ],
+        );
+        assert!(HreflangLangMismatch.evaluate(&c).is_empty());
+    }
+
+    #[test]
+    fn lang_mismatch_leaves_what_other_rules_own() {
+        // No <html lang>: CONTENT-LANG-MISSING. No self entry: HREFLANG-NO-SELF. A malformed
+        // code: HREFLANG-INVALID-CODE. A lang that is not a language: nothing to compare.
+        let otra = [("en", "https://ejemplo.es/es/"), ("fr", "https://ejemplo.es/fr/")];
+        assert!(HreflangLangMismatch.evaluate(&ctx_lang(None, &otra)).is_empty());
+        assert!(HreflangLangMismatch.evaluate(&ctx_lang(Some("español"), &otra)).is_empty());
+        assert!(HreflangLangMismatch.evaluate(&ctx_lang(Some(""), &otra)).is_empty());
+
+        let sin_self = [("en", "https://ejemplo.es/en/")];
+        assert!(HreflangLangMismatch.evaluate(&ctx_lang(Some("es"), &sin_self)).is_empty());
+
+        let invalido = [("sp", "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")];
+        assert!(HreflangLangMismatch.evaluate(&ctx_lang(Some("en"), &invalido)).is_empty());
+    }
+
+    #[test]
+    fn lang_mismatch_stays_quiet_off_an_indexable_success() {
+        let mal = [("en", "https://ejemplo.es/es/"), ("es", "https://ejemplo.es/en/")];
+        let mut c = ctx_lang(Some("es"), &mal);
+        c.is_indexable = false;
+        assert!(HreflangLangMismatch.evaluate(&c).is_empty());
+        let mut c = ctx_lang(Some("es"), &mal);
+        c.status = 404;
+        assert!(HreflangLangMismatch.evaluate(&c).is_empty());
+    }
+
+    // ----------------------------------------------------------------------------- SELF-ONLY
+
+    #[test]
+    fn self_only_reports_a_set_with_no_alternates() {
+        let c = ctx(&[("es", "https://ejemplo.es/es/"), ("x-default", "/es/")]);
+        let issues = HreflangSelfOnly.evaluate(&c);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].rule_id, "HREFLANG-SELF-ONLY");
+        assert_eq!(issues[0].severity, Severity::Low);
+        assert_eq!(issues[0].group_key.as_deref(), Some("hreflang-self-only:es,x-default"));
+    }
+
+    #[test]
+    fn self_only_counts_the_canonical_as_the_page() {
+        let mut c = ctx(&[("es", "https://ejemplo.es/es/")]);
+        c.url = "https://ejemplo.es/es/?utm_source=x";
+        assert_eq!(HreflangSelfOnly.evaluate(&c).len(), 1);
+    }
+
+    #[test]
+    fn self_only_stays_quiet_when_there_is_an_alternate() {
+        let c = ctx(&[("es", "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")]);
+        assert!(HreflangSelfOnly.evaluate(&c).is_empty());
+    }
+
+    #[test]
+    fn self_only_never_fires_together_with_no_self() {
+        // The two rules are complements on a non-empty set: all entries are the page, or none
+        // is. A set with no self-reference is NO-SELF's, never this one's.
+        for set in [
+            &[("en", "https://ejemplo.es/en/")][..],
+            &[("es", "https://ejemplo.es/es/")][..],
+            &[("es", "https://ejemplo.es/es/"), ("en", "https://ejemplo.es/en/")][..],
+        ] {
+            let c = ctx(set);
+            let no_self = !HreflangNoSelf.evaluate(&c).is_empty();
+            let self_only = !HreflangSelfOnly.evaluate(&c).is_empty();
+            assert!(!(no_self && self_only), "both fired on {set:?}");
+        }
+    }
+
+    #[test]
+    fn self_only_stays_quiet_on_an_entry_it_cannot_place() {
+        // An empty href cannot be resolved: it might be the alternate that is missing.
+        let c = ctx(&[("es", "https://ejemplo.es/es/"), ("en", "  ")]);
+        assert!(HreflangSelfOnly.evaluate(&c).is_empty());
+    }
+
+    #[test]
+    fn self_only_stays_quiet_without_hreflang_or_off_an_indexable_page() {
+        assert!(HreflangSelfOnly.evaluate(&ctx(&[])).is_empty());
+        let mut c = ctx(&[("es", "https://ejemplo.es/es/")]);
+        c.is_indexable = false;
+        assert!(HreflangSelfOnly.evaluate(&c).is_empty());
     }
 
     // ----------------------------------------------------------------------------- store

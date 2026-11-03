@@ -3785,9 +3785,14 @@ fn build_result<F: Fetcher>(
         self_url: &self_url,
     });
 
-    let internal_links_out = resolved_links
+    // The `og:image` does not count: it is metadata for social networks, not something the page
+    // links or loads, and counting it would move every page's figure by one.
+    let internal_links_out = parsed
+        .links
         .iter()
-        .flatten()
+        .zip(resolved_links)
+        .filter(|(l, _)| l.element != parse::LinkElement::Meta)
+        .filter_map(|(_, n)| n.as_ref())
         .filter(|n| scope.is_internal_link(&doc.url, &n.normalized))
         .count() as u32;
 
@@ -3852,11 +3857,25 @@ fn build_result<F: Fetcher>(
         })
         .collect();
 
+    // Which `<a>` wrap an image: the image remembers its link, so the edge is read backwards.
+    let mut con_imagen = vec![false; parsed.links.len()];
+    for indice in parsed.images.iter().filter_map(|img| img.anchor_index) {
+        if let Some(marca) = con_imagen.get_mut(indice) {
+            *marca = true;
+        }
+    }
+
+    // The `og:image` link stays out of the rules' view. It is not something the page loads
+    // —the browser never requests it, a social network does— so a page rule that reads
+    // resources would judge it as one: an `http://` og:image on an HTTPS page is not mixed
+    // content. The site rule that cares about it reads `links` instead.
     let links: Vec<LinkView<'_>> = parsed
         .links
         .iter()
         .zip(resolved_links)
-        .map(|(l, resuelto)| LinkView {
+        .zip(&con_imagen)
+        .filter(|((l, _), _)| l.element != parse::LinkElement::Meta)
+        .map(|((l, resuelto), &has_image)| LinkView {
             href: &l.href,
             anchor: l.anchor.as_deref(),
             is_nofollow: l.is_nofollow,
@@ -3867,6 +3886,8 @@ fn build_result<F: Fetcher>(
             is_infrastructure: resuelto
                 .as_ref()
                 .is_some_and(|n| crate::frontier::is_infrastructure_path(n.normalized.path())),
+            has_image,
+            labelled: l.labelled,
         })
         .collect();
 

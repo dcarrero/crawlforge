@@ -1517,6 +1517,8 @@ mod tests {
             is_internal: interno,
             is_resource: false,
             is_infrastructure: false,
+            has_image: false,
+            labelled: false,
         }
     }
 

@@ -276,6 +276,87 @@ async fn las_reglas_de_plantilla_escriben_su_clave_de_grupo() {
     }
 }
 
+/// Crawls a rule's fixture and hands back the open store, with the temporary directory that
+/// keeps it alive.
+async fn rastreo_de(rule_id: &str) -> (Temporal, Connection) {
+    let fixture = crawlforge_rules::fixture_path(rule_id)
+        .unwrap_or_else(|| panic!("{rule_id} has no fixture"));
+    let tmp = Temporal::new(&format!("rastreo-{rule_id}"));
+    let sitio = tmp.path.join("sitio");
+    if fixture.is_dir() {
+        copiar(&fixture, &sitio).expect("copy the fixture");
+    } else {
+        std::fs::create_dir_all(&sitio).expect("create the site");
+        copiar_fichero(&fixture, &sitio.join("index.html")).expect("copy the fixture");
+    }
+    let job = CrawlJob::filesystem(&sitio, "https://fixture.local/");
+    let outcome = engine::run(job, &tmp.path.join("crawl.sqlite")).await.expect("crawl");
+    let conn = Connection::open_with_flags(
+        &outcome.store_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .expect("open the crawl");
+    (tmp, conn)
+}
+
+#[tokio::test]
+async fn the_og_image_is_requested_and_judged_but_is_not_a_page_resource() {
+    // The seam: `parse.rs` turns the first og:image into a `links` row, the engine requests it
+    // like any URL, and the site rule reads the status. And the other half: the og:image stays
+    // out of the page rules' view, because an `http://` og:image on an HTTPS page is not
+    // mixed content — no browser ever requests it.
+    let (_tmp, conn) = rastreo_de("SOCIAL-OG-IMAGE-BROKEN").await;
+    let reglas: Vec<String> = conn
+        .prepare("SELECT DISTINCT rule_id FROM issues")
+        .expect("query issues")
+        .query_map([], |r| r.get(0))
+        .expect("read issues")
+        .filter_map(Result::ok)
+        .collect();
+    assert!(reglas.iter().any(|r| r == "SOCIAL-OG-IMAGE-BROKEN"), "{reglas:?}");
+    assert!(
+        !reglas.iter().any(|r| r == "HTTP-MIXED-CONTENT"),
+        "an og:image is not a resource the page loads: {reglas:?}"
+    );
+
+    let detalle: String = conn
+        .query_row(
+            "SELECT detail_json FROM issues WHERE rule_id = 'SOCIAL-OG-IMAGE-BROKEN'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("the finding");
+    assert!(detalle.contains("tarjeta-borrada.png"), "{detalle}");
+
+    let segunda: i64 = conn
+        .query_row("SELECT COUNT(*) FROM urls WHERE url LIKE '%segunda-tarjeta%'", [], |r| {
+            r.get(0)
+        })
+        .expect("count");
+    assert_eq!(segunda, 0, "only the first og:image is requested");
+}
+
+#[tokio::test]
+async fn the_empty_link_rule_sees_labels_and_images_through_the_parser() {
+    // Six links in the fixture look empty in the source; five have a name the parser has to
+    // carry to the rule —aria-label, title, <svg aria-label>, <svg><title>, hidden text— and
+    // one wraps an image. Exactly one is empty.
+    let filas = detalles_de("LINK-ANCHOR-EMPTY").await;
+    assert_eq!(filas.len(), 1, "one finding per page");
+    let detalle = filas[0].0.as_deref().unwrap_or_default();
+    assert!(detalle.contains("\"links\":1"), "only the CSS icon is empty: {detalle}");
+}
+
+#[tokio::test]
+async fn the_generic_anchor_rule_counts_the_stock_phrases_of_the_page() {
+    let filas = detalles_de("LINK-ANCHOR-GENERIC").await;
+    assert_eq!(filas.len(), 1, "one finding per page");
+    let (detalle, grupo) = &filas[0];
+    let detalle = detalle.as_deref().unwrap_or_default();
+    assert!(detalle.contains("\"links\":2"), "«Leer más» and «Read more», not the third: {detalle}");
+    assert_eq!(grupo.as_deref(), Some("link-anchor-generic:leer mas,read more"));
+}
+
 #[test]
 fn las_excepciones_declaradas_existen_y_estan_justificadas() {
     let ids: Vec<&str> = crawlforge_rules::catalog().iter().map(|m| m.id).collect();

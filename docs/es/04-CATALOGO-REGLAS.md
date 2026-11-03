@@ -200,6 +200,21 @@ Bloque de alto valor para el cliente (ejemplo.es/ejemplo.me, otro proyecto, otro
 | `HREFLANG-TO-NOINDEX` | critical | site | pro | hreflang apunta a página no indexable |
 | `HREFLANG-CONFLICT-CANONICAL` | high | site | pro | hreflang y canonical se contradicen |
 | `HREFLANG-NO-XDEFAULT` | low | site | pro | Conjunto multiidioma sin `x-default` |
+| `HREFLANG-LANG-MISMATCH` | medium | page | free | La entrada hreflang de la propia página nombra otro idioma que su `<html lang>` (solo la subetiqueta de idioma: `es-ES` frente a `es` está bien) |
+| `HREFLANG-SELF-ONLY` | low | page | free | Todas las entradas hreflang apuntan a la propia página: un conjunto sin alternativas |
+
+**Las dos reglas de página añadidas tras la 0.19.0 no se solapan con las que había.**
+`HREFLANG-SELF-ONLY` es el complemento exacto de `HREFLANG-NO-SELF` sobre un conjunto no vacío
+—o todas las entradas son la página, o ninguna lo es— y `HREFLANG-NOT-RECIPROCAL` solo juzga las
+entradas que apuntan a otra parte, y un conjunto de una sola página no tiene ninguna.
+`HREFLANG-LANG-MISMATCH` calla siempre que el problema ya tiene dueño: sin `<html lang>`
+(`CONTENT-LANG-MISSING`), sin autorreferencia (`HREFLANG-NO-SELF`), con un código mal formado
+(`HREFLANG-INVALID-CODE`). Compara solo la subetiqueta de idioma y pliega los alias retirados que
+Google sigue aceptando (`iw`/`he`, `in`/`id`, `nb`/`nn`/`no`, `sh` con `sr`/`hr`/`bs`): la región
+es una decisión de segmentación, no una contradicción. Es `medium` y no `high` porque no puede
+saber qué lado está mal: si es el hreflang, Google sirve la página al público equivocado; si es el
+`lang`, Google no usa ese atributo para detectar el idioma y el daño es para los lectores de
+pantalla y las ofertas de traducción del navegador.
 
 ## 9. Datos estructurados y social (`SCHEMA`)
 
@@ -209,7 +224,59 @@ Bloque de alto valor para el cliente (ejemplo.es/ejemplo.me, otro proyecto, otro
 | `SCHEMA-MISSING-REQUIRED` | medium | page | pro | Falta una propiedad obligatoria del tipo declarado |
 | `SCHEMA-MISSING-ARTICLE` | low | page | pro | Página tipo artículo sin schema `Article`/`BlogPosting` |
 | `SOCIAL-OG-MISSING` | low | page | free | Sin `og:title` / `og:description` / `og:image` |
-| `SOCIAL-OG-IMAGE-BROKEN` | medium | site | pro | `og:image` devuelve error |
+| `SOCIAL-OG-IMAGE-BROKEN` | medium | site | free | El primer `og:image` devuelve 4xx/5xx (host propio) o 404/410/dominio muerto (host ajeno, ver la nota del §3), directamente o al final de sus redirecciones |
+
+**`SOCIAL-OG-IMAGE-BROKEN` salió como `free`, no como `pro` según estaba previsto.** Una tarjeta
+que pierde su imagen es el mismo tipo de hallazgo que un `<img>` roto, y esos son gratuitos; el
+reparto del §13 reserva `pro` para áreas enteras (schema, WordPress, renderizado JS), no para un
+código de estado más. Para tener un estado que leer, el parser registra ahora el **primer**
+`og:image` de la página —el que usan las redes— como una fila de `links` con `element = 'meta'`,
+de modo que el rastreo lo pide como un `<img>`, o lo sonda si está en otro host. Sin descargador
+propio. Dos consecuencias, las dos a propósito: el og:image es una URL del rastreo y cuenta para
+`--max-urls` como cualquier imagen, y queda fuera de la vista de las reglas de página, porque un
+og:image `http://` en una página HTTPS no es contenido mixto —ningún navegador lo carga—. Un
+hallazgo por URL de imagen, con cuántas páginas la declaran. Si el mismo fichero es además un
+`<img>` de la página, `ASSET-IMG-BROKEN` también lo avisa: un hueco en la página y una tarjeta sin
+imagen son daños distintos que se arreglan con el mismo fichero. `twitter:image` no se comprueba
+todavía: suele ser la misma URL que `og:image`, y X recurre a `og:image` cuando falta. Un
+`twitter:image` distinto y roto es un hueco conocido.
+
+## 9.bis Texto de los enlaces internos (`LINK`)
+
+| ID | Sev. | Alcance | Nivel | Condición |
+|---|---|---|---|---|
+| `LINK-ANCHOR-EMPTY` | medium | page | free | `<a href>` interno sin texto, sin imagen dentro y sin `aria-label`/`aria-labelledby`/`title` (ni un `<svg aria-label>`) |
+| `LINK-ANCHOR-GENERIC` | low | page | free | `<a href>` interno cuyo texto entero es una fórmula: «leer más», «aquí», «read more», «click here»… |
+
+Las dos leen solo enlaces `<a>` internos, se saltan los fragmentos de la misma página
+(`href="#…"`, que son botones vestidos de enlace) y dan **un hallazgo por página con el
+recuento**, no uno por enlace.
+
+**`LINK-ANCHOR-EMPTY` deja los enlaces con imagen a las reglas `ASSET`.** Un `<a>` cuyo único
+contenido es un `<img alt="">` es `ASSET-IMG-EMPTY-ALT-LINK`, uno con un `<img>` sin `alt` es
+`ASSET-IMG-NO-ALT`; avisarlo también aquí contaría dos veces el mismo `<img>`. Lo que queda es el
+icono pintado con CSS y la tarjeta entera convertida en un enlace vacío superpuesto. El texto
+oculto con CSS y el `<title>` de un `<svg>` en línea cuentan como texto. Es `medium`: la falta de
+nombre es un fallo de accesibilidad real (WCAG 2.4.4), pero para el buscador cuesta la señal de un
+enlace, no la página. `ASSET-IMG-EMPTY-ALT-LINK` es `high` por la misma falta de nombre, y esa
+diferencia se hereda, no se argumenta aquí: si las dos deben quedar en la misma severidad es una
+pregunta abierta.
+
+**`LINK-ANCHOR-GENERIC` guarda sus fórmulas por idioma** (`link::GENERIC_ANCHORS`: inglés,
+español, alemán, francés, italiano, neerlandés y turco hoy), y añadir un idioma es añadir una
+entrada. Cada idioma tiene dos listas. Las fórmulas inconfundibles —«leer más», «click here»,
+«klik hier»— se comprueban en todas las páginas, porque un tema en español que dejó «Read more»
+sin traducir es el caso más común de todos. Las palabras que en otro sitio pueden ser un nombre
+—«Go», «Link», «Plus», «Suite», «Meer», «qui»— solo cuentan en una página cuyo `<html lang>` dice
+que está en ese idioma. La coincidencia es con el texto entero y plegada (mayúsculas, tildes,
+apóstrofos tipográficos, la decoración »/…/→): «Leer más sobre tarifas» nombra su destino y está
+bien. Un enlace cuyo texto es el slug de su propio destino (`<a href="/tag/mas/">más</a>`, una
+nube de etiquetas) es un mal nombre de etiqueta, no un enlace genérico, y queda fuera —apareció en
+el primer rastreo real—. El `aria-label` no salva un texto genérico: lo que se afirma es lo que lee
+el buscador, y eso es el texto. La paginación («siguiente», «next») no está en las listas.
+
+**No se copia: «imagen sin `title`».** Algunos rastreadores avisan de imágenes sin atributo
+`title`; Google no lo usa, así que aquí no es un hallazgo.
 
 ## 10. WordPress (`WP`) — requiere adaptador, nivel Pro
 
