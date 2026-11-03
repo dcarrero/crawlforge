@@ -73,3 +73,17 @@ concurrency: 8
 # Acumular el texto de cuerpo para búsqueda (FTS5). Nivel Pro: multiplica el
 # tamaño del fichero de rastreo.
 # collect_body_text: false
+
+# Criterio propio del sitio: reglas que no se quieren oír y severidades que pesan distinto.
+# Se aplica al LEER, no al rastrear: el rastreo evalúa todas las reglas y guarda todos los
+# hallazgos, y este bloque viaja dentro del fichero de rastreo para que report, inspect,
+# export, diff y portfolio lo apliquen. Cambiarlo no obliga a rastrear otra vez: basta con
+# `crawlforge report sitio.sqlite --config este.yaml`, que sustituye al bloque guardado.
+# Un ID o una severidad desconocidos son un error (los IDs, con `crawlforge rules`).
+# Severidades: critical, high, medium, low, info.
+# rules:
+#   disable:
+#     - META-DESC-TOO-LONG
+#     - CONTENT-H1-MULTIPLE
+#   severity:
+#     HTTP-404-EXTERNAL: low

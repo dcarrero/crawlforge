@@ -55,6 +55,7 @@
 //! se piden con `follow_external` y por tanto casi nunca tienen estado que comparar.
 
 use crate::i18n::{self, msg};
+use crate::rule_config::{self, RulesChoice};
 use anyhow::{bail, Context, Result};
 use crawlforge_rules::{catalog, Lang, Severity};
 use rusqlite::{Connection, OpenFlags};
@@ -117,6 +118,12 @@ pub enum Warning {
     /// revés. No es un error —comparar hacia atrás puede ser deliberado— pero sin el aviso,
     /// «Ha empeorado» y «Ha mejorado» se leerían justo al contrario de lo que pasó.
     OrderInverted { before_started: String, after_started: String },
+    /// A rule configuration was applied to both sides (`rules:`), or the two files store
+    /// different ones. Both sides are always evaluated with the **same** overrides —the
+    /// `--config` of the command, or else the later crawl's stored block—, otherwise editing
+    /// the configuration would show up as findings that appeared or got resolved. `source` is
+    /// the `--config` path, or `None` for the later crawl's stored block.
+    RulesConfig { disabled: usize, changed: usize, source: Option<String>, sides_differ: bool },
     /// Un aviso leído de un fichero de diff anterior a que se guardaran estructurados: de él
     /// solo sobrevive el texto inglés con el que se escribió, y así se enseña, sin traducir.
     Stored { message: String, breaks_conclusion: bool },
@@ -174,6 +181,13 @@ impl Warning {
                 "before_started": before_started,
                 "after_started": after_started,
             }),
+            Self::RulesConfig { disabled, changed, source, sides_differ } => json!({
+                "kind": "rules_config",
+                "disabled": disabled,
+                "changed": changed,
+                "source": source,
+                "sides_differ": sides_differ,
+            }),
             // Un aviso sin estructura se vuelve a escribir como llegó: sin `kind`.
             Self::Stored { .. } => json!({}),
         };
@@ -218,6 +232,15 @@ impl Warning {
                     before_started,
                     after_started,
                 }),
+            Some("rules_config") => {
+                let n = |key: &str| v.get(key).and_then(|x| x.as_u64()).map(|n| n as usize);
+                n("disabled").zip(n("changed")).map(|(disabled, changed)| Self::RulesConfig {
+                    disabled,
+                    changed,
+                    source: text("source"),
+                    sides_differ: v.get("sides_differ").and_then(|x| x.as_bool()).unwrap_or(false),
+                })
+            }
             _ => None,
         };
         structured.unwrap_or_else(|| Self::Stored {
@@ -260,6 +283,23 @@ impl Warning {
             }
             Self::OrderInverted { before_started, after_started } => {
                 msg::warn_order_inverted(lang, before_started, after_started)
+            }
+            Self::RulesConfig { disabled, changed, source, sides_differ } => {
+                let source = match source {
+                    Some(path) => msg::rules_config_source_file(lang, path),
+                    None => msg::rules_config_source_after(lang),
+                };
+                let mut text = String::new();
+                if *disabled > 0 || *changed > 0 {
+                    text = msg::rules_config_note(lang, &source, *disabled, *changed);
+                }
+                if *sides_differ {
+                    if !text.is_empty() {
+                        text.push(' ');
+                    }
+                    text.push_str(&msg::warn_rules_config_differs(lang, &source));
+                }
+                text
             }
             Self::Stored { message, .. } => message.clone(),
         }
@@ -508,11 +548,28 @@ impl DiffOutcome {
 ///   no un silencio: una errata en el YAML de CI que nunca falla es peor que no tener la puerta.
 ///
 /// No imprime nada. La presentación es [`print_report`].
+///
+/// Applies the rule configuration stored in `despues`; [`compare_with_rules`] takes it from
+/// a `--config` instead.
 pub fn compare(
     antes: &Path,
     despues: &Path,
     out: Option<&Path>,
     fail_on: &[String],
+) -> Result<DiffOutcome> {
+    compare_with_rules(antes, despues, out, fail_on, &RulesChoice::Stored)
+}
+
+/// [`compare`] with an explicit rule configuration. Whatever `rules` says is applied to
+/// **both** sides: with [`RulesChoice::Stored`] that is the block stored in `despues`, the
+/// crawl being judged, so the criteria in force are today's. The before file's own block is
+/// only compared, to warn when the two differ.
+pub fn compare_with_rules(
+    antes: &Path,
+    despues: &Path,
+    out: Option<&Path>,
+    fail_on: &[String],
+    rules: &RulesChoice,
 ) -> Result<DiffOutcome> {
     // El idioma se resuelve una vez por comparación (`--lang` > `CRAWLFORGE_LANG` > inglés)
     // y gobierna tanto el informe como los errores que ve el usuario.
@@ -529,11 +586,13 @@ pub fn compare(
     let tokens = parse_fail_on(lang, fail_on)?;
 
     let conn = open_pair(antes, despues)?;
+    let rules_warning = install_rule_views(&conn, rules)?;
     let before = read_crawl_info(&conn, "a", antes, lang)?;
     let after = read_crawl_info(&conn, "b", despues, lang)?;
 
     ensure_same_site(lang, &before, &after)?;
-    let warnings = collect_warnings(&conn, &before, &after)?;
+    let mut warnings = collect_warnings(&conn, &before, &after)?;
+    warnings.extend(rules_warning);
 
     // Una ausencia solo se puede afirmar si el lado donde falta se rastreó entero.
     let suppress_additions = before.incomplete();
@@ -612,6 +671,36 @@ fn open_pair(antes: &Path, despues: &Path) -> Result<Connection> {
     conn.execute("ATTACH DATABASE ?1 AS b", [read_only_uri(despues)?])
         .with_context(|| format!("open {} read-only", despues.display()))?;
     Ok(conn)
+}
+
+/// Creates `temp.issues_a_src` and `temp.issues_b_src`: each side's `issues` with the
+/// **same** overrides applied. Everything in the diff that reads findings reads these.
+/// Returns the warning that says what was applied, if anything was or the files disagree.
+fn install_rule_views(conn: &Connection, rules: &RulesChoice) -> Result<Option<Warning>> {
+    let stored_before = rule_config::stored(conn, "a")?;
+    let stored_after = rule_config::stored(conn, "b")?;
+    let (overrides, source) = match rules {
+        RulesChoice::Stored => (stored_after.clone(), None),
+        RulesChoice::File { path, overrides } => {
+            (overrides.clone(), Some(path.display().to_string()))
+        }
+    };
+    for schema in ["a", "b"] {
+        conn.execute_batch(&format!(
+            "CREATE TEMP VIEW issues_{schema}_src AS {};",
+            rule_config::issues_select(schema, &overrides)
+        ))?;
+    }
+    let sides_differ = stored_before != stored_after;
+    if overrides.is_empty() && !sides_differ {
+        return Ok(None);
+    }
+    Ok(Some(Warning::RulesConfig {
+        disabled: overrides.disable.len(),
+        changed: overrides.severity.len(),
+        source,
+        sides_differ,
+    }))
 }
 
 /// URI `file:` en modo solo lectura. `ATTACH` hereda por defecto los permisos de la conexión
@@ -713,7 +802,7 @@ fn read_crawl_info(conn: &Connection, schema: &str, path: &Path, lang: Lang) -> 
         |r| r.get(0),
     )?;
     info.issues_total =
-        conn.query_row(&format!("SELECT COUNT(*) FROM {schema}.issues"), [], |r| r.get(0))?;
+        conn.query_row(&format!("SELECT COUNT(*) FROM temp.issues_{schema}_src"), [], |r| r.get(0))?;
 
     Ok(info)
 }
@@ -796,12 +885,19 @@ fn collect_warnings(conn: &Connection, before: &CrawlInfo, after: &CrawlInfo) ->
 /// realidad son de configuración —bajar `max_urls` «borra» media web—. El recorrido es genérico
 /// para no tener que actualizar esta función cada vez que `CrawlJob` gane un campo.
 fn config_differences(before: &str, after: &str) -> Vec<String> {
-    let (Ok(a), Ok(b)) = (
+    let (Ok(mut a), Ok(mut b)) = (
         serde_json::from_str::<serde_json::Value>(before),
         serde_json::from_str::<serde_json::Value>(after),
     ) else {
         return if before == after { Vec::new() } else { vec!["config_json".to_string()] };
     };
+    // `rules` is read-time configuration and both sides are evaluated with the same one: it
+    // does not change what was crawled. [`Warning::RulesConfig`] speaks for it instead.
+    for side in [&mut a, &mut b] {
+        if let Some(obj) = side.as_object_mut() {
+            obj.remove("rules");
+        }
+    }
 
     let mut fields = Vec::new();
     walk_json_diff("", &a, &b, &mut fields);
@@ -1049,7 +1145,7 @@ fn diff_issues(
             "CREATE TEMP TABLE {temp} AS
                  SELECT DISTINCT i.rule_id AS rule_id, i.severity AS severity,
                         COALESCE(u.url, '') AS url, COALESCE(i.group_key, '') AS group_key
-                 FROM {schema}.issues i
+                 FROM temp.issues_{schema}_src i
                  LEFT JOIN {schema}.urls u ON u.id = i.url_id;
              CREATE INDEX idx_{temp} ON {temp}(rule_id, url, group_key);"
         ))?;
@@ -2784,5 +2880,135 @@ pub(crate) mod tests {
         assert_eq!(config_differences("{}", "{\"nuevo\":true}"), ["nuevo"]);
         // Y si no es JSON, se compara en crudo antes que callarse.
         assert_eq!(config_differences("no-json", "otra-cosa"), ["config_json"]);
+    }
+
+    // ── Rule configuration: one set of overrides for both sides ───────────────
+
+    fn store_rules(path: &Path, rules_json: &str) {
+        let conn = Connection::open(path).expect("open");
+        conn.execute(
+            "UPDATE crawl_meta SET config_json = ?1",
+            [format!("{{\"limits\":{{\"max_urls\":null}},\"rules\":{rules_json}}}")],
+        )
+        .expect("store rules");
+    }
+
+    fn rules_warning(outcome: &DiffOutcome) -> Option<&Warning> {
+        outcome.warnings.iter().find(|w| matches!(w, Warning::RulesConfig { .. }))
+    }
+
+    #[test]
+    fn a_rule_disabled_only_in_the_later_crawl_is_not_reported_as_resolved() {
+        // META-TITLE-TOO-LONG fires on `/` in both crawls. If each side read its own stored
+        // block, disabling it after the first crawl would make it "resolved".
+        let dir = tmpdir("rules-after-only");
+        let (antes, despues) = escenario(&dir, None);
+        store_rules(&despues, r#"{"disable": ["META-TITLE-TOO-LONG"]}"#);
+
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
+        let resolved: Vec<_> = outcome
+            .of(ChangeType::IssueResolved)
+            .filter_map(|c| c.field.clone())
+            .collect();
+        assert!(!resolved.contains(&"META-TITLE-TOO-LONG".to_string()), "{resolved:?}");
+        // And it does not persist either: it is hidden on both sides.
+        assert_eq!(outcome.issues_persisted, 0);
+        let Some(Warning::RulesConfig { disabled, sides_differ, source, .. }) =
+            rules_warning(&outcome)
+        else {
+            panic!("the diff must say a configuration was applied: {:?}", outcome.warnings);
+        };
+        assert_eq!((*disabled, *sides_differ, source.as_deref()), (1, true, None));
+    }
+
+    #[test]
+    fn a_rule_disabled_only_in_the_earlier_crawl_is_not_reported_as_new() {
+        // The other half: the later crawl's (empty) block rules, so the earlier one's disable
+        // does not hide its side and fabricate a "new" finding.
+        let dir = tmpdir("rules-before-only");
+        let (antes, despues) = escenario(&dir, None);
+        store_rules(&antes, r#"{"disable": ["META-TITLE-TOO-LONG"]}"#);
+
+        let outcome = compare(&antes, &despues, None, &[]).expect("compare");
+        let appeared: Vec<_> = outcome
+            .of(ChangeType::IssueAppeared)
+            .filter_map(|c| c.field.clone())
+            .collect();
+        assert!(!appeared.contains(&"META-TITLE-TOO-LONG".to_string()), "{appeared:?}");
+        assert_eq!(outcome.issues_persisted, 1, "META-TITLE-TOO-LONG persists, unfiltered");
+        assert!(
+            matches!(rules_warning(&outcome), Some(Warning::RulesConfig { sides_differ: true, .. })),
+            "{:?}",
+            outcome.warnings
+        );
+    }
+
+    #[test]
+    fn the_gate_judges_the_overridden_severity() {
+        let dir = tmpdir("rules-gate");
+        let (antes, despues) = escenario(&dir, None);
+        // HTTP-404-INTERNAL is a new `critical` in the scenario; this site rates it `low`.
+        store_rules(&despues, r#"{"severity": {"HTTP-404-INTERNAL": "low"}}"#);
+
+        let outcome =
+            compare(&antes, &despues, None, &["critical".to_string()]).expect("compare");
+        assert!(!outcome.should_fail(), "a low finding must not trip --fail-on critical");
+        let new = outcome
+            .of(ChangeType::IssueAppeared)
+            .find(|c| c.field.as_deref() == Some("HTTP-404-INTERNAL"))
+            .expect("still new");
+        assert_eq!(new.severity.as_deref(), Some("low"));
+
+        let outcome = compare(&antes, &despues, None, &["low".to_string()]).expect("compare");
+        assert!(outcome.should_fail(), "and it does trip --fail-on low");
+    }
+
+    #[test]
+    fn a_config_flag_is_applied_to_both_sides_instead_of_the_stored_block() {
+        let dir = tmpdir("rules-flag");
+        let (antes, despues) = escenario(&dir, None);
+        store_rules(&despues, r#"{"severity": {"HTTP-404-INTERNAL": "low"}}"#);
+        let overrides = crawlforge_core::job::RuleOverrides {
+            disable: vec!["HTTP-404-INTERNAL".to_string()],
+            ..Default::default()
+        };
+        let rules = RulesChoice::File { path: PathBuf::from("site.yaml"), overrides };
+
+        let outcome = compare_with_rules(&antes, &despues, None, &["low".to_string()], &rules)
+            .expect("compare");
+        assert!(
+            outcome.of(ChangeType::IssueAppeared).all(|c| c.field.as_deref() != Some("HTTP-404-INTERNAL")),
+            "the flag disables it, whatever the file stores"
+        );
+        assert!(!outcome.should_fail());
+        assert_eq!(outcome.after.issues_total, 1, "the header counts configured findings");
+        assert!(matches!(
+            rules_warning(&outcome),
+            Some(Warning::RulesConfig { source: Some(s), .. }) if s == "site.yaml"
+        ));
+    }
+
+    #[test]
+    fn the_rules_block_is_not_a_crawl_configuration_change() {
+        // It is announced by its own warning; listing it under "the crawl configuration
+        // changed" would blame the scope for something that did not touch what was crawled.
+        assert!(config_differences(
+            "{\"a\":1}",
+            "{\"a\":1,\"rules\":{\"disable\":[\"CANON-CHAIN\"]}}"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn the_rules_warning_survives_a_saved_diff() {
+        let warning = Warning::RulesConfig {
+            disabled: 2,
+            changed: 1,
+            source: Some("site.yaml".to_string()),
+            sides_differ: true,
+        };
+        assert_eq!(Warning::from_json(&warning.to_json()), warning);
+        let text = warning.message(Lang::En);
+        assert!(text.contains("2 rules disabled") && text.contains("different rule"), "{text}");
     }
 }

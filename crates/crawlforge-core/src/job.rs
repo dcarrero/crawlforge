@@ -2,6 +2,7 @@
 //! Ver `docs/03-MOTOR-CRAWL.md §1 y §9`.
 
 use crate::normalize::NormalizePolicy;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -202,6 +203,13 @@ pub struct CrawlJob {
     /// de él. Por defecto `Agency`, que es el nivel de la CLI y del uso interno.
     #[serde(default = "tier_agency")]
     pub tier: crate::entitlement::Tier,
+    /// Per-site rule configuration (`rules:` in `--config`). The engine **ignores it**: every
+    /// rule is evaluated and every finding is written. It travels inside `config_json` so that
+    /// `report`, `export`, `inspect`, `diff` and `portfolio` apply it when they read the file —
+    /// changing a criterion never requires crawling again. Files written before it existed
+    /// lack the key, and `serde(default)` reads that as "no overrides".
+    #[serde(default, skip_serializing_if = "RuleOverrides::is_empty")]
+    pub rules: RuleOverrides,
 }
 
 fn tier_agency() -> crate::entitlement::Tier {
@@ -220,6 +228,7 @@ impl CrawlJob {
             collect_body_text: false,
             discover_sitemaps: true,
             tier: tier_agency(),
+            rules: RuleOverrides::default(),
         }
     }
 
@@ -239,6 +248,7 @@ impl CrawlJob {
             // Si no hay sitemap, son dos peticiones al árbol de ficheros que devuelven 404.
             discover_sitemaps: true,
             tier: tier_agency(),
+            rules: RuleOverrides::default(),
         }
     }
 
@@ -287,6 +297,68 @@ pub struct JobConfig {
     pub discover_sitemaps: Option<bool>,
     /// Acumular el texto de cuerpo para FTS5 (nivel Pro).
     pub collect_body_text: Option<bool>,
+    /// Per-site rule configuration: rules to disable and severities to change. Applied when
+    /// the crawl file is read, never when it is written. See [`RuleOverrides`].
+    pub rules: Option<RuleOverrides>,
+}
+
+/// Which rules a site does not want to hear about, and which ones weigh differently for it.
+///
+/// This is read-time configuration. The crawl file keeps **every** raw finding with the
+/// catalog's severity; the read commands hide the disabled rules and rewrite the severity of
+/// the overridden ones. That is the point of doing it at read time: deciding that
+/// `META-DESC-TOO-LONG` does not matter on a client's blog must not cost a new crawl, and
+/// changing your mind back must not either.
+///
+/// Rule IDs are checked against the catalog by [`RuleOverrides::validated`]: a misspelt ID
+/// would otherwise disable nothing, silently, which is the worst failure for a setting whose
+/// effect is invisible by design. Severities are checked by serde (`Severity` is an enum).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RuleOverrides {
+    /// Rule IDs whose findings are not reported.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub disable: Vec<String>,
+    /// Rule ID → the severity its findings are reported with.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub severity: BTreeMap<String, crawlforge_rules::Severity>,
+}
+
+impl RuleOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.disable.is_empty() && self.severity.is_empty()
+    }
+
+    /// Checks every ID against the rule catalog and returns the overrides with the IDs in
+    /// their canonical spelling. IDs match case-insensitively, like `crawlforge rules <ID>`;
+    /// one that does not match is an error that names the key it came from.
+    pub fn validated(&self) -> Result<Self, JobConfigError> {
+        let catalog = crawlforge_rules::catalog();
+        let canonical = |field: &'static str, id: &str| {
+            catalog
+                .iter()
+                .find(|m| m.id.eq_ignore_ascii_case(id.trim()))
+                .map(|m| m.id.to_string())
+                .ok_or_else(|| JobConfigError::UnknownRule { field, id: id.to_string() })
+        };
+        let mut out = Self::default();
+        for id in &self.disable {
+            let id = canonical("rules.disable", id)?;
+            if !out.disable.contains(&id) {
+                out.disable.push(id);
+            }
+        }
+        for (id, severity) in &self.severity {
+            let id = canonical("rules.severity", id)?;
+            // Both at once is a contradiction, and whichever one won would surprise half of
+            // the people who wrote it. Better to say so.
+            if out.disable.contains(&id) {
+                return Err(JobConfigError::DisabledAndOverridden(id));
+            }
+            out.severity.insert(id, *severity);
+        }
+        Ok(out)
+    }
 }
 
 /// Un valor de [`JobConfig`] fuera de contrato.
@@ -296,6 +368,12 @@ pub enum JobConfigError {
     /// oír «no» ahora, no creer que rastreó con 50 mientras el motor recortaba a 20 en silencio.
     #[error("concurrency must be between 1 and 20, got {0}")]
     ConcurrencyOutOfRange(u8),
+    /// A rule ID in `rules:` that the catalog does not have.
+    #[error("unknown rule ID in {field}: {id}. List the IDs with `crawlforge rules`")]
+    UnknownRule { field: &'static str, id: String },
+    /// The same rule both disabled and given a severity.
+    #[error("{0} is both in rules.disable and in rules.severity: keep only one")]
+    DisabledAndOverridden(String),
 }
 
 impl JobConfig {
@@ -352,6 +430,9 @@ impl JobConfig {
         }
         if let Some(v) = self.collect_body_text {
             job.collect_body_text = v;
+        }
+        if let Some(rules) = &self.rules {
+            job.rules = rules.validated()?;
         }
         Ok(())
     }
@@ -802,6 +883,77 @@ mod tests {
         let err = serde_json::from_str::<JobConfig>("{\"max_url\": 100}")
             .expect_err("max_url es una errata de max_urls");
         assert!(err.to_string().contains("max_url"), "{err}");
+    }
+
+    // ── `rules:` — read-time configuration that travels in `config_json` ──────
+
+    fn rules_from_json(json: &str) -> Result<CrawlJob, JobConfigError> {
+        let config: JobConfig = serde_json::from_str(json).expect("deserialize");
+        let mut job = CrawlJob::http("https://ejemplo.es");
+        config.apply_to(&mut job).map(|_| job)
+    }
+
+    #[test]
+    fn the_rules_block_lands_in_the_job_with_canonical_ids() {
+        let job = rules_from_json(
+            r#"{"rules": {"disable": ["meta-desc-too-long"], "severity": {"HTTP-404-EXTERNAL": "low"}}}"#,
+        )
+        .expect("valid rules");
+        assert_eq!(job.rules.disable, vec!["META-DESC-TOO-LONG".to_string()]);
+        assert_eq!(
+            job.rules.severity.get("HTTP-404-EXTERNAL"),
+            Some(&crawlforge_rules::Severity::Low)
+        );
+    }
+
+    #[test]
+    fn an_unknown_rule_id_is_an_error_naming_the_key_and_the_id() {
+        let err = rules_from_json(r#"{"rules": {"disable": ["META-DESC-TOO-LONGG"]}}"#)
+            .expect_err("a typo must hurt");
+        let text = err.to_string();
+        assert!(text.contains("rules.disable") && text.contains("META-DESC-TOO-LONGG"), "{text}");
+
+        let err = rules_from_json(r#"{"rules": {"severity": {"HTTP-404-EXTERNA": "low"}}}"#)
+            .expect_err("a typo must hurt");
+        let text = err.to_string();
+        assert!(text.contains("rules.severity") && text.contains("HTTP-404-EXTERNA"), "{text}");
+    }
+
+    #[test]
+    fn an_unknown_severity_or_key_in_the_rules_block_does_not_deserialize() {
+        let err = serde_json::from_str::<JobConfig>(
+            r#"{"rules": {"severity": {"HTTP-404-EXTERNAL": "hihg"}}}"#,
+        )
+        .expect_err("hihg is not a severity");
+        assert!(err.to_string().contains("hihg"), "{err}");
+        let err = serde_json::from_str::<JobConfig>(r#"{"rules": {"disabled": []}}"#)
+            .expect_err("disabled is a typo of disable");
+        assert!(err.to_string().contains("disabled"), "{err}");
+    }
+
+    #[test]
+    fn a_rule_both_disabled_and_overridden_is_rejected() {
+        let err = rules_from_json(
+            r#"{"rules": {"disable": ["HTTP-404-EXTERNAL"], "severity": {"http-404-external": "low"}}}"#,
+        )
+        .expect_err("contradiction");
+        assert_eq!(err, JobConfigError::DisabledAndOverridden("HTTP-404-EXTERNAL".to_string()));
+    }
+
+    #[test]
+    fn a_job_without_rules_serializes_as_before_and_old_files_read_as_no_overrides() {
+        // A crawl file written before the field existed must keep resuming and reading, and
+        // a job without overrides must not add a key to `config_json` (the diff compares it).
+        let job = CrawlJob::http("https://ejemplo.es");
+        let json = serde_json::to_string(&job).expect("serialize");
+        assert!(!json.contains("\"rules\""), "{json}");
+        let back: CrawlJob = serde_json::from_str(&json).expect("an old config_json reads");
+        assert!(back.rules.is_empty());
+
+        let job = rules_from_json(r#"{"rules": {"disable": ["CANON-CHAIN"]}}"#).expect("valid");
+        let json = serde_json::to_string(&job).expect("serialize");
+        let back: CrawlJob = serde_json::from_str(&json).expect("round trip");
+        assert_eq!(back.rules.disable, vec!["CANON-CHAIN".to_string()]);
     }
 
     #[test]

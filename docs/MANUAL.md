@@ -237,6 +237,45 @@ crawlforge crawl https://cliente.com/ --config cliente.yaml
 The file describes **the site**, the command line describes **the run**: flags win over the
 YAML. A misspelled field is an error, not an option silently ignored.
 
+### Each site with its own criteria: disable rules, change severities
+
+Not every client has the same standards. A blog whose theme writes long meta descriptions on
+purpose does not need to hear about it every week, and a broken external link may be `low` for
+one site and `high` for another. Say so in the site's YAML:
+
+```yaml
+rules:
+  disable: [META-DESC-TOO-LONG, CONTENT-H1-MULTIPLE]
+  severity:
+    HTTP-404-EXTERNAL: low
+```
+
+The crawl **still evaluates every rule and stores every finding** with the catalog's severity.
+The block is saved inside the crawl file, and `report`, `inspect`, `export`, `diff` and
+`portfolio` apply it when they read it. Changing your mind costs nothing: edit the YAML and
+read the same file again with `--config`, no new crawl.
+
+```bash
+crawlforge crawl https://cliente.com/ --config cliente.yaml   # stores the block
+crawlforge report cliente.sqlite                             # applies it
+crawlforge report cliente.sqlite --config otro.yaml          # applies otro.yaml's instead
+```
+
+- `--config` on a read command replaces the stored block for that run. Only `rules:` is used;
+  the rest of the file is still checked for typos. A file without `rules:` shows every finding,
+  which is how you see what the configuration hides.
+- Every output that applies a configuration says so: "Rule configuration (stored in the crawl
+  file): 2 rules disabled, 1 severity changed". The XLSX `Summary` lists it, the CSV export
+  prints it in the terminal. Exports leave the disabled rules' findings out and write the
+  overridden severity.
+- **`diff` evaluates both crawls with the same configuration**: the `--config` if given,
+  otherwise the one stored in the later crawl. Otherwise, disabling a rule between two crawls
+  would show its findings as "resolved". If the two files store different configurations, the
+  diff says so. `--fail-on` judges the overridden severity.
+- **`portfolio` reads each site with its own stored configuration**, and names the sites that
+  have one: a site that disabled a rule is not a site without that problem.
+- An unknown rule ID or severity is an error that names it. IDs match regardless of case.
+
 ### See what the tool checks
 
 ```bash
@@ -591,6 +630,7 @@ crawlforge diff   <BEFORE> <AFTER> [--fail-on high] [--out d.sqlite]
 crawlforge diff   <DIFF> [--rule ID | --change TYPE]   # open a saved diff
 crawlforge portfolio <PATH>... [--format md|html --out f]   # panel across many crawls
 crawlforge rules  [--category X] [--detail] [--format json]
+# report, inspect, export, diff and portfolio take --config <YAML> to apply its `rules:`
 ```
 
 Any of them with `--help` gives the full list of options.

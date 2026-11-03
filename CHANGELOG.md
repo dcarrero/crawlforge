@@ -19,6 +19,34 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
+## Unreleased
+
+### Added
+
+- **Per-site rule configuration, applied when the crawl file is read.** A `rules:` block in
+  the `--config` YAML disables rules (`disable: [META-DESC-TOO-LONG]`) and changes severities
+  (`severity: {HTTP-404-EXTERNAL: low}`). The crawl still evaluates every rule and stores every
+  finding with the catalog's severity; `crawl`, `list` and `audit` save the block inside the
+  crawl file (in `crawl_meta.config_json`, no schema change), and `report`, `inspect`,
+  `export`, `diff` and `portfolio` apply it. Changing the criteria never requires a new crawl.
+- **`--config <YAML>` on `report`, `inspect`, `export`, `diff` and `portfolio`.** Its
+  `rules:` block replaces the stored one for that run; a file without `rules:` shows every
+  finding. An unknown rule ID or severity is an error that names it.
+- Every output that applies a configuration says so ("2 rules disabled, 1 severity
+  changed"): the terminal summary, the Markdown/HTML report, the URL card, the diff warnings,
+  the portfolio warnings, the XLSX `Summary` sheet and, for CSV, the terminal.
+
+### Changed
+
+- **`diff` evaluates both crawls with one configuration**: `--config` if given, otherwise the
+  one stored in the later crawl. Disabling a rule between two crawls therefore does not show its
+  findings as resolved, and `--fail-on` judges the overridden severity. When the two files store
+  different configurations, the diff warns, and the `rules` block is not listed among the
+  crawl configuration changes (it does not change what was crawled).
+- **`portfolio` reads each site with its own stored configuration** and names the sites that
+  have one, so a disabled rule does not read as a site without that problem.
+- Exports leave out the findings of disabled rules and write the overridden severity.
+
 ## [0.19.0] — 2026-10-28
 
 A new rule. Minor bump: the catalog reports something it did not. No schema change; the rule

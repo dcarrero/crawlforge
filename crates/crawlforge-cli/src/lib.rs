@@ -16,6 +16,7 @@ pub mod diff_file;
 pub mod i18n;
 pub mod inspect;
 pub mod portfolio;
+pub mod rule_config;
 pub mod store_check;
 pub mod xlsx;
 
