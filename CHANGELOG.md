@@ -21,7 +21,8 @@ Rule IDs never change meaning. A historical diff between two crawls depends on i
 
 ## [Unreleased]
 
-Five new rules, all `free`, and per-site rule configuration. Minor bump when released: the catalog reports things it did not, and there are new flags. No
+Five new rules, all `free`, per-site rule configuration, and the whole output in ten languages.
+Minor bump when released: the catalog reports things it did not, and there are new flags. No
 schema change: the og:image travels as one more `links` row (`element = 'meta'`), a value the
 column never constrained, so older crawl files open as before and older binaries read the new
 ones. The catalog has 71 rules.
@@ -53,11 +54,21 @@ ones. The catalog has 71 rules.
   `ASSET-IMG-NO-ALT`, so the same `<img>` is never reported twice. One finding per page, with
   the count.
 - **`LINK-ANCHOR-GENERIC`** (low, page). Internal links whose whole text is a stock phrase —«read
-  more», «click here», «leer más», «aquí», «weiterlesen», «lire la suite»…—. The phrases live in
-  one list per language (English, Spanish, German, French, Italian, Dutch, Turkish), chosen by the
-  page's `<html lang>`; words that can be a name elsewhere («Go», «Plus», «Link») only count when
-  the page declares that language. One finding per page, grouped by the phrases found, so an
-  archive template's «Leer más» reads as one cause.
+  more», «click here», «leer más», «aquí», «weiterlesen», «lire la suite», «leia mais», «czytaj
+  więcej», «続きを読む»…—. The phrases live in one list per language (English, Spanish, German,
+  French, Italian, Dutch, Turkish, Portuguese, Polish, Japanese), chosen by the page's
+  `<html lang>`; words that can be a name elsewhere («Go», «Plus», «Link», «Veja», «Tu», «詳細»)
+  only count when the page declares that language. Matching folds case, accents and full-width
+  Latin letters (`ＲＥＡＤ ＭＯＲＥ`). A link whose text is its target's own tag slug is left
+  out, percent-decoded, so `/tag/wi%C4%99cej/` named «Więcej» is a tag and not a stock phrase.
+  One finding per page, grouped by the phrases found, so an archive template's «Leer más» reads
+  as one cause.
+- **Eight new languages: German, French, Italian, Dutch, Turkish, Brazilian Portuguese, Japanese
+  and Polish.** `--lang de|fr|it|nl|tr|pt|ja|pl`, or `CRAWLFORGE_LANG`, translates every command's
+  output and the rule catalog, with each language's thousands separator and plural forms.
+  `rules.json` and `rules --format json` now carry `name` and `description` in all ten languages.
+  Help texts, argument errors, exports (XLSX/CSV) and identifiers (rule IDs, `--fail-on` tokens,
+  categories, stored values) stay in English.
 - **Per-site rule configuration, applied when the crawl file is read.** A `rules:` block in
   the `--config` YAML disables rules (`disable: [META-DESC-TOO-LONG]`) and changes severities
   (`severity: {HTTP-404-EXTERNAL: low}`). The crawl still evaluates every rule and stores every
@@ -88,12 +99,36 @@ ones. The catalog has 71 rules.
   and descriptions now live in `locales/<lang>/cli.ftl` and `locales/<lang>/rules.ftl`, embedded
   in the binary. `--lang` and `CRAWLFORGE_LANG` accept `en`, `es`, `de`, `fr`, `it`, `nl`, `tr`,
   `pt`, `ja` and `pl` (with or without a region: `pt-BR`); a language not translated yet shows
-  English, numbers included. English and Spanish output is unchanged byte for byte. Plurals go
-  through CLDR plural rules, so a translation can have the forms its language needs (Polish has
+  English, numbers included. Plurals go through CLDR plural rules, so a translation can have the forms its language needs (Polish has
   four). Terminal tables align by display width, so Japanese text does not break the columns.
   `rules --format json` and `rules.json` keep their shape; a language joins `name` and
   `description` once its translation is complete. `CONTRIBUTING.md` explains how to add or
   improve a language.
+- **Labels that were still English in every language are translated**: the URLs row of the
+  Markdown/HTML report, the severity headers of the portfolio's at-a-glance table, the severity
+  in the rules table and on a rule card, and the non-indexability reason in `report` and
+  `inspect` (`canonicalised` reads «canonicalizada» with `--lang es`). The stored values do not
+  change, and exports and `stats` keep writing them as they are.
+- **Columns take the width of the longest label of the language in use**, never less than the
+  English width: the `inspect` card, its region column, the `diff` header and warnings, the rules
+  table, the report summary, the portfolio table and every severity column. No translation has
+  to shorten a word to fit, and English output does not move.
+
+### Fixed
+
+- **English plurals**: «1 URLs», «1 new finding(s)», «1 change(s)», «1 external links were not
+  checked» and the rate-limit notes now agree in number. Spanish gets the same.
+- **Counts of 1,000 or more** in some messages reached the text ungrouped and took the default
+  plural form: the `--fail-on` result, the template-issue headline, the character count on the
+  `inspect` card, the base-mismatch warning, the portfolio counts and date-spread warning, the
+  deep-pages summary and the rules summary. The `diff` header counts now agree in number too.
+- **The truncation warning of `diff`** is two complete sentences, with and without the reason,
+  so each language puts the reason where its grammar wants it.
+- **Japanese rule cards wrap properly.** `rules --detail` broke Japanese after every ASCII word
+  and could leave a line with only «。»; lines now fill up, and break with the usual rules
+  (no closing punctuation at the start of a line, no opening bracket at the end).
+- English rule descriptions use “…” quotation marks, and `ASSET-FORM-BROKEN` lost a stray
+  dash-and-colon.
 
 ## [0.19.0] — 2026-10-28
 

@@ -77,8 +77,11 @@ crawlforge export crawl-ejemplo-com.sqlite --format xlsx --out auditoria.xlsx
 Cada comando termina diciendo cuál es el siguiente. Guía completa en
 [`docs/MANUAL.md`](docs/MANUAL.md).
 
-**La salida de la herramienta está en inglés.** Es el idioma de origen; el español existe donde hay
-texto de verdad que traducir —el catálogo de reglas y los informes— y se pide con `--lang es`.
+**La salida habla diez idiomas.** El inglés es el idioma por defecto y el de origen; con `--lang`
+(o `CRAWLFORGE_LANG`) los informes, la ficha de una URL, las comparaciones, el panel de cartera y
+el catálogo de reglas salen en español (`es`), alemán (`de`), francés (`fr`), italiano (`it`),
+neerlandés (`nl`), turco (`tr`), portugués de Brasil (`pt`), japonés (`ja`) o polaco (`pl`). La
+ayuda (`--help`), las exportaciones y los identificadores se quedan en inglés.
 
 ## Mediciones, con sus condiciones
 
@@ -138,8 +141,8 @@ leerse; la interfaz que va encima es el producto.
 ## Contribuir
 
 Las reglas son el mejor sitio para empezar, y [`CONTRIBUTING.md`](CONTRIBUTING.md) explica el único
-requisito que no se negocia: **una regla llega con su fixture, su test y su texto en inglés y en
-español.** Una regla sin caso de prueba es una regla de la que nadie se puede fiar, tú incluido.
+requisito que no se negocia: **una regla llega con su fixture, su test y su texto en inglés**, con
+su entrada en cada idioma traducido (vale el texto inglés; un traductor lo recoge después). Una regla sin caso de prueba es una regla de la que nadie se puede fiar, tú incluido.
 
 ---
 

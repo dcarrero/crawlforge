@@ -76,6 +76,12 @@ crawlforge export crawl-example-com.sqlite --format xlsx --out audit.xlsx
 Every command ends by telling you what to run next. Full guide in
 [`docs/MANUAL.md`](docs/MANUAL.md).
 
+**The output speaks ten languages.** English is the default and the source; `--lang` (or
+`CRAWLFORGE_LANG`) switches reports, URL cards, diffs, the portfolio panel and the rule catalog to
+Spanish (`es`), German (`de`), French (`fr`), Italian (`it`), Dutch (`nl`), Turkish (`tr`),
+Brazilian Portuguese (`pt`), Japanese (`ja`) or Polish (`pl`). Help texts, exports and
+identifiers stay in English.
+
 ## Measurements, with their conditions
 
 Numbers are worth what their method is worth, so here is the method next to each one.
@@ -133,7 +139,8 @@ is the product.
 
 Rules are the best place to start, and [`CONTRIBUTING.md`](CONTRIBUTING.md) explains the one
 requirement that is not negotiable: **a rule arrives with its fixture, its test and its text in
-both English and Spanish.** A rule with no test case is a rule nobody can trust, including you.
+English**, with an entry in every translated language (English text there is fine; a translator
+picks it up). A rule with no test case is a rule nobody can trust, including you.
 
 ---
 
