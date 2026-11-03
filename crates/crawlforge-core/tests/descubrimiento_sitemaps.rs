@@ -5,11 +5,17 @@
 //! lo que su petición más lenta. Con 1.179 sitemaps (un medio real declara esa cantidad) y
 //! concurrencia 8, eso son 148 tandas.
 //!
-//! El sitio de este test lo reproduce a escala: 24 sitemaps hijos, uno lento (600 ms) por cada
-//! tanda de 8 y el resto rápidos (10 ms). Por tandas, cada lento arrastra la suya: ≥ 1,8 s solo
-//! de descubrimiento. Con reposición continua los lentos se solapan: ~0,6 s. El umbral de 1,5 s
-//! separa los dos mundos con margen por ambos lados, y como el tiempo lo dominan los `sleep` del
-//! servidor y no la CPU, la medida vale también en debug.
+//! El sitio de este test lo reproduce a escala: 24 sitemaps hijos, uno lento (1.500 ms) por cada
+//! tanda de 8 y el resto rápidos (10 ms). Por tandas, cada lento arrastra la suya: ≥ 4,5 s solo
+//! de descubrimiento. Con reposición continua los lentos se solapan: ~1,5 s más lo fijo (abrir el
+//! fichero, el servidor, el cierre). El umbral de 3,5 s separa los dos mundos con margen por ambos
+//! lados, y como el tiempo lo dominan los `sleep` del servidor y no la CPU, la medida vale también
+//! en debug.
+//!
+//! Hasta el 2026-11-03 el lento tardaba 600 ms y el umbral era 1,5 s. En tu máquina daba 0,7 s,
+//! pero el runner de macOS de GitHub dio 2,1 s dos veces seguidas: lo fijo de una máquina
+//! compartida y cargada se comía el margen. Alargar el lento separa más los dos mundos en vez de
+//! subir el umbral a ojo hasta que deje de cazar nada.
 
 // El servidor de pruebas es compartido y cada binario de test usa solo una parte de su API.
 #[allow(dead_code)]
@@ -67,7 +73,7 @@ async fn un_sitemap_lento_no_arrastra_a_su_tanda() {
         for i in 0..HIJOS {
             // Un lento por cada tanda de `CONCURRENCIA`; el resto, rápidos.
             let retardo = if i % (CONCURRENCIA as usize) == 0 {
-                Duration::from_millis(600)
+                Duration::from_millis(1_500)
             } else {
                 Duration::from_millis(10)
             };
@@ -120,9 +126,9 @@ async fn un_sitemap_lento_no_arrastra_a_su_tanda() {
         .expect("contar urls de sitemap");
     assert_eq!(en_sitemap, HIJOS as i64, "faltan URLs declaradas por los sitemaps");
 
-    // Y el tiempo: por tandas eran ≥ 1,8 s solo de descubrimiento; continuo, ~0,6 s.
+    // Y el tiempo: por tandas serían ≥ 4,5 s solo de descubrimiento; continuo, ~1,5 s.
     assert!(
-        transcurrido < Duration::from_millis(1_500),
+        transcurrido < Duration::from_millis(3_500),
         "el descubrimiento vuelve a ir por tandas: {transcurrido:?}"
     );
 }
