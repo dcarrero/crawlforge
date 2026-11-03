@@ -222,42 +222,104 @@ fn nivel(t: Tier) -> &'static str {
     }
 }
 
+/// Caracteres que no pueden abrir una línea (kinsoku): cierres, puntuación, la marca de vocal
+/// larga, las kana pequeñas. Un «。» solo en la última línea era lo que imprimía HTTP-5XX.
+const NO_EMPIEZA_LINEA: &[char] = &[
+    '、', '。', '，', '．', '）', '」', '』', '】', '〕', '〉', '》', '］', '｝', '！', '？', '：', '；',
+    '・', 'ー', '々', 'ゝ', 'ゞ', '…', '‥', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'っ', 'ゃ', 'ゅ', 'ょ',
+    'ゎ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ッ', 'ャ', 'ュ', 'ョ', 'ヮ', 'ヵ', 'ヶ', ')', ']', '}',
+    ',', '.', ':', ';', '!', '?', '%',
+];
+
+/// Caracteres que no pueden cerrar una línea: las aperturas, que se quedarían colgando.
+const NO_ACABA_LINEA: &[char] = &['（', '「', '『', '【', '〔', '〈', '《', '［', '｛', '(', '[', '{'];
+
+fn ancho_de(c: char) -> usize {
+    let mut buf = [0u8; 4];
+    i18n::display_width(c.encode_utf8(&mut buf))
+}
+
+/// ¿Se puede partir entre `antes` y `despues`? Solo junto a un carácter ancho —entre dos
+/// ideogramas, o entre un ideograma y una palabra latina pegada a él—, nunca dentro de una
+/// palabra latina («Google»), y respetando el kinsoku.
+fn se_puede_partir(antes: char, despues: char) -> bool {
+    (ancho_de(antes) > 1 || ancho_de(despues) > 1)
+        && !NO_EMPIEZA_LINEA.contains(&despues)
+        && !NO_ACABA_LINEA.contains(&antes)
+}
+
+/// Dónde cortar `palabra` para que su primer trozo quepa en `hueco` columnas: el índice de
+/// carácter del corte más tardío permitido, o `None` si ninguno cabe.
+fn corte_que_cabe(palabra: &[char], hueco: usize) -> Option<usize> {
+    let mut usado = 0;
+    let mut mejor = None;
+    for i in 1..palabra.len() {
+        usado += ancho_de(palabra[i - 1]);
+        if usado > hueco {
+            break;
+        }
+        if se_puede_partir(palabra[i - 1], palabra[i]) {
+            mejor = Some(i);
+        }
+    }
+    mejor
+}
+
 /// Parte un texto en líneas sin cortar palabras. Cuenta columnas de terminal, no bytes: en
 /// español el texto lleva tildes y un corte por bytes descuadraría la columna.
 ///
-/// Un japonés no separa las palabras con espacios: toda la descripción sería una sola «palabra»
-/// y saldría en una línea. Una palabra más ancha que la línea se corta por caracteres, que en
-/// japonés es un punto de corte válido; en inglés y en español no hay palabras de 92 columnas.
+/// Un japonés no separa las palabras con espacios: entre dos tokens ASCII («URL», «Google»)
+/// todo es una sola «palabra». Una palabra con caracteres anchos se puede partir junto a
+/// cualquiera de ellos, y se parte **en el hueco que queda en la línea actual**, no en una
+/// línea nueva: si no, el japonés saltaba de línea tras cada palabra ASCII. Los cortes respetan
+/// el kinsoku ([`NO_EMPIEZA_LINEA`], [`NO_ACABA_LINEA`]): el carácter que no puede abrir línea
+/// arrastra al anterior con él. Una palabra latina solo se corta por caracteres si es más ancha
+/// que la línea entera, que en inglés o en español no pasa.
 fn envolver(texto: &str, ancho: usize) -> Vec<String> {
     let mut lineas = Vec::new();
     let mut actual = String::new();
-    let mut trozos = Vec::new();
     for palabra in texto.split_whitespace() {
-        trozos.clear();
-        if i18n::display_width(palabra) > ancho {
-            let mut trozo = String::new();
-            for c in palabra.chars() {
-                let mut buf = [0u8; 4];
-                if i18n::display_width(&trozo) + i18n::display_width(c.encode_utf8(&mut buf)) > ancho {
-                    trozos.push(std::mem::take(&mut trozo));
-                }
-                trozo.push(c);
-            }
-            trozos.push(trozo);
-        } else {
-            trozos.push(palabra.to_string());
-        }
-        for (i, trozo) in trozos.iter().enumerate() {
+        let mut resto: Vec<char> = palabra.chars().collect();
+        // Cada vuelta coloca un trozo de la palabra; la primera lleva el espacio delante.
+        let mut primera = true;
+        while !resto.is_empty() {
             let largo = i18n::display_width(&actual);
-            // Los trozos de una palabra partida van pegados: no hay espacio que poner entre ellos.
-            let sep = usize::from(i == 0 && largo > 0);
-            if largo > 0 && largo + sep + i18n::display_width(trozo) > ancho {
+            let sep = usize::from(primera && largo > 0);
+            let ancho_resto: usize = resto.iter().map(|c| ancho_de(*c)).sum();
+            if largo + sep + ancho_resto <= ancho {
+                if sep > 0 {
+                    actual.push(' ');
+                }
+                actual.extend(resto.drain(..));
+                break;
+            }
+            let hueco = ancho.saturating_sub(largo + sep);
+            if let Some(corte) = corte_que_cabe(&resto, hueco) {
+                if sep > 0 {
+                    actual.push(' ');
+                }
+                actual.extend(resto.drain(..corte));
                 lineas.push(std::mem::take(&mut actual));
+                primera = false;
+                continue;
             }
-            if i == 0 && !actual.is_empty() {
-                actual.push(' ');
+            if largo > 0 {
+                // No cabe nada en lo que queda: línea nueva y se vuelve a intentar.
+                lineas.push(std::mem::take(&mut actual));
+                primera = false;
+                continue;
             }
-            actual.push_str(trozo);
+            // Línea vacía y ni un corte permitido cabe: una palabra sin puntos de corte más
+            // ancha que la línea. Se corta por columnas, que es mejor que desbordar.
+            let mut usado = 0;
+            let mut corte = 0;
+            while corte < resto.len() && usado + ancho_de(resto[corte]) <= ancho {
+                usado += ancho_de(resto[corte]);
+                corte += 1;
+            }
+            actual.extend(resto.drain(..corte.max(1)));
+            lineas.push(std::mem::take(&mut actual));
+            primera = false;
         }
     }
     if !actual.is_empty() {
@@ -286,6 +348,55 @@ mod tests {
         assert!(lineas.len() > 1, "{lineas:?}");
         assert!(lineas.iter().all(|l| i18n::display_width(l) <= 20), "{lineas:?}");
         assert_eq!(lineas.concat(), texto, "nothing is lost or duplicated");
+    }
+
+    /// Lo que queda del texto al quitarle los espacios: partir una línea puede comerse un
+    /// espacio, nunca un carácter.
+    fn sin_espacios(s: &str) -> String {
+        s.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    #[test]
+    fn envolver_llena_la_linea_antes_de_partir_el_japones() {
+        // Japanese prose between ASCII tokens used to break after every ASCII word: the
+        // CJK run after it was wider than the line, so it was cut from column 0 of a new line
+        // instead of from the space left on the current one (CANON-TO-4XX, HTTP-404-INTERNAL).
+        let texto = "正規 URL が、エラーを返す URL を指しています。ページは存在しないものの重複だと自己申告していることになり、そのページもリンク先もインデックスされません。";
+        let lineas = envolver(texto, 40);
+        let ultima = lineas.len() - 1;
+        for (i, linea) in lineas.iter().enumerate() {
+            assert!(i18n::display_width(linea) <= 40, "{lineas:#?}");
+            // Two columns of slack for a character the kinsoku rules moved to the next line.
+            if i < ultima {
+                assert!(i18n::display_width(linea) >= 36, "line {i} left half empty: {lineas:#?}");
+            }
+        }
+        assert_eq!(sin_espacios(&lineas.concat()), sin_espacios(texto), "nothing is lost");
+    }
+
+    #[test]
+    fn envolver_no_empieza_linea_con_cierre_ni_la_acaba_con_apertura() {
+        // Kinsoku: «。» alone on the last line was what HTTP-5XX printed. Ten columns fit five
+        // ideographs, so a cut by width puts the full stop at the start of the second line and
+        // the opening bracket at the end of the first.
+        for texto in ["あいうえお。かきくけこ", "あいうえ（かきくけこ）", "あいうえおー、かきく"] {
+            let lineas = envolver(texto, 10);
+            for (i, linea) in lineas.iter().enumerate() {
+                let primera = linea.chars().next().expect("no empty lines");
+                let ultima = linea.chars().last().expect("no empty lines");
+                assert!(i == 0 || !NO_EMPIEZA_LINEA.contains(&primera), "{texto}: {lineas:?}");
+                assert!(!NO_ACABA_LINEA.contains(&ultima), "{texto}: {lineas:?}");
+                assert!(i18n::display_width(linea) <= 10, "{texto}: {lineas:?}");
+            }
+            assert_eq!(lineas.concat(), texto, "nothing is lost or duplicated");
+        }
+    }
+
+    #[test]
+    fn envolver_no_parte_una_palabra_ascii_pegada_al_japones() {
+        // A break is allowed next to an ideograph, not inside «Google».
+        let lineas = envolver("あいうえおかきGoogleはこの状態", 12);
+        assert!(lineas.iter().any(|l| l.contains("Google")), "{lineas:?}");
     }
 
     #[test]
