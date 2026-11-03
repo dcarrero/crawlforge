@@ -1,0 +1,51 @@
+# cargo-deny policy for the CrawlForge engine.
+#
+# Run with `cargo deny check`. Security audits (rust-audit-box) read this file instead of their
+# own default, so it states what the project actually accepts, not a generic policy.
+
+[graph]
+# Check the tree with every feature of the workspace crates on, so an optional dependency cannot
+# slip past the policy.
+all-features = true
+
+[advisories]
+# Vulnerabilities and unsound advisories fail the check (cargo-deny's default). An unmaintained
+# crate fails too, wherever it sits in the tree: it gets no security fixes.
+unmaintained = "all"
+yanked = "deny"
+# No ignored advisories. If one is ever needed, list it here with the reason, e.g.
+# { id = "RUSTSEC-YYYY-NNNN", reason = "why it does not apply to us" }.
+ignore = []
+
+[licenses]
+# The engine is Apache-2.0 (see LICENSE). Allowed: permissive licenses compatible with shipping
+# it, plus MPL-2.0, a file-level copyleft that only binds changes to the MPL files themselves
+# (`cssparser`, `selectors` and friends, through `lol_html`). We use those crates unmodified.
+# The list is the licenses the current tree needs; adding one is a decision, not a fix-up.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of a crate in the tree cost build time and binary size, but are usually upstream's
+# to fix: report them, do not fail.
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace crates depend on each other by path; they are not published, so that is fine.
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only. A git or third-party registry dependency must be added here on purpose.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
