@@ -649,7 +649,7 @@ Del catálogo gratuito están implementadas 59 de 60 reglas.
 |---|---|
 | El rastreo acaba con muchas menos URLs de las que esperas | Algo lo cortó: `--max-urls`, `--max-depth`, `--max-duration`, o el tope de 1.000 del nivel gratuito si está puesto `CRAWLFORGE_TIER=free`. El informe dice que el rastreo quedó truncado y por qué límite. |
 | Un `report` menciona hallazgos «no evaluados» | El rastreo se truncó y las reglas que necesitan el grafo completo se han silenciado a propósito. |
-| El sitio devuelve 429 o 503 | Baja `--concurrency`. La herramienta ya reduce a la mitad su concurrencia en ese host tras tres 429, 503, conexiones cortadas o timeouts seguidos, espera lo que pida un `Retry-After` (hasta dos minutos) antes de reintentar y respeta el `Crawl-delay` del `robots.txt`, pero un WAF puede ser más estricto que todo eso. |
+| El sitio devuelve 429 o 503 | Baja `--concurrency`. La herramienta ya reduce a la mitad su concurrencia en ese host tras tres 429, 503, conexiones cortadas o timeouts seguidos, espera lo que pida un `Retry-After` (hasta dos minutos) antes de reintentar y respeta el `Crawl-delay` del `robots.txt`, pero un WAF puede ser más estricto que todo eso. Si redujo la concurrencia, el resumen del rastreo lo dice y cuántas veces. |
 | «no such file» al hacer `diff` | Falta el `.prev.sqlite`: solo aparece al **repetir** un rastreo sobre el mismo fichero de salida. |
 
 | El programa parece colgado tras rastrear | Está en la pasada final: enlaces entrantes y reglas de conjunto. Dice por qué regla va (`final pass · rule 7/29 · …`). En sitios grandes tarda minutos. |

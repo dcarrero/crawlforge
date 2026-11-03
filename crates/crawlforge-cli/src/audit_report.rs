@@ -1177,6 +1177,10 @@ mod tests {
         let md = render(&path, "md", Lang::Es, None).expect("report");
         assert!(md.contains("**El sitio limitó el rastreo.** 3 páginas"), "{md:.600}");
         assert!(!md.contains("truncado"), "a rate limit is not a cut: {md:.600}");
+        // A page whose `Retry-After` asked for more than `fetch::MAX_RETRY_AFTER` was never
+        // retried, so the note cannot say "after the retries" or imply it.
+        let en = render(&path, "md", Lang::En, None).expect("report");
+        assert!(en.contains("3 pages kept answering 429 Too Many Requests, or asked to wait more than two minutes"), "{en:.600}");
     }
 
     /// Turns the test store into a `list` crawl of these URLs: listed ones at depth 0, as the

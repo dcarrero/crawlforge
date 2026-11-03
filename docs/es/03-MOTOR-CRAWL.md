@@ -151,7 +151,9 @@ aceptación o no responde a tiempo. Es la misma señal por otro camino, así que
 racha. Un fallo de DNS o de TLS no: un nombre que no resuelve o un certificado que no valida
 fallarían igual con el servidor ocioso, y ni suman a la racha ni la rompen
 (`throttle::is_overload_failure`). Cuántas veces se frenó un host queda en
-`CrawlMetrics::throttle_reductions`.
+`CrawlMetrics::throttle_reductions`, y el resumen del rastreo de la CLI lo dice en una línea cuando
+no es cero —ese es el «avisar en la UI» de arriba—. No se guarda en el fichero del rastreo, así que
+`report` no puede repetirlo.
 
 **Se obedece el `Retry-After` de las páginas propias.** Cuando un 429 o un 503 lo trae, el
 reintento de esa URL espera al menos lo que pide —y nunca menos que el backoff, así que

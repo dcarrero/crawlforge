@@ -53,15 +53,19 @@ crawl_finished = Rastreamento concluído: { $urls ->
 crawl_failed_suffix = {" "}({ $n } com falha)
 crawl_truncated = Rastreamento truncado por { $reason }. As ocorrências exibidas são as encontradas até esse ponto.
 crawl_rate_limited_note = O site limitou a taxa do rastreamento: { $n ->
-        [one] { $n } página ainda respondia 429 Too Many Requests após as novas tentativas e ficou pendente, sem ser considerada quebrada
-       *[other] { $n } páginas ainda respondiam 429 Too Many Requests após as novas tentativas e ficaram pendentes, sem serem consideradas quebradas
+        [one] { $n } página continuou respondendo 429 Too Many Requests, ou pediu para esperar mais de dois minutos, e ficou pendente, sem ser considerada quebrada
+       *[other] { $n } páginas continuaram respondendo 429 Too Many Requests, ou pediram para esperar mais de dois minutos, e ficaram pendentes, sem serem consideradas quebradas
     }. As regras que precisam do site inteiro só são avaliadas depois que essas páginas forem buscadas. Mais tarde, execute:
     {"    "}crawlforge resume { $path }
     ou rastreie de novo com um --concurrency menor, ou libere o user-agent do CrawlForge no firewall do site.
 report_rate_limited_note = > **O site limitou a taxa do rastreamento.** { $n ->
-        [one] { $n } página respondeu 429 Too Many Requests e ficou pendente: não é contada nem considerada quebrada
-       *[other] { $n } páginas responderam 429 Too Many Requests e ficaram pendentes: não são contadas nem consideradas quebradas
+        [one] { $n } página continuou respondendo 429 Too Many Requests, ou pediu para esperar mais de dois minutos, e ficou pendente: não é contada nem considerada quebrada
+       *[other] { $n } páginas continuaram respondendo 429 Too Many Requests, ou pediram para esperar mais de dois minutos, e ficaram pendentes: não são contadas nem consideradas quebradas
     }, e as regras que precisam do site inteiro não são avaliadas. `crawlforge resume` as busca.
+crawl_throttled_note = O servidor deu sinais de sobrecarga (429, 503, conexões interrompidas ou timeouts), então o rastreamento desacelerou: a concorrência foi reduzida à metade { $n ->
+        [one] uma vez
+       *[other] { $n } vezes
+    }. Na próxima vez, tente um --concurrency menor.
 crawl_list_mode_note = Rastreamento de lista: só as URLs informadas foram auditadas. As regras que precisam do grafo completo de links do site (páginas órfãs, links de entrada, profundidade) não são avaliadas.
 external_unchecked = { $n ->
         [one] { $n } link externo não foi verificado

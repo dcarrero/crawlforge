@@ -58,15 +58,22 @@ crawl_truncated = Crawl truncated by { $reason }. The findings shown are those f
 # A 429 is not a page's status: the site asked the crawler to slow down. The pages
 # were left pending, and the useful thing to say is how to get them.
 crawl_rate_limited_note = The site rate-limited the crawl: { $n ->
-        [one] { $n } page still answered 429 Too Many Requests after the retries and was left pending
-       *[other] { $n } pages still answered 429 Too Many Requests after the retries and were left pending
+        [one] { $n } page kept answering 429 Too Many Requests, or asked to wait more than two minutes, and was left pending
+       *[other] { $n } pages kept answering 429 Too Many Requests, or asked to wait more than two minutes, and were left pending
     }, not reported as broken. Rules that need the whole site are not evaluated until they are fetched. Later, run:
     {"    "}crawlforge resume { $path }
     or crawl again with a lower --concurrency, or let the CrawlForge user-agent through the site's firewall.
 report_rate_limited_note = > **The site rate-limited the crawl.** { $n ->
-        [one] { $n } page answered 429 Too Many Requests and was left pending: it is not counted or reported as broken
-       *[other] { $n } pages answered 429 Too Many Requests and were left pending: they are not counted or reported as broken
+        [one] { $n } page kept answering 429 Too Many Requests, or asked to wait more than two minutes, and was left pending: it is not counted or reported as broken
+       *[other] { $n } pages kept answering 429 Too Many Requests, or asked to wait more than two minutes, and were left pending: they are not counted or reported as broken
     }, and rules that need the whole site are not evaluated. `crawlforge resume` fetches the pending pages.
+# The adaptive throttle halves a host's concurrency after three overload signals in a row
+# (429, 503, a dropped connection, a timeout). $n is how many times it did, always 1 or more.
+# "Pushed back" means the server resisted the load, not that it refused the crawl.
+crawl_throttled_note = The server pushed back (429, 503, dropped connections or timeouts), so the crawl slowed down: its concurrency was halved { $n ->
+        [one] once
+       *[other] { $n } times
+    }. Next time, try a lower --concurrency.
 # `list_mode` no es un corte: el rastreo hizo exactamente lo que se le pidió, así que
 # decirle al usuario «tu rastreo se truncó» sería mentir. Lo que sí hay que decirle es
 # la consecuencia de auditar un conjunto y no un sitio.

@@ -46,15 +46,19 @@ crawl_finished = Crawl voltooid: { $urls ->
 crawl_failed_suffix = {" "}({ $n } mislukt)
 crawl_truncated = Crawl afgebroken door { $reason }. De getoonde bevindingen zijn die tot dat moment zijn gevonden.
 crawl_rate_limited_note = De site heeft de crawl afgeremd: { $n ->
-        [one] { $n } pagina gaf ook na de nieuwe pogingen nog 429 Too Many Requests en blijft in de wachtrij
-       *[other] { $n } pagina's gaven ook na de nieuwe pogingen nog 429 Too Many Requests en blijven in de wachtrij
+        [one] { $n } pagina bleef 429 Too Many Requests geven, of vroeg om meer dan twee minuten te wachten, en blijft in de wachtrij
+       *[other] { $n } pagina's bleven 429 Too Many Requests geven, of vroegen om meer dan twee minuten te wachten, en blijven in de wachtrij
     }, in plaats van als kapot te worden gemeld. Regels die de hele site nodig hebben, worden pas geëvalueerd als alles is opgehaald. Voer later uit:
     {"    "}crawlforge resume { $path }
     of crawl opnieuw met een lagere --concurrency, of laat de user-agent van CrawlForge door de firewall van de site.
 report_rate_limited_note = > **De site heeft de crawl afgeremd.** { $n ->
-        [one] { $n } pagina gaf 429 Too Many Requests en bleef in de wachtrij
-       *[other] { $n } pagina's gaven 429 Too Many Requests en bleven in de wachtrij
+        [one] { $n } pagina bleef 429 Too Many Requests geven, of vroeg om meer dan twee minuten te wachten, en bleef in de wachtrij
+       *[other] { $n } pagina's bleven 429 Too Many Requests geven, of vroegen om meer dan twee minuten te wachten, en bleven in de wachtrij
     }: zulke pagina's worden niet meegeteld of als kapot gemeld, en regels die de hele site nodig hebben, worden niet geëvalueerd. `crawlforge resume` haalt ze op.
+crawl_throttled_note = De server raakte overbelast (429, 503, verbroken verbindingen of time-outs), dus de crawl ging langzamer: de gelijktijdigheid is { $n ->
+        [one] één keer
+       *[other] { $n } keer
+    } gehalveerd. Probeer de volgende keer een lagere --concurrency.
 crawl_list_mode_note = Lijstcrawl: alleen de URL's die je hebt opgegeven, zijn geaudit. Regels die de volledige linkstructuur van de site nodig hebben (weespagina's, inkomende links, klikdiepte), worden niet geëvalueerd.
 external_unchecked = { $n ->
         [one] { $n } externe link is

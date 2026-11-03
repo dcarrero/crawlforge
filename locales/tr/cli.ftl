@@ -50,10 +50,11 @@ crawl_failed_suffix = {" "}({ $n } başarısız)
 crawl_truncated = Tarama { $reason } nedeniyle kesildi. Gösterilen bulgular o ana kadar bulunanlardır.
 # A 429 is not a page's status: the site asked the crawler to slow down. The pages
 # were left pending, and the useful thing to say is how to get them.
-crawl_rate_limited_note = Site, taramaya hız sınırı uyguladı: { $n } sayfa yeniden denemelerden sonra da 429 Too Many Requests yanıtı verdi; bozuk olarak raporlanmadı, beklemede bırakıldı. Sitenin tamamını gerektiren kurallar, bu sayfalar alınana kadar değerlendirilmez. Daha sonra şunu çalıştırın:
+crawl_rate_limited_note = Site, taramaya hız sınırı uyguladı: { $n } sayfa 429 Too Many Requests yanıtı vermeyi sürdürdü ya da iki dakikadan uzun beklenmesini istedi; bozuk olarak raporlanmadı, beklemede bırakıldı. Sitenin tamamını gerektiren kurallar, bu sayfalar alınana kadar değerlendirilmez. Daha sonra şunu çalıştırın:
     {"    "}crawlforge resume { $path }
     ya da daha düşük bir --concurrency ile yeniden tarayın veya sitenin güvenlik duvarında CrawlForge user-agent'ına izin verin.
-report_rate_limited_note = > **Site, taramaya hız sınırı uyguladı.** { $n } sayfa 429 Too Many Requests yanıtı verdi ve beklemede bırakıldı: sayılmıyor, bozuk olarak da raporlanmıyor; sitenin tamamını gerektiren kurallar değerlendirilmiyor. `crawlforge resume` bu sayfaları alır.
+report_rate_limited_note = > **Site, taramaya hız sınırı uyguladı.** { $n } sayfa 429 Too Many Requests yanıtı vermeyi sürdürdü ya da iki dakikadan uzun beklenmesini istedi ve beklemede bırakıldı: sayılmıyor, bozuk olarak da raporlanmıyor; sitenin tamamını gerektiren kurallar değerlendirilmiyor. `crawlforge resume` bu sayfaları alır.
+crawl_throttled_note = Sunucu aşırı yük belirtileri gösterdi (429, 503, kopan bağlantılar veya zaman aşımları), bu yüzden tarama yavaşladı: eşzamanlılık { $n } kez yarıya indirildi. Bir dahaki sefere daha düşük bir --concurrency deneyin.
 crawl_list_mode_note = Liste taraması: yalnızca verdiğiniz URL'ler denetlendi. Sitenin eksiksiz bağlantı grafiğini gerektiren kurallar (yetim sayfalar, gelen bağlantılar, derinlik) değerlendirilmez.
 external_unchecked = { $n } harici bağlantı kontrol edilmedi: max_external sınırına ulaşıldı. Sınırı --max-external ile yükseltebilirsiniz.
 external_unregistered = { $n } harici bağlantı kaydedilmedi bile: max_external_urls sınırına ulaşıldı. Bu sınır, yüz binlerce farklı sunucuya bağlantı veren tek bir sayfa gibi durumlar için vardır.

@@ -31,6 +31,12 @@ Rule IDs never change meaning. A historical diff between two crawls depends on i
   written. Built by hand, without a new dependency; tests fail if it drifts from `JobConfig`, from
   the engine defaults or from the example. `tools/gen-artefactos-web.sh` regenerates it and
   `tools/verificar.sh` fails while it is stale.
+- **The crawl summary says when the server pushed back.** When the adaptive throttle halved a
+  host's concurrency, the summary of `crawl` and `resume` now adds one line: "The server pushed
+  back (429, 503, dropped connections or timeouts), so the crawl slowed down: its concurrency was
+  halved 3 times. Next time, try a lower --concurrency." Until now it went only to the log, and a
+  crawl that took three times as long looked like a slow engine. It is not stored in the crawl
+  file, so `report` does not repeat it.
 
 ### Changed
 
@@ -49,6 +55,10 @@ Rule IDs never change meaning. A historical diff between two crawls depends on i
   outlives the retries (`truncated_reason = 'rate_limited'`), and a `503` is recorded as such.
   `robots.txt` and sitemap downloads honour the same wait; external status probes are
   unchanged.
+- **The rate-limit note no longer says "after the retries".** A page whose `Retry-After` asks for
+  more than two minutes is not retried at all, so the note of `crawl` and `report` now says the
+  pages "kept answering 429 Too Many Requests, or asked to wait more than two minutes", in all ten
+  languages.
 - **Exclusion reasons are shown translated.** The "Excluded" table of `report` and the crawl-state
   line of `inspect` printed the stored identifier (`external_check_off`, `no_network`,
   `pattern`…); they now read "external check off", "folder audit, no network", "URL pattern", in

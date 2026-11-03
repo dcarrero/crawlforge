@@ -147,7 +147,9 @@ does not answer in time. Same signal by another road, so a `connection` or `time
 (after the fetcher's retries, like a 429) adds to the same streak. A DNS or TLS failure does not:
 a name that does not resolve or a certificate that does not validate would fail the same with the
 server idle, and they neither add to the streak nor break it (`throttle::is_overload_failure`).
-How many times a host was halved is in `CrawlMetrics::throttle_reductions`.
+How many times a host was halved is in `CrawlMetrics::throttle_reductions`, and the CLI's crawl
+summary says it in one line when it is not zero —that is the "warn in the UI" above. It is not
+stored in the crawl file, so `report` cannot repeat it.
 
 **`Retry-After` on the site's own pages is obeyed.** When a 429 or 503 carries it, the retry of
 that URL waits at least what it asks —and never less than the backoff, so `Retry-After: 0` does

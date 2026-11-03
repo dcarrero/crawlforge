@@ -111,6 +111,15 @@ fn truncation_lines(outcome: &CrawlOutcome, lang: Lang) -> Vec<Option<String>> {
         }
         None => {}
     }
+    // The adaptive throttle is silent by design while it works; at the end the user has to
+    // hear it, or a crawl that took three times as long looks like a slow engine instead of
+    // a server that was struggling (docs/03-MOTOR-CRAWL.md §7, "warn in the UI").
+    if outcome.metrics.throttle_reductions > 0 {
+        out.push(Some(msg::crawl_throttled_note(
+            lang,
+            i18n::group_thousands(lang, outcome.metrics.throttle_reductions),
+        )));
+    }
     // La comprobación de externas se dice también cuando fue bien: es tiempo del rastreo
     // que el cierre atribuía en silencio a las páginas del sitio, y en un WordPress con
     // cientos de externas lentas era «el rastreo se muere» sin ninguna pista (revisión §4).
@@ -1836,11 +1845,38 @@ mod tests {
             wal_kept: false,
         };
         let en = truncation_lines(&outcome, Lang::En).into_iter().flatten().collect::<Vec<_>>();
-        assert!(en[0].contains("1,234 pages still answered 429"), "{en:?}");
+        assert!(en[0].contains("1,234 pages kept answering 429"), "{en:?}");
+        // Above `fetch::MAX_RETRY_AFTER` a page gets no retries at all, so "after the
+        // retries" would be false for it.
+        assert!(en[0].contains("asked to wait more than two minutes"), "{en:?}");
+        assert!(!en[0].contains("after the retries"), "{en:?}");
         assert!(en[0].contains("crawlforge resume crawl-colorvivo-com.sqlite"), "{en:?}");
         assert!(!en[0].contains("truncated"), "{en:?}");
         let es = truncation_lines(&outcome, Lang::Es).into_iter().flatten().collect::<Vec<_>>();
-        assert!(es[0].contains("1.234 páginas seguían respondiendo 429"), "{es:?}");
+        assert!(es[0].contains("1.234 páginas siguieron respondiendo 429"), "{es:?}");
+        assert!(es[0].contains("más de dos minutos"), "{es:?}");
+    }
+
+    #[test]
+    fn a_throttled_crawl_says_the_server_pushed_back() {
+        // The throttle halving a host's concurrency used to go only to the log: the user saw a
+        // slow crawl and no reason for it.
+        let outcome = |reductions| CrawlOutcome {
+            crawl_id: "x".into(),
+            store_path: std::path::PathBuf::from("c.sqlite"),
+            metrics: CrawlMetrics { throttle_reductions: reductions, ..Default::default() },
+            truncated: None,
+            interrupted: false,
+            wal_kept: false,
+        };
+        let en = truncation_lines(&outcome(2), Lang::En).into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(en.len(), 1, "{en:?}");
+        assert!(en[0].contains("halved 2 times"), "{en:?}");
+        assert!(en[0].contains("--concurrency"), "{en:?}");
+        let es = truncation_lines(&outcome(1), Lang::Es).into_iter().flatten().collect::<Vec<_>>();
+        assert!(es[0].contains("a la mitad una vez"), "{es:?}");
+        // A healthy crawl says nothing: the line is a warning, not a statistic.
+        assert!(truncation_lines(&outcome(0), Lang::En).is_empty());
     }
 
     // ── El fichero cuenta su propia completitud (`report`, revisión §1) ──────

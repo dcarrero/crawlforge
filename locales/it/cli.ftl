@@ -57,15 +57,19 @@ crawl_truncated = Scansione troncata da { $reason }. I rilievi mostrati sono que
 # A 429 is not a page's status: the site asked the crawler to slow down. The pages
 # were left pending, and the useful thing to say is how to get them.
 crawl_rate_limited_note = Il sito ha limitato la frequenza della scansione: { $n ->
-        [one] { $n } pagina rispondeva ancora 429 Too Many Requests dopo i nuovi tentativi ed è rimasta in sospeso, senza essere segnalata come non funzionante.
-       *[other] { $n } pagine rispondevano ancora 429 Too Many Requests dopo i nuovi tentativi e sono rimaste in sospeso, senza essere segnalate come non funzionanti.
+        [one] { $n } pagina ha continuato a rispondere 429 Too Many Requests, o ha chiesto di attendere più di due minuti, ed è rimasta in sospeso, senza essere segnalata come non funzionante.
+       *[other] { $n } pagine hanno continuato a rispondere 429 Too Many Requests, o hanno chiesto di attendere più di due minuti, e sono rimaste in sospeso, senza essere segnalate come non funzionanti.
     } Le regole che richiedono l'intero sito non vengono valutate finché queste pagine non sono state recuperate. Più tardi, esegui:
     {"    "}crawlforge resume { $path }
     oppure ripeti la scansione con un --concurrency più basso, o lascia passare lo user agent di CrawlForge nel firewall del sito.
 report_rate_limited_note = > **Il sito ha limitato la frequenza della scansione.** { $n ->
-        [one] { $n } pagina ha risposto 429 Too Many Requests ed è rimasta in sospeso: non viene conteggiata né segnalata come non funzionante
-       *[other] { $n } pagine hanno risposto 429 Too Many Requests e sono rimaste in sospeso: non vengono conteggiate né segnalate come non funzionanti
+        [one] { $n } pagina ha continuato a rispondere 429 Too Many Requests, o ha chiesto di attendere più di due minuti, ed è rimasta in sospeso: non viene conteggiata né segnalata come non funzionante
+       *[other] { $n } pagine hanno continuato a rispondere 429 Too Many Requests, o hanno chiesto di attendere più di due minuti, e sono rimaste in sospeso: non vengono conteggiate né segnalate come non funzionanti
     }, e le regole che richiedono l'intero sito non vengono valutate. `crawlforge resume` le recupera.
+crawl_throttled_note = Il server ha mostrato segni di sovraccarico (429, 503, connessioni interrotte o timeout), quindi la scansione ha rallentato: la concorrenza è stata dimezzata { $n ->
+        [one] una volta
+       *[other] { $n } volte
+    }. La prossima volta, prova con un --concurrency più basso.
 crawl_list_mode_note = Scansione in modalità elenco: sono stati verificati solo gli URL forniti. Le regole che richiedono il grafo completo dei link del sito (pagine orfane, link in entrata, profondità) non vengono valutate.
 external_unchecked = { $n ->
         [one] { $n } link esterno non è stato verificato

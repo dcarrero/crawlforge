@@ -51,15 +51,19 @@ crawl_truncated = Rastreo truncado por { $reason }. Los hallazgos mostrados son 
 # A 429 is not a page's status: the site asked the crawler to slow down. The pages
 # were left pending, and the useful thing to say is how to get them.
 crawl_rate_limited_note = El sitio limitó el rastreo: { $n ->
-        [one] { $n } página seguía respondiendo 429 Too Many Requests tras los reintentos y quedó pendiente, sin darla por rota
-       *[other] { $n } páginas seguían respondiendo 429 Too Many Requests tras los reintentos y quedaron pendientes, sin darlas por rotas
+        [one] { $n } página siguió respondiendo 429 Too Many Requests, o pidió esperar más de dos minutos, y quedó pendiente, sin darla por rota
+       *[other] { $n } páginas siguieron respondiendo 429 Too Many Requests, o pidieron esperar más de dos minutos, y quedaron pendientes, sin darlas por rotas
     }. Las reglas que necesitan el sitio entero no se evalúan hasta que se pidan. Más tarde, lanza:
     {"    "}crawlforge resume { $path }
     o rastrea de nuevo con menos --concurrency, o deja pasar el user-agent de CrawlForge en el cortafuegos del sitio.
 report_rate_limited_note = > **El sitio limitó el rastreo.** { $n ->
-        [one] { $n } página respondió 429 Too Many Requests y quedó pendiente: no se cuenta ni se da por rota
-       *[other] { $n } páginas respondieron 429 Too Many Requests y quedaron pendientes: no se cuentan ni se dan por rotas
+        [one] { $n } página siguió respondiendo 429 Too Many Requests, o pidió esperar más de dos minutos, y quedó pendiente: no se cuenta ni se da por rota
+       *[other] { $n } páginas siguieron respondiendo 429 Too Many Requests, o pidieron esperar más de dos minutos, y quedaron pendientes: no se cuentan ni se dan por rotas
     }, y las reglas que necesitan el sitio entero no se evalúan. `crawlforge resume` pide las pendientes.
+crawl_throttled_note = El servidor dio señales de sobrecarga (429, 503, conexiones cortadas o timeouts) y el rastreo bajó el ritmo: su concurrencia se redujo a la mitad { $n ->
+        [one] una vez
+       *[other] { $n } veces
+    }. La próxima vez, prueba con menos --concurrency.
 # `list_mode` no es un corte: el rastreo hizo exactamente lo que se le pidió, así que
 # decirle al usuario «tu rastreo se truncó» sería mentir. Lo que sí hay que decirle es
 # la consecuencia de auditar un conjunto y no un sitio.
