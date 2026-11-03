@@ -260,6 +260,21 @@ crawlforge crawl https://cliente.com/ --config cliente.yaml
 El fichero describe **el sitio**, la línea de comandos describe **la ejecución**: los flags ganan
 sobre el YAML. Un campo mal escrito es un error, no una opción ignorada en silencio.
 
+**Que el editor lo revise mientras escribes.** Las claves, sus tipos y valores por defecto, y todos
+los IDs de regla y severidades que acepta `rules:` se publican como JSON Schema,
+[`docs/crawl-config.schema.json`](https://github.com/dcarrero/crawlforge/blob/main/docs/crawl-config.schema.json). La primera línea del ejemplo apunta
+a él a un servidor de lenguaje YAML (VS Code con la extensión YAML de Red Hat, Zed, Neovim,
+JetBrains), así que una copia suya ya completa las claves y subraya las erratas:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dcarrero/crawlforge/main/docs/crawl-config.schema.json
+```
+
+`crawlforge config schema` imprime el esquema del binario que tienes, para una copia sin conexión
+o para dárselo a un asistente que escriba el fichero por ti: `crawlforge config schema >
+crawl-config.schema.json` y apunta la línea a esa ruta. El esquema escribe los IDs de regla en
+mayúsculas; CrawlForge también los acepta en minúsculas.
+
 ### Cada sitio con su criterio: desactivar reglas, cambiar severidades
 
 No todos los clientes tienen el mismo listón. Un blog cuya plantilla escribe meta descriptions
@@ -657,6 +672,7 @@ crawlforge diff   <ANTES> <DESPUES> [--fail-on high] [--out d.sqlite]
 crawlforge diff   <DIFF> [--rule ID | --change TIPO]   # abrir un diff guardado
 crawlforge portfolio <RUTA>... [--format md|html --out f]   # panel sobre muchos rastreos
 crawlforge rules  [--category X] [--detail] [--format json]
+crawlforge config schema      # JSON Schema del YAML de --config
 # report, inspect, export, diff y portfolio aceptan --config <YAML> para aplicar su `rules:`
 ```
 

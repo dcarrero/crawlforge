@@ -32,6 +32,17 @@ reason_4xx = 4xx
 reason_5xx = 5xx
 reason_not_html = HTML değil
 
+## Exclusion reasons
+
+exclusion_robots = robots.txt
+exclusion_nofollow = nofollow
+exclusion_depth = azami derinlik
+exclusion_pattern = URL kalıbı
+exclusion_limit = URL sınırı
+exclusion_local_network = yerel ağ
+exclusion_external_check_off = harici kontrol kapalı
+exclusion_no_network = klasör denetimi, ağ yok
+
 ## Resumen del rastreo (`report.rs`)
 
 crawl_finished = Tarama tamamlandı: { $urls } URL, { $secs } sn

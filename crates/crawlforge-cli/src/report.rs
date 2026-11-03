@@ -466,6 +466,17 @@ pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()
     }
 
     // Excluidas: no se ocultan, saber qué quedó fuera es un hallazgo en sí mismo.
+    for linea in excluded_lines(&conn, lang)? {
+        println!("{linea}");
+    }
+
+    Ok(())
+}
+
+/// The "Excluded" table of the terminal summary: one line per exclusion reason with its count,
+/// preceded by a blank line and the heading. Empty when nothing was excluded.
+fn excluded_lines(conn: &Connection, lang: Lang) -> Result<Vec<String>> {
+    let n = |v: i64| i18n::count(lang, v);
     let mut stmt = conn.prepare(
         "SELECT exclusion_reason, COUNT(*) FROM urls
          WHERE crawl_state = 'excluded' AND exclusion_reason IS NOT NULL
@@ -474,15 +485,19 @@ pub fn print_summary(store: &Path, lang: Lang, rules: &RulesChoice) -> Result<()
     let rows: Vec<(String, i64)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
-    if !rows.is_empty() {
-        println!();
-        println!("  {}", msg::heading_excluded(lang));
-        for (reason, cuantas) in rows {
-            println!("    {reason:<16} {:>10}", n(cuantas));
-        }
+    if rows.is_empty() {
+        return Ok(Vec::new());
     }
-
-    Ok(())
+    // Same treatment as the non-indexable reasons: stored as an identifier
+    // (`external_check_off`), shown translated, in a column as wide as the longest one.
+    let rows: Vec<(String, i64)> =
+        rows.into_iter().map(|(r, c)| (i18n::exclusion_reason(lang, &r), c)).collect();
+    let ancho = rows.iter().map(|(r, _)| i18n::display_width(r)).max().unwrap_or(0).max(16);
+    let mut out = vec![String::new(), format!("  {}", msg::heading_excluded(lang))];
+    for (reason, cuantas) in rows {
+        out.push(format!("    {} {:>10}", i18n::pad(&reason, ancho), n(cuantas)));
+    }
+    Ok(out)
 }
 
 /// Un grupo de hallazgos con el mismo `group_key`, candidato a colapso de plantilla.
@@ -1214,6 +1229,34 @@ mod tests {
             .expect("insert");
         }
         path
+    }
+
+    #[test]
+    fn the_excluded_table_shows_the_reason_translated_and_aligned() {
+        let path = store_con_exclusiones("tabla-traducida", "external_check_off", 3);
+        let conn = Connection::open(&path).expect("open");
+        conn.execute(
+            "INSERT INTO urls (url, crawl_state, exclusion_reason)
+             VALUES ('https://ejemplo.es/p', 'excluded', 'pattern')",
+            [],
+        )
+        .expect("insert");
+        let es = excluded_lines(&conn, Lang::Es).expect("query").join("\n");
+        assert!(es.contains("Excluidas"), "{es}");
+        assert!(es.contains("comprobación externa apagada"), "{es}");
+        assert!(es.contains("patrón de URL"), "{es}");
+        assert!(!es.contains("external_check_off") && !es.contains("pattern "), "raw ids leaked: {es}");
+        // The count column ends at the same terminal column on every row.
+        let widths: Vec<usize> =
+            es.lines().skip(2).map(i18n::display_width).collect();
+        assert!(widths.windows(2).all(|w| w[0] == w[1]), "misaligned: {es}");
+
+        let ja = excluded_lines(&conn, Lang::Ja).expect("query").join("\n");
+        assert!(ja.contains("外部リンク確認オフ"), "{ja}");
+        let widths: Vec<usize> = ja.lines().skip(2).map(i18n::display_width).collect();
+        assert!(widths.windows(2).all(|w| w[0] == w[1]), "misaligned: {ja}");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

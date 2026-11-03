@@ -258,6 +258,21 @@ crawlforge crawl https://cliente.com/ --config cliente.yaml
 The file describes **the site**, the command line describes **the run**: flags win over the
 YAML. A misspelled field is an error, not an option silently ignored.
 
+**Let the editor check it as you write.** The keys, their types and defaults, and every rule ID
+and severity that `rules:` accepts are published as a JSON Schema,
+[`docs/crawl-config.schema.json`](https://github.com/dcarrero/crawlforge/blob/main/docs/crawl-config.schema.json). The example's first line points a YAML
+language server at it (VS Code with the Red Hat YAML extension, Zed, Neovim, JetBrains), so a copy
+of it already completes keys and underlines typos:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dcarrero/crawlforge/main/docs/crawl-config.schema.json
+```
+
+`crawlforge config schema` prints the schema of the binary you have, for an offline copy or to
+hand to an assistant writing the file for you: `crawlforge config schema > crawl-config.schema.json`
+and point the line at that path. The schema lists rule IDs in capitals; CrawlForge also accepts
+them in lower case.
+
 ### Each site with its own criteria: disable rules, change severities
 
 Not every client has the same standards. A blog whose theme writes long meta descriptions on
@@ -652,6 +667,7 @@ crawlforge diff   <BEFORE> <AFTER> [--fail-on high] [--out d.sqlite]
 crawlforge diff   <DIFF> [--rule ID | --change TYPE]   # open a saved diff
 crawlforge portfolio <PATH>... [--format md|html --out f]   # panel across many crawls
 crawlforge rules  [--category X] [--detail] [--format json]
+crawlforge config schema      # JSON Schema of the --config YAML
 # report, inspect, export, diff and portfolio take --config <YAML> to apply its `rules:`
 ```
 

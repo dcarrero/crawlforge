@@ -32,6 +32,17 @@ reason_4xx = 4xx
 reason_5xx = 5xx
 reason_not_html = HTML 以外
 
+## Exclusion reasons
+
+exclusion_robots = robots.txt
+exclusion_nofollow = nofollow
+exclusion_depth = 最大階層
+exclusion_pattern = URL パターン
+exclusion_limit = URL 上限
+exclusion_local_network = ローカルネットワーク
+exclusion_external_check_off = 外部リンク確認オフ
+exclusion_no_network = フォルダー監査・ネットワークなし
+
 ## Resumen del rastreo (`report.rs`)
 
 crawl_finished = クロール完了: { $urls } URL、{ $secs } 秒

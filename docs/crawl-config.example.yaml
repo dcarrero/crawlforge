@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dcarrero/crawlforge/main/docs/crawl-config.schema.json
+# La línea de arriba es para el editor: con un servidor de lenguaje YAML completa las claves,
+# los IDs de regla y las severidades, y subraya las erratas. Ver `crawlforge config schema`.
 # Configuración de rastreo de CrawlForge (`--config`).
 #
 #   crawlforge crawl https://ejemplo.es --config crawl-config.example.yaml

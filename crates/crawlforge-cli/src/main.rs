@@ -391,6 +391,65 @@ enum Command {
         #[arg(short, long, default_value = "table")]
         format: String,
     },
+    /// Tools for the `--config` YAML file.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Print the JSON Schema of the `--config` YAML (draft 2020-12).
+    ///
+    /// For editors and assistants writing a config: every key, its type, its default, and
+    /// the rule IDs and severities `rules:` accepts. The same file is published as
+    /// docs/crawl-config.schema.json; point a YAML language server at it with a first line
+    /// `# yaml-language-server: $schema=<URL or path>`.
+    Schema,
+}
+
+impl Command {
+    /// Whether the command can open a network socket. The match has no `_` arm on purpose:
+    /// a new command does not compile until someone answers, because the answer decides
+    /// whether [`restore_default_sigpipe`] is safe for it.
+    fn opens_sockets(&self) -> bool {
+        match self {
+            Self::Crawl { .. } | Self::List { .. } | Self::Resume { .. } => true,
+            // `audit` reads a folder: the filesystem mode has no HTTP client at all.
+            Self::Audit { .. }
+            | Self::Stats { .. }
+            | Self::Report { .. }
+            | Self::Inspect { .. }
+            | Self::Export { .. }
+            | Self::Diff { .. }
+            | Self::Portfolio { .. }
+            | Self::Rules { .. }
+            | Self::Config { .. } => false,
+        }
+    }
+}
+
+/// `crawlforge rules | head` must end quietly, like `cat | head` does.
+///
+/// Rust starts every program with SIGPIPE ignored, so a write to a pipe whose reader is gone
+/// returns `EPIPE` instead of killing the process — and `println!` turns that error into a
+/// panic: "failed printing to stdout: Broken pipe", exit status 101, on a command that did
+/// nothing wrong. Restoring the default action makes the kernel end the process at that write,
+/// silently, which is what every Unix filter does.
+///
+/// Only for commands that never open a socket. The reason Rust ignores SIGPIPE is that a peer
+/// closing a TCP connection mid-write must be an error the crawler handles per URL
+/// (`CONVENTIONS.md §4`), not a signal that kills a crawl of hours. Those commands keep the
+/// Rust default; their output goes mostly to a terminal or a file anyway.
+fn restore_default_sigpipe() {
+    #[cfg(unix)]
+    // SAFETY: `signal` with `SIG_DFL` only changes the process-wide disposition of SIGPIPE,
+    // which is safe from any thread (the tokio workers already exist here). It installs no
+    // handler, so no Rust code ever runs in signal context.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
 }
 
 #[tokio::main]
@@ -408,6 +467,9 @@ async fn main() -> Result<()> {
         .init();
 
     let command = Cli::parse().command;
+    if !command.opens_sockets() {
+        restore_default_sigpipe();
+    }
 
     // El idioma se fija una sola vez y para todo el proceso: `--lang` del subcomando si lo hay,
     // si no `CRAWLFORGE_LANG`, si no inglés. A partir de aquí, cada módulo lo consulta con
@@ -727,6 +789,10 @@ async fn main() -> Result<()> {
             let source = DevSource::from_env().context("invalid CRAWLFORGE_TIER")?;
             crawlforge_cli::portfolio::run(&source, &paths, &format, out.as_deref(), &rules)
                 .context("the portfolio panel could not be generated")
+        }
+        Command::Config { action: ConfigAction::Schema } => {
+            print!("{}", crawlforge_cli::config_schema::render());
+            Ok(())
         }
         Command::Rules { id, category, detail, format, .. } => match format.as_str() {
             // JSON carries every translated language at once — the consumer picks. `--lang` governs the
@@ -1768,6 +1834,24 @@ mod tests {
         assert_eq!(ensure_scheme("http://ejemplo.es"), "http://ejemplo.es");
         assert_eq!(ensure_scheme("https://ejemplo.es"), "https://ejemplo.es");
         assert_eq!(ensure_scheme("ftp://ejemplo.es"), "ftp://ejemplo.es");
+    }
+
+    #[test]
+    fn only_the_commands_that_never_open_a_socket_restore_the_default_sigpipe() {
+        // A crawl must keep Rust's ignored SIGPIPE: a server closing the connection mid-write
+        // is a per-URL error, not a signal that kills hours of crawling.
+        let opens = |args: &[&str]| {
+            let mut argv = vec!["crawlforge"];
+            argv.extend_from_slice(args);
+            Cli::try_parse_from(argv).expect("valid command line").command.opens_sockets()
+        };
+        assert!(opens(&["crawl", "https://ejemplo.es/"]));
+        assert!(opens(&["list", "urls.txt"]));
+        assert!(opens(&["resume", "c.sqlite"]));
+        assert!(!opens(&["rules"]));
+        assert!(!opens(&["report", "c.sqlite"]));
+        assert!(!opens(&["audit", "dist", "--base", "https://ejemplo.es/"]));
+        assert!(!opens(&["config", "schema"]));
     }
 
     #[test]

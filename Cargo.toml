@@ -65,6 +65,9 @@ fluent-bundle = "0.16"
 fluent-syntax = "0.12"
 # Ancho de columna en terminal: un ideograma japonés ocupa dos. Ya llegaba con `indicatif`.
 unicode-width = "0.2"
+# Only to restore the default SIGPIPE action in the CLI (`crawlforge rules | head`). Already in
+# the tree through tokio, so it adds no crate. Unix only.
+libc = "0.2"
 
 # Miembros internos
 crawlforge-core = { path = "crates/crawlforge-core" }

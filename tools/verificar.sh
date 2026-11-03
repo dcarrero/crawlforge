@@ -47,13 +47,16 @@ paso "Artefactos publicados"
 # instalando este por tag. Si el catálogo cambia y nadie los regenera, la web publica un catálogo
 # que ya no existe — y como se instalan por tag, el error viaja congelado hasta que alguien lo ve.
 tools/gen-artefactos-web.sh > /dev/null
-if ! git diff --quiet -- rules.json meta.json 2>/dev/null; then
-    printf '\033[31m  ✗ rules.json o meta.json estaban desfasados; se han regenerado.\033[0m\n'
+# The --config schema is checked the same way: it is published for editors and assistants, and a
+# stale one offers rule IDs or defaults that no longer exist.
+ARTEFACTOS="rules.json meta.json docs/crawl-config.schema.json"
+if ! git diff --quiet -- $ARTEFACTOS 2>/dev/null; then
+    printf '\033[31m  ✗ rules.json, meta.json o crawl-config.schema.json estaban desfasados; se han regenerado.\033[0m\n'
     printf '\033[33m    Revisa el diff y añádelos al commit.\033[0m\n'
-    git --no-pager diff --stat -- rules.json meta.json
+    git --no-pager diff --stat -- $ARTEFACTOS
     exit 1
 fi
-printf '  \033[32m✓\033[0m rules.json y meta.json al día\n'
+printf '  \033[32m✓\033[0m rules.json, meta.json y crawl-config.schema.json al día\n'
 
 paso "Web sincronizada con el catálogo"
 # La referencia de reglas de la web se genera del catálogo (`rules --format json`). Si una

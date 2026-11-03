@@ -33,6 +33,17 @@ reason_4xx = 4xx
 reason_5xx = 5xx
 reason_not_html = não é HTML
 
+## Exclusion reasons
+
+exclusion_robots = robots.txt
+exclusion_nofollow = nofollow
+exclusion_depth = profundidade máxima
+exclusion_pattern = padrão de URL
+exclusion_limit = limite de URLs
+exclusion_local_network = rede local
+exclusion_external_check_off = verificação externa desligada
+exclusion_no_network = auditoria de pasta, sem rede
+
 ## Resumen del rastreo (`report.rs`)
 
 crawl_finished = Rastreamento concluído: { $urls ->

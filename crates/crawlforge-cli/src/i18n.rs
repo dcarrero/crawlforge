@@ -259,6 +259,45 @@ pub fn indexability_reason(lang: Lang, db_value: &str) -> String {
     format(lang, key, &[])
 }
 
+/// Why a URL was left out of the crawl, for display, from the value of `urls.exclusion_reason`
+/// (`crawlforge_core::frontier::ExclusionReason::as_str`). Same contract as
+/// [`indexability_reason`]: the stored value never changes —exports and `stats` write it as is,
+/// because it is filtered and joined on— and an unknown value is shown as is.
+pub fn exclusion_reason(lang: Lang, db_value: &str) -> String {
+    match exclusion_key(db_value) {
+        Some(key) => format(lang, key, &[]),
+        None => db_value.to_string(),
+    }
+}
+
+/// The `cli.ftl` key of a stored exclusion reason, if it is one this binary knows.
+fn exclusion_key(db_value: &str) -> Option<&'static str> {
+    Some(match db_value {
+        "robots" => "exclusion_robots",
+        "nofollow" => "exclusion_nofollow",
+        "depth" => "exclusion_depth",
+        "pattern" => "exclusion_pattern",
+        "limit" => "exclusion_limit",
+        "local_network" => "exclusion_local_network",
+        "external_check_off" => "exclusion_external_check_off",
+        "no_network" => "exclusion_no_network",
+        _ => return None,
+    })
+}
+
+/// The keys of [`exclusion_reason`], for the tests.
+#[cfg(test)]
+const EXCLUSION_KEYS: [&str; 8] = [
+    "exclusion_robots",
+    "exclusion_nofollow",
+    "exclusion_depth",
+    "exclusion_pattern",
+    "exclusion_limit",
+    "exclusion_local_network",
+    "exclusion_external_check_off",
+    "exclusion_no_network",
+];
+
 /// Las claves de [`indexability_reason`], para los tests.
 #[cfg(test)]
 const REASON_KEYS: [&str; 7] = [
@@ -1018,7 +1057,13 @@ mod tests {
             .iter()
             .chain(msg::HAND_WRITTEN)
             .map(|(k, a)| (*k, a.to_vec()))
-            .chain(SEVERITY_KEYS.iter().chain(&REASON_KEYS).map(|k| (*k, Vec::new())))
+            .chain(
+                SEVERITY_KEYS
+                    .iter()
+                    .chain(&REASON_KEYS)
+                    .chain(&EXCLUSION_KEYS)
+                    .map(|k| (*k, Vec::new())),
+            )
             .collect()
     }
 
@@ -1178,6 +1223,39 @@ mod tests {
         assert_eq!(pad("demasiado largo", 3), "demasiado largo");
         assert_eq!(pad_left("比較", 6), "  比較");
         assert_eq!(pad_left("URLs", 6), format!("{:>6}", "URLs"));
+    }
+
+    #[test]
+    fn every_exclusion_reason_the_engine_stores_has_a_translation() {
+        use crawlforge_core::frontier::ExclusionReason as R;
+        // The match is the guard: a new variant does not compile here until someone decides
+        // how it reads, instead of reaching the report as a raw identifier.
+        let all = [
+            R::Robots, R::Nofollow, R::Depth, R::Pattern, R::Limit, R::LocalNetwork,
+            R::ExternalCheckOff, R::NoNetwork,
+        ];
+        for r in all {
+            match r {
+                R::Robots | R::Nofollow | R::Depth | R::Pattern | R::Limit | R::LocalNetwork
+                | R::ExternalCheckOff | R::NoNetwork => {}
+            }
+        }
+        let mut keys: Vec<&str> = all
+            .iter()
+            .map(|r| exclusion_key(r.as_str()).unwrap_or_else(|| panic!("{} has no key", r.as_str())))
+            .collect();
+        keys.sort_unstable();
+        let mut expected = EXCLUSION_KEYS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(keys, expected, "EXCLUSION_KEYS must list exactly the mapped keys");
+    }
+
+    #[test]
+    fn the_exclusion_reason_is_translated_and_the_unknown_shown_as_is() {
+        assert_eq!(exclusion_reason(Lang::Es, "pattern"), "patrón de URL");
+        assert_eq!(exclusion_reason(Lang::En, "external_check_off"), "external check off");
+        assert_eq!(exclusion_reason(Lang::Ja, "robots"), "robots.txt");
+        assert_eq!(exclusion_reason(Lang::Es, "algo_nuevo"), "algo_nuevo");
     }
 
     #[test]
