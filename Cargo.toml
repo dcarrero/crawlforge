@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.21.1"
+version = "0.21.2"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -88,6 +88,11 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# Los binarios de cada versión los compila `dist` en el CI con este perfil. Hereda `release` tal
+# cual: lo que se mide en la regresión de rendimiento es lo mismo que se distribuye.
+[profile.dist]
+inherits = "release"
 
 # El banco de rendimiento se mide con este perfil, no con `release` a secas.
 [profile.bench-max]

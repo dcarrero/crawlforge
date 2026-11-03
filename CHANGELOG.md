@@ -19,10 +19,10 @@ While the major version is 0, the API is not stable and minor versions may chang
 
 Rule IDs never change meaning. A historical diff between two crawls depends on it.
 
-## [0.21.1] — 2026-11-03
+## [0.21.2] — 2026-11-03
 
 The first release with prebuilt binaries. The engine does not change: same rules, same crawl
-file, same output.
+file, same output. Everything below was meant for 0.21.1; see that entry.
 
 ### Added
 
@@ -46,6 +46,13 @@ file, same output.
   slow sitemap now takes 1.5 s instead of 0.6 s, so the two behaviours sit ≥ 4.5 s and ~1.5 s apart
   and the threshold is 3.5 s.
 - **The manual** had a table split by a blank line and still said 59 of 60 rules were implemented.
+
+## [0.21.1] — 2026-11-03
+
+Tagged, never released. The release workflow failed on every target because the `dist` build
+profile was missing from `Cargo.toml` (`profile 'dist' is not defined`), so no binaries, installers
+or Homebrew formula were published. 0.21.2 adds the profile, which inherits `release` unchanged, and
+ships what this version was meant to.
 
 ## [0.21.0] — 2026-11-03
 
