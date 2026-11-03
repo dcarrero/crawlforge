@@ -25,15 +25,36 @@ cd ~/Desarrollos/proyectos/proyectos-mini/crawlforge
 cargo build --release -p crawlforge-cli && cp target/release/crawlforge ~/.cargo/bin/
 ```
 
-**La salida de la herramienta está en inglés.** Es el idioma de origen; el español existe donde
-hay texto de verdad que traducir —el catálogo de reglas y los informes— y se pide con `--lang es`:
+**La salida de la herramienta está en inglés.** Es el idioma de origen; los demás son
+traducciones, y se piden con `--lang` en los comandos que leen un rastreo (`report`, `inspect`,
+`diff`, `portfolio`, `rules`):
 
 ```bash
 crawlforge rules  --lang es
 crawlforge report crawl.sqlite --lang es
 ```
 
-Para no repetirlo en cada comando, en tu `~/.zshrc`:
+| `--lang` | Idioma |
+|---|---|
+| `en` | Inglés — el de por defecto y el de origen |
+| `es` | Español |
+| `de` | Alemán |
+| `fr` | Francés |
+| `it` | Italiano |
+| `nl` | Neerlandés |
+| `tr` | Turco |
+| `pt` | Portugués |
+| `ja` | Japonés |
+| `pl` | Polaco |
+
+Se acepta una región o una codificación y se ignora (`pt-BR`, `es_ES.UTF-8`): hay un solo
+portugués, un solo español. Un idioma cuya traducción aún no está escrita se acepta y sale en
+inglés —números incluidos— hasta que lo esté; un valor desconocido es un error que lista estos
+códigos. La ayuda (`--help`) y los errores de argumentos van siempre en inglés.
+
+Para no repetirlo en cada comando, en tu `~/.zshrc`. La variable fija también el idioma de
+`crawl`, `audit` y `list`, que no tienen `--lang`; ahí un valor desconocido se ignora y la salida
+sigue en inglés:
 
 ```bash
 export CRAWLFORGE_LANG=es
@@ -286,12 +307,13 @@ crawlforge rules --lang es                    # el catálogo entero, en tabla
 crawlforge rules INDEX-ORPHAN-PAGE            # la ficha de una regla concreta, por su ID
 crawlforge rules --lang es --category canonical
 crawlforge rules --lang es --detail           # con la explicación completa de cada una
-crawlforge rules --format json                # el catálogo entero como datos, en ambos idiomas
+crawlforge rules --format json                # el catálogo entero como datos, en todos los idiomas
 ```
 
 El JSON es para lo que consuma el catálogo como datos — un script de CI que comprueba que un
 ID de regla sigue existiendo, o una página generada del catálogo en vez de copiarlo. Lleva
-siempre los dos idiomas, y su sobre dice la versión del catálogo y el número de reglas.
+siempre todos los idiomas traducidos (`name.en`, `name.es`…; inglés y español siempre, los demás
+cuando estén traducidos), y su sobre dice la versión del catálogo y el número de reglas.
 
 ---
 

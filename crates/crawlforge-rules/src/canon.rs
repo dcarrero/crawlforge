@@ -24,14 +24,6 @@ pub static CANON_MISSING: RuleMeta = RuleMeta {
     category: Category::Canonical,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Sin canonical",
-    name_en: "Missing canonical",
-    desc_es: "La página indexable no declara rel=canonical. No es grave por sí solo, porque \
-              Google infiere el canonical, pero sin él cualquier parámetro de URL —una campaña, \
-              un filtro, un orden— puede acabar indexado como una página distinta.",
-    desc_en: "The indexable page declares no rel=canonical. Not serious on its own, since Google \
-              infers the canonical, but without it any URL parameter — a campaign, a filter, a \
-              sort order — can end up indexed as a separate page.",
     references: &[],
 };
 
@@ -41,14 +33,6 @@ pub static CANON_MULTIPLE: RuleMeta = RuleMeta {
     category: Category::Canonical,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Varios canonical",
-    name_en: "Multiple canonicals",
-    desc_es: "La página declara más de un link rel=canonical. Google no elige entre ellos: los \
-              ignora todos, así que el efecto es el de no tener ninguno. Casi siempre es la \
-              plantilla y un plugin de SEO emitiendo la etiqueta cada uno por su cuenta.",
-    desc_en: "The page declares more than one link rel=canonical. Google does not pick one: it \
-              ignores them all, so the effect is having none at all. It is almost always the \
-              theme and an SEO plugin each emitting the tag on their own.",
     references: &[],
 };
 
@@ -58,16 +42,6 @@ pub static CANON_RELATIVE: RuleMeta = RuleMeta {
     category: Category::Canonical,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Canonical relativo",
-    name_en: "Relative canonical",
-    desc_es: "El canonical se declara como referencia relativa en vez de con URL absoluta. \
-              Funciona mientras la página se sirva en un solo sitio, pero si el HTML se \
-              reproduce bajo otro host —un entorno de pruebas, un proxy, un scraper— el \
-              canonical se resuelve contra ese host y deja de señalar al original.",
-    desc_en: "The canonical is declared as a relative reference instead of an absolute URL. It \
-              works while the page is served from one place, but if the HTML is reproduced under \
-              another host — a staging environment, a proxy, a scraper — the canonical resolves \
-              against that host and stops pointing at the original.",
     references: &[],
 };
 
@@ -77,14 +51,6 @@ pub static CANON_TO_4XX: RuleMeta = RuleMeta {
     category: Category::Canonical,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Canonical a una URL con error",
-    name_en: "Canonical to an error URL",
-    desc_es: "El canonical apunta a una URL que responde con error. La página se está declarando \
-              duplicada de algo que no existe, así que ni ella ni el destino pueden indexarse: \
-              el contenido desaparece de los resultados por completo.",
-    desc_en: "The canonical points to a URL that answers with an error. The page declares itself \
-              a duplicate of something that does not exist, so neither it nor the target can be \
-              indexed: the content disappears from results entirely.",
     references: &[],
 };
 
@@ -94,16 +60,6 @@ pub static CANON_TO_REDIRECT: RuleMeta = RuleMeta {
     category: Category::Canonical,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Canonical a una redirección",
-    name_en: "Canonical to a redirect",
-    desc_es: "El canonical apunta a una URL que redirige a otra. Google tiene que decidir entre \
-              la señal del canonical y la de la redirección, y suele quedarse con el destino \
-              final, con lo que la etiqueta no sirve para nada. Apúntala directamente a la URL \
-              que responde 200.",
-    desc_en: "The canonical points to a URL that redirects elsewhere. Google has to choose \
-              between the canonical signal and the redirect one, and usually keeps the final \
-              destination, which makes the tag pointless. Point it straight at the URL that \
-              answers 200.",
     references: &[],
 };
 
@@ -113,14 +69,6 @@ pub static CANON_TO_NOINDEX: RuleMeta = RuleMeta {
     category: Category::Canonical,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Canonical a una página con noindex",
-    name_en: "Canonical to a noindexed page",
-    desc_es: "El canonical apunta a una página marcada con noindex. Las dos señales se \
-              contradicen: una dice «indexa aquella» y aquella dice «no me indexes». El \
-              resultado habitual es que se pierden las dos URLs.",
-    desc_en: "The canonical points to a page marked noindex. The two signals contradict each \
-              other: one says «index that one» and that one says «do not index me». The usual \
-              outcome is losing both URLs.",
     references: &[],
 };
 
@@ -130,14 +78,6 @@ pub static CANON_CHAIN: RuleMeta = RuleMeta {
     category: Category::Canonical,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Cadena de canonical",
-    name_en: "Canonical chain",
-    desc_es: "A declara como canonical a B, y B declara como canonical a C. El canonical no es \
-              transitivo para Google: al encontrar una cadena la ignora y decide por su cuenta \
-              cuál es la URL principal. Toda la cadena debe apuntar directamente a C.",
-    desc_en: "A declares B as its canonical, and B declares C. Canonicals are not transitive for \
-              Google: when it finds a chain it ignores it and decides on its own which URL is \
-              the main one. Every step should point straight at C.",
     references: &[],
 };
 
@@ -147,16 +87,6 @@ pub static CANON_CROSS_DOMAIN: RuleMeta = RuleMeta {
     category: Category::Canonical,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Canonical a otro dominio",
-    name_en: "Cross-domain canonical",
-    desc_es: "El canonical apunta a un host distinto del de la página. Es legítimo en \
-              sindicación de contenido, pero cuando no es deliberado regala el posicionamiento \
-              al otro dominio: la propia página deja de indexarse. Suele venir de una migración \
-              a medias o de un entorno de pruebas copiado.",
-    desc_en: "The canonical points to a host other than the page's own. That is legitimate for \
-              syndicated content, but when it is not deliberate it hands the ranking to the \
-              other domain: the page itself stops being indexed. It usually comes from a \
-              half-finished migration or a copied staging environment.",
     references: &[],
 };
 
@@ -166,15 +96,6 @@ pub static DUP_CONTENT_EXACT: RuleMeta = RuleMeta {
     category: Category::Duplicate,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Contenido idéntico",
-    name_en: "Identical content",
-    desc_es: "Dos o más URLs indexables devuelven exactamente el mismo HTML, byte a byte. \
-              Compiten entre sí por las mismas consultas y reparten los enlaces entrantes en vez \
-              de sumarlos. Se resuelve dejando una indexable y canonizando las demás hacia ella.",
-    desc_en: "Two or more indexable URLs return exactly the same HTML, byte for byte. They \
-              compete against each other for the same queries and split incoming links instead \
-              of adding them up. Fix it by keeping one indexable and canonicalising the rest \
-              to it.",
     references: &[],
 };
 
@@ -184,18 +105,6 @@ pub static DUP_CONTENT_NEAR: RuleMeta = RuleMeta {
     category: Category::Duplicate,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Contenido casi idéntico",
-    name_en: "Near-duplicate content",
-    desc_es: "Dos o más URLs indexables tienen casi el mismo texto visible aunque su HTML no \
-              sea idéntico: cambian una fecha, un widget o unas pocas frases. Suele tratarse de \
-              páginas de etiqueta y de categoría que listan los mismos artículos, o de una \
-              entrada reescrita sobre otra. Google elige una para mostrarla y aparta las demás. \
-              Conviene fusionarlas, diferenciarlas o canonizarlas hacia la principal.",
-    desc_en: "Two or more indexable URLs have almost the same visible text even though their HTML \
-              is not identical: a date, a widget or a few sentences change. They are usually tag \
-              and category pages listing the same posts, or one post rewritten over another. \
-              Google picks one to show and sets the others aside. Merge them, set them apart or \
-              canonicalise them to the main one.",
     references: &[],
 };
 

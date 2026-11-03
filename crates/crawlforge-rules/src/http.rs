@@ -63,14 +63,6 @@ pub static HTTP_404_INTERNAL: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Enlace interno roto",
-    name_en: "Broken internal link",
-    desc_es: "Una URL del propio sitio devuelve 4xx y hay páginas enlazándola. Gasta presupuesto \
-              de rastreo, corta el flujo de enlazado interno hacia lo que había ahí y deja al \
-              visitante en una página de error.",
-    desc_en: "A URL on this site returns 4xx and there are pages linking to it. It wastes crawl \
-              budget, cuts the flow of internal links to whatever used to be there, and leaves \
-              the visitor on an error page.",
     references: &[],
 };
 
@@ -80,16 +72,6 @@ pub static HTTP_404_EXTERNAL: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Enlace externo roto",
-    name_en: "Broken external link",
-    desc_es: "El sitio enlaza a una URL de otro dominio que ya no existe: responde 404 o 410, o \
-              su dominio no resuelve. No penaliza como un 404 propio, pero manda al visitante \
-              a una página de error y envejece el contenido: una guía llena de enlaces muertos \
-              deja de parecer mantenida.",
-    desc_en: "The site links to a URL on another domain that is gone: it answers 404 or 410, or \
-              its domain does not resolve. It does not hurt like a 404 of your own, but it \
-              sends the visitor to an error page and ages the content: a guide full of dead \
-              links stops looking maintained.",
     references: &[],
 };
 
@@ -99,16 +81,6 @@ pub static HTTP_EXTERNAL_UNVERIFIABLE: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Enlace externo sin verificar",
-    name_en: "Unverifiable external link",
-    desc_es: "El sitio enlaza a una URL de otro dominio que rechazó la comprobación: respondió \
-              401, 403 o 429. Suele ser un muro antibots, un muro de pago o un límite de \
-              peticiones, y la página casi siempre abre bien en un navegador. No se da por rota \
-              porque no hay forma de saberlo desde aquí: ábrela para confirmar que sigue viva.",
-    desc_en: "The site links to a URL on another domain that refused the check: it answered \
-              401, 403 or 429. That is usually an anti-bot wall, a paywall or a rate limit, and \
-              the page almost always opens fine in a browser. It is not called broken because \
-              there is no way to tell from here: open it to confirm it is still there.",
     references: &[],
 };
 
@@ -118,14 +90,6 @@ pub static HTTP_5XX: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Error de servidor",
-    name_en: "Server error",
-    desc_es: "La URL devuelve 5xx: el servidor ha fallado al construir la respuesta. Google \
-              retira de su índice lo que responde así de forma sostenida y reduce el ritmo de \
-              rastreo de todo el sitio mientras dure.",
-    desc_en: "The URL returns 5xx: the server failed to build the response. Google drops pages \
-              that answer this way for long from its index, and slows down crawling of the whole \
-              site while it lasts.",
     references: &[],
 };
 
@@ -135,14 +99,6 @@ pub static HTTP_REDIRECT_CHAIN: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Cadena de redirecciones",
-    name_en: "Redirect chain",
-    desc_es: "Se llega al destino final tras dos o más saltos seguidos. Cada salto suma latencia \
-              para el visitante y gasto de rastreo, y suele delatar dos reglas de reescritura \
-              que se pisan. El arreglo es apuntar el primer salto directamente al final.",
-    desc_en: "The final destination is reached after two or more consecutive hops. Every hop \
-              adds latency for the visitor and crawl cost, and usually means two rewrite rules \
-              are stepping on each other. The fix is to point the first hop straight at the end.",
     references: &[],
 };
 
@@ -152,14 +108,6 @@ pub static HTTP_REDIRECT_LOOP: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Bucle de redirección",
-    name_en: "Redirect loop",
-    desc_es: "Las redirecciones vuelven sobre una URL ya visitada, así que el destino no se \
-              alcanza nunca. El navegador corta con un error y el buscador no llega a ver \
-              contenido: para todos los efectos, esa parte del sitio no existe.",
-    desc_en: "The redirects come back to a URL already visited, so the destination is never \
-              reached. The browser gives up with an error and the crawler never sees any \
-              content: for all practical purposes that part of the site does not exist.",
     references: &[],
 };
 
@@ -169,14 +117,6 @@ pub static HTTP_REDIRECT_TO_404: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Redirección a un error",
-    name_en: "Redirect to error page",
-    desc_es: "La redirección acaba en una URL que devuelve 4xx. Es el peor de los dos mundos: se \
-              conserva la redirección que hacía creer que el contenido se había movido, pero el \
-              destino tampoco existe, así que el enlace y su autoridad se pierden igual.",
-    desc_en: "The redirect ends on a URL that returns 4xx. It is the worst of both worlds: the \
-              redirect that suggested the content had moved is still there, but the destination \
-              does not exist either, so the link and its authority are lost anyway.",
     references: &[],
 };
 
@@ -186,14 +126,6 @@ pub static HTTP_MIXED_CONTENT: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Contenido mixto",
-    name_en: "Mixed content",
-    desc_es: "Una página servida por HTTPS carga imágenes, hojas de estilo o scripts por HTTP. \
-              El navegador bloquea los scripts y las hojas de estilo sin avisar al visitante, y \
-              marca la conexión como no segura: la página se ve rota y deja de dar confianza.",
-    desc_en: "A page served over HTTPS loads images, stylesheets or scripts over HTTP. The \
-              browser silently blocks scripts and stylesheets and flags the connection as not \
-              secure: the page looks broken and stops inspiring trust.",
     references: &[],
 };
 
@@ -203,14 +135,6 @@ pub static HTTP_NO_HTTPS: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "El sitio responde por HTTP",
-    name_en: "Site answers over HTTP",
-    desc_es: "Hay URLs internas que sirven contenido por HTTP sin redirigir a HTTPS. El sitio \
-              queda accesible en dos direcciones distintas para la misma página —contenido \
-              duplicado— y el navegador avisa al visitante de que la conexión no es segura.",
-    desc_en: "Some internal URLs serve content over HTTP without redirecting to HTTPS. The site \
-              stays reachable at two different addresses for the same page — duplicate content \
-              — and the browser warns the visitor that the connection is not secure.",
     references: &[],
 };
 
@@ -220,14 +144,6 @@ pub static HTTP_SLOW_RESPONSE: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Respuesta lenta",
-    name_en: "Slow response",
-    desc_es: "El servidor tarda más de un segundo en enviar el primer byte. Ese tiempo se suma \
-              íntegro al de carga que mide Core Web Vitals, y limita cuántas páginas alcanza a \
-              rastrear el buscador en cada visita.",
-    desc_en: "The server takes more than a second to send the first byte. That time is added in \
-              full to the load time Core Web Vitals measures, and it caps how many pages the \
-              crawler gets through on each visit.",
     references: &[],
 };
 
@@ -237,14 +153,6 @@ pub static HTTP_LARGE_PAGE: RuleMeta = RuleMeta {
     category: Category::Http,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "HTML demasiado grande",
-    name_en: "Oversized HTML",
-    desc_es: "El documento HTML pasa de 500 KB sin contar imágenes ni scripts. Retrasa el primer \
-              pintado en conexiones móviles y suele indicar que la plantilla vuelca contenido \
-              que la página no muestra, o que hay CSS y JS incrustados que deberían ir aparte.",
-    desc_en: "The HTML document is over 500 KB, images and scripts aside. It delays first paint \
-              on mobile connections and usually means the template dumps content the page never \
-              shows, or that inlined CSS and JS should live in their own files.",
     references: &[],
 };
 

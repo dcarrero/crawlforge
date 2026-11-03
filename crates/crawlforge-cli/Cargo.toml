@@ -26,3 +26,5 @@ rust_xlsxwriter.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+fluent-bundle.workspace = true
+unicode-width.workspace = true

@@ -21,6 +21,10 @@ discipline: it will not merge.
 
 1. **Declare its `RuleMeta`** as a `pub static` in the module for its category. **The ID is
    forever**: a historical diff between two crawls depends on it not changing meaning.
+   Its name and description go in `locales/en/rules.ftl` and `locales/es/rules.ftl`, one message
+   per rule ID (see [Adding or improving a language](#adding-or-improving-a-language)); every
+   other language that has been translated needs it too, or the completeness test fails — write
+   the English there and say so in the pull request, and a translator will pick it up.
 2. **Implement `PageRule` or `SiteRule`** on an empty struct. `PageRule` is evaluated during the
    crawl, on one page at a time, and must be cheap. `SiteRule` runs once at the end, in SQL over
    the whole store — use it when the answer needs the complete picture: duplicates, orphans,
@@ -32,6 +36,81 @@ discipline: it will not merge.
 
 `MetaTitleMissing` and `MetaTitleDuplicate` are the two to copy from: one page-level, one
 site-level, each with its metadata, its evaluation and its tests.
+
+## Adding or improving a language
+
+Every text the user reads lives in [Fluent](https://projectfluent.org/fluent/guide/) files, two per
+language, compiled into the binary:
+
+```
+locales/<code>/cli.ftl     messages of the command line: report, inspect, diff, portfolio…
+locales/<code>/rules.ftl   the name and description of every rule
+```
+
+The codes are `en`, `es`, `de`, `fr`, `it`, `nl`, `tr`, `pt`, `ja` and `pl`. **English is the
+source and the authority**: when a translation and English disagree, English is right and the
+translation is fixed. A folder whose files have no messages (only the header comment) is a
+language not translated yet: `--lang <code>` is accepted and shows English. As soon as a file has
+one message it must have all of them.
+
+To translate one:
+
+1. Copy `locales/en/cli.ftl` and `locales/en/rules.ftl` over the two files of your folder, and
+   translate the text after each `=`. Translate both files in the same change: a language with
+   one file translated and the other not fails the test.
+2. Run the completeness test and fix what it lists:
+
+   ```bash
+   cargo test -p crawlforge-rules -p crawlforge-cli -- translated
+   ```
+
+   It names every problem at once, with file and key: a key missing, a key English does not have,
+   a variable that differs from English, a syntax error, a suffix that lost its leading space.
+3. Look at the result: `crawlforge rules --lang <code> --detail`, and `report`/`inspect` on a
+   crawl file.
+4. Run `tools/verificar.sh` before opening the pull request. Translating `rules.ftl` adds your
+   language to `rules.json`; the script regenerates it and asks you to commit it.
+
+What the parts of a message mean:
+
+- **The key** (`crawl_finished`, `META-TITLE-MISSING`) is an identifier. Never translate or
+  rename it.
+- **Variables** (`{ $urls }`, `{ $path }`) are filled in by the program. Keep every one English
+  has, with the same name; move them wherever your grammar needs them. Do not add new ones.
+- **Attributes** (`.description` under each rule) are part of the message: translate their text,
+  keep the line that starts with `.description =`.
+- **Plurals** use selectors over the [CLDR plural categories](https://www.unicode.org/cldr/charts/latest/supplemental/language_plural_rules.html)
+  of your language:
+
+  ```ftl
+  # English: pages = { $n -> [one] { $n } page *[other] { $n } pages }
+  pages = { $n ->
+          [one] { $n } strona
+          [few] { $n } strony
+          [many] { $n } stron
+         *[other] { $n } strony
+      }
+  ```
+
+  English uses `[one]`/`*[other]`; Polish needs `[one]`, `[few]`, `[many]` and `*[other]`;
+  Japanese needs no selector at all. You may add a selector where English has none, as long as
+  the selector is a variable English uses and it holds a count (a selector over text always takes
+  the `*` default). The variant marked `*` is mandatory and is the one used when no other
+  matches.
+- **Spaces at the ends** are trimmed by Fluent. A message that starts or ends with a space in
+  English starts with `{" "}` there, because it is glued to another text (`crawl_failed_suffix =
+  {" "}({ $n } failed)`). Keep it.
+- **Literal text** that Fluent would read as syntax is written as a string: `{"{"}`, and `{"["}`,
+  `{"*"}` or `{"."}` at the start of a continuation line. A continuation line is indented; to keep
+  spaces at its start, write them as `{"    "}`.
+- **What not to translate**: rule IDs, command names and flags (`crawlforge resume`,
+  `--max-external`), file names, HTTP status codes and anything in backticks that is a value
+  (`noindex`, `max_urls`). Backticks and `<tags>` in descriptions are literal: keep them.
+- Comments (`#`, `##`, `###`) are context for you and are not shown. Many are in Spanish, from when
+  the code was; English is the reference text.
+
+Numbers are formatted by the program with your language's separators (`1.234` in German, `1 234`
+in Polish); do not write them by hand.
 
 ## Three things that will get a rule sent back
 

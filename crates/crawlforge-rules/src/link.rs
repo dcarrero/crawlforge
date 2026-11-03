@@ -30,16 +30,6 @@ pub static LINK_ANCHOR_EMPTY: RuleMeta = RuleMeta {
     category: Category::Links,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Enlace interno sin texto",
-    name_en: "Internal link without text",
-    desc_es: "Hay enlaces internos sin texto, sin imagen y sin aria-label: un icono pintado con \
-              CSS, un bloque entero convertido en enlace vacío. El buscador no recibe ninguna \
-              pista de a qué lleva y quien usa lector de pantalla oye «enlace» y nada más. Dale \
-              un texto, aunque sea oculto a la vista, o un aria-label que diga a dónde va.",
-    desc_en: "Some internal links have no text, no image and no aria-label: an icon drawn with \
-              CSS, a whole block turned into an empty link. The search engine gets no hint of \
-              where it leads, and someone using a screen reader hears «link» and nothing else. \
-              Give it text, even if visually hidden, or an aria-label saying where it goes.",
     references: &[],
 };
 
@@ -49,18 +39,6 @@ pub static LINK_ANCHOR_GENERIC: RuleMeta = RuleMeta {
     category: Category::Links,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Texto de enlace genérico",
-    name_en: "Generic link text",
-    desc_es: "Hay enlaces internos cuyo texto entero es una fórmula como «leer más», «aquí» o \
-              «haz clic aquí». Ese texto no dice nada de la página de destino, que es justo lo \
-              que el buscador lee en él, y fuera de contexto —como lo recorre un lector de \
-              pantalla— todos los enlaces dicen lo mismo. Basta con que el texto nombre el \
-              destino: «leer más sobre tarifas» en vez de «leer más».",
-    desc_en: "Some internal links consist entirely of a stock phrase such as «read more», \
-              «here» or «click here». That text says nothing about the target page, which is \
-              exactly what the search engine reads in it, and out of context —the way a screen \
-              reader lists them— every link says the same. It is enough for the text to name \
-              the target: «read more about pricing» instead of «read more».",
     references: &[],
 };
 

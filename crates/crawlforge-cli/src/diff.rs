@@ -1669,12 +1669,12 @@ pub fn print_context(outcome: &DiffOutcome) {
 /// Una línea de recuento con el número pegado a la columna de la derecha, mida lo que mida la
 /// etiqueta en cualquiera de los idiomas. Los anchos fijos por línea del diseño anterior
 /// estaban calibrados a mano para el inglés y descuadraban con cualquier otra etiqueta.
-/// Cuenta caracteres, no bytes: «Códigos» mide 7, no 8.
+/// Cuenta columnas de terminal, no bytes: «Códigos» mide 7, no 8, y un ideograma mide 2.
 fn count_line(indent: usize, label: &str, value: &str) -> String {
-    /// Columna (en caracteres) donde termina el número, alineada con el ancho de las cabeceras.
+    /// Columna (de terminal) donde termina el número, alineada con el ancho de las cabeceras.
     const NUMBER_COLUMN: usize = 44;
     let pad = NUMBER_COLUMN
-        .saturating_sub(indent + label.chars().count() + value.chars().count())
+        .saturating_sub(indent + i18n::display_width(label) + i18n::display_width(value))
         .max(1);
     format!("{}{label}{}{value}", " ".repeat(indent), " ".repeat(pad))
 }
@@ -1685,7 +1685,8 @@ fn print_header(outcome: &DiffOutcome, lang: Lang) {
         [(msg::label_before(lang), &outcome.before), (msg::label_after(lang), &outcome.after)]
     {
         println!(
-            "  {etiqueta:<9} {:<19} {}   {}",
+            "  {} {:<19} {}   {}",
+            i18n::pad(&etiqueta, 9),
             info.started_at,
             msg::diff_crawl_counts(
                 lang,
@@ -1695,16 +1696,16 @@ fn print_header(outcome: &DiffOutcome, lang: Lang) {
             info.path
         );
     }
-    println!("  {:<9} {}", msg::label_site(lang), outcome.after.base_url);
+    println!("  {} {}", i18n::pad(&msg::label_site(lang), 9), outcome.after.base_url);
     println!(
-        "  {:<9} {}",
-        msg::label_common(lang),
+        "  {} {}",
+        i18n::pad(&msg::label_common(lang), 9),
         msg::diff_common_note(lang, i18n::count(lang, outcome.urls_common))
     );
     if let Some(saved) = &outcome.saved {
         println!(
-            "  {:<9} {}",
-            msg::label_saved(lang),
+            "  {} {}",
+            i18n::pad(&msg::label_saved(lang), 9),
             msg::diff_saved_note(lang, &saved.generated_at, &saved.tool_version, saved.path.display())
         );
     }
@@ -1722,7 +1723,7 @@ fn print_warnings(outcome: &DiffOutcome, lang: Lang) {
         } else {
             msg::tag_warning(lang)
         };
-        println!("  {etiqueta:<15} {}", warning.message(lang));
+        println!("  {} {}", i18n::pad(&etiqueta, 15), warning.message(lang));
     }
 }
 
@@ -1739,8 +1740,8 @@ fn print_worse(outcome: &DiffOutcome, lang: Lang) {
         println!("{}", count_line(2, &msg::label_new_findings(lang), &n(nuevos.len())));
         for (severity, rule_id, ejemplos) in group_issues(&nuevos, lang) {
             println!(
-                "    {:<9} {rule_id:<30} {:>6}",
-                i18n::severity_word(lang, &severity),
+                "    {} {rule_id:<30} {:>6}",
+                i18n::pad(&i18n::severity_word(lang, &severity), 9),
                 n(ejemplos.len())
             );
             for url in ejemplos.iter().take(MAX_EXAMPLES) {
@@ -1840,8 +1841,8 @@ fn print_better(outcome: &DiffOutcome, lang: Lang) {
         let cambios: Vec<&Change> = outcome.of(ChangeType::IssueResolved).collect();
         for (severity, rule_id, ejemplos) in group_issues(&cambios, lang) {
             println!(
-                "    {:<9} {rule_id:<30} {:>6}",
-                i18n::severity_word(lang, &severity),
+                "    {} {rule_id:<30} {:>6}",
+                i18n::pad(&i18n::severity_word(lang, &severity), 9),
                 n(ejemplos.len())
             );
         }
@@ -1966,7 +1967,7 @@ fn print_gate(outcome: &DiffOutcome, lang: Lang) {
         }
     }
     for hit in &outcome.fail_on {
-        // FAIL y PASS se quedan tal cual en los dos idiomas: son la convención de cualquier
+        // FAIL y PASS se quedan tal cual en todos los idiomas: son la convención de cualquier
         // salida de CI y lo primero que busca un grep.
         println!(
             "  FAIL   {:<30} {}",

@@ -53,16 +53,6 @@ pub static INDEX_ROBOTS_TXT_MISSING: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Sin robots.txt",
-    name_en: "Missing robots.txt",
-    desc_es: "El sitio no sirve /robots.txt. No impide que se le indexe —a falta de fichero se \
-              rastrea todo— pero se pierde el sitio donde se anuncia el sitemap y donde se \
-              excluyen las zonas que no aportan nada al buscador, como los resultados de \
-              búsqueda interna o las páginas de carrito.",
-    desc_en: "The site does not serve /robots.txt. It does not prevent indexing —with no file, \
-              everything is crawlable— but it gives up the place where the sitemap is announced \
-              and where you exclude the areas that add nothing for a search engine, such as \
-              internal search results or cart pages.",
     references: &[],
 };
 
@@ -72,16 +62,6 @@ pub static INDEX_ROBOTS_TXT_BLOCKS_ALL: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "robots.txt bloquea el sitio entero",
-    name_en: "robots.txt blocks the whole site",
-    desc_es: "El robots.txt prohíbe rastrear la raíz del sitio, así que ninguna página puede \
-              leerse ni indexarse. Es la forma más rápida y silenciosa de desaparecer de Google, \
-              y casi siempre es el mismo accidente: el fichero del entorno de pruebas, que lleva \
-              Disallow: /, subido a producción en un despliegue.",
-    desc_en: "The robots.txt forbids crawling the site root, so no page can be read or indexed. \
-              It is the fastest and quietest way to disappear from Google, and it is nearly \
-              always the same accident: the staging file, which carries Disallow: /, shipped to \
-              production in a deploy.",
     references: &[],
 };
 
@@ -91,16 +71,6 @@ pub static INDEX_SITEMAP_ERROR: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Sitemap con errores",
-    name_en: "Sitemap with errors",
-    desc_es: "Un sitemap no responde, tiene el XML mal formado o se pasa de los límites del \
-              protocolo (50.000 URLs o 50 MB). El buscador deja de leerlo donde encuentra el \
-              error, así que todo lo que venga detrás no llega a descubrirse por esa vía y nadie \
-              avisa: el sitemap sigue ahí, aparentemente correcto.",
-    desc_en: "A sitemap does not respond, has malformed XML, or exceeds the protocol limits \
-              (50,000 URLs or 50 MB). Search engines stop reading at the error, so everything \
-              after it is never discovered through that route, and nothing warns you: the \
-              sitemap is still there, seemingly fine.",
     references: &[],
 };
 
@@ -134,19 +104,6 @@ pub static INDEX_NOINDEX: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Con noindex",
-    name_en: "Noindex",
-    desc_es: "La página pide que no se indexe, por su meta robots o por la cabecera \
-              X-Robots-Tag. Google la rastrea y la descarta: no aparecerá en resultados por \
-              ninguna consulta. En archivos, etiquetas y páginas de sistema suele ser una \
-              decisión deliberada del plugin SEO, y por eso el aviso es moderado; se eleva a \
-              crítico si afecta a la portada, y el conflicto con el sitemap tiene su propia \
-              regla.",
-    desc_en: "The page asks not to be indexed, either through its meta robots tag or the \
-              X-Robots-Tag header. Google crawls it and drops it: it will not show up for any \
-              query. On archives, tags and utility pages it is usually a deliberate choice of \
-              the SEO plugin, which is why the warning is moderate; it escalates to critical on \
-              the home page, and the conflict with the sitemap has its own rule.",
     references: &[],
 };
 
@@ -156,16 +113,6 @@ pub static INDEX_ROBOTS_BLOCKED: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Bloqueada por robots.txt",
-    name_en: "Blocked by robots.txt",
-    desc_es: "El sitio enlaza esta URL desde sus propias páginas y a la vez la prohíbe en \
-              robots.txt. Google no puede leerla, así que no sabe qué contiene ni sigue sus \
-              enlaces: el enlace interno no lleva a ninguna parte y la autoridad que le pasa se \
-              pierde. Es distinto de un noindex, que sí permite leer la página.",
-    desc_en: "The site links to this URL from its own pages and at the same time forbids it in \
-              robots.txt. Google cannot read it, so it does not know what it contains nor does \
-              it follow its links: the internal link leads nowhere and the authority it passes \
-              is lost. This is not the same as noindex, which still allows reading the page.",
     references: &[],
 };
 
@@ -175,16 +122,6 @@ pub static INDEX_BLOCKED_IN_SITEMAP: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "En el sitemap y bloqueada",
-    name_en: "Blocked but in sitemap",
-    desc_es: "El sitemap presenta la URL como contenido que se quiere indexar y robots.txt \
-              prohíbe rastrearla. Las dos instrucciones se contradicen, Search Console lo \
-              reporta como error de cobertura y la URL se queda fuera del índice. Casi siempre \
-              es un Disallow escrito para otra cosa que atrapó de paso a una sección publicada.",
-    desc_en: "The sitemap presents the URL as content you want indexed while robots.txt forbids \
-              crawling it. The two instructions contradict each other, Search Console flags it \
-              as a coverage error and the URL stays out of the index. It is almost always a \
-              Disallow written for something else that caught a published section along the way.",
     references: &[],
 };
 
@@ -194,16 +131,6 @@ pub static INDEX_NOINDEX_IN_SITEMAP: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "En el sitemap y con noindex",
-    name_en: "Noindex but in sitemap",
-    desc_es: "La URL está en el sitemap, que es la lista de lo que el sitio quiere ver \
-              indexado, y su propia cabecera o meta robots dice lo contrario. Una de las dos \
-              cosas está mal: o sobra del sitemap, o el noindex es un resto que nadie ha \
-              retirado. Mientras conviven, el sitio se contradice ante el buscador.",
-    desc_en: "The URL is in the sitemap, which is the list of what the site wants indexed, and \
-              its own header or meta robots says the opposite. One of the two is wrong: either \
-              it does not belong in the sitemap, or the noindex is a leftover nobody removed. \
-              While both coexist, the site contradicts itself in front of the search engine.",
     references: &[],
 };
 
@@ -213,18 +140,6 @@ pub static INDEX_NOFOLLOW_INTERNAL: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Enlace interno con nofollow",
-    name_en: "Nofollow internal link",
-    desc_es: "Esta página enlaza a otra del mismo sitio con rel=nofollow. El enlace no \
-              transmite autoridad ni sirve para descubrir el destino, así que dentro de un \
-              mismo dominio rara vez tiene sentido: el «sculpting» de PageRank dejó de \
-              funcionar en 2009. Suele venir de un plugin o de una plantilla que lo pone en \
-              todos los enlaces sin distinguir internos de externos.",
-    desc_en: "This page links to another page on the same site with rel=nofollow. The link \
-              passes no authority and does not help discover the target, so within one domain \
-              it rarely makes sense: PageRank sculpting stopped working in 2009. It usually \
-              comes from a plugin or template that adds it to every link without telling \
-              internal from external.",
     references: &[],
 };
 
@@ -234,16 +149,6 @@ pub static INDEX_SITEMAP_MISSING: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Sin sitemap",
-    name_en: "No sitemap",
-    desc_es: "No se ha encontrado ningún sitemap: ni robots.txt lo anuncia, ni está en las \
-              rutas habituales, ni declara ninguna URL. Sin él, el buscador solo llega a lo que \
-              esté enlazado y a la velocidad que le permita el enlazado interno; y se pierde el \
-              contraste entre lo que el sitio dice publicar y lo que se alcanza rastreando.",
-    desc_en: "No sitemap was found: robots.txt does not announce one, it is not at the usual \
-              paths, and none declares any URL. Without it the search engine only reaches what \
-              is linked, at whatever pace internal linking allows; and you lose the comparison \
-              between what the site claims to publish and what a crawl actually reaches.",
     references: &[],
 };
 
@@ -253,16 +158,6 @@ pub static INDEX_ORPHAN_PAGE: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Página huérfana",
-    name_en: "Orphan page",
-    desc_es: "El sitio declara esta URL en su sitemap pero ninguna de sus páginas la enlaza. \
-              Un visitante no puede llegar a ella navegando y el buscador la ve como contenido \
-              sin contexto ni autoridad interna. Es el hallazgo que aparece al cruzar lo \
-              declarado con lo alcanzado, y no se puede obtener mirando una página suelta.",
-    desc_en: "The site declares this URL in its sitemap but none of its pages links to it. A \
-              visitor cannot reach it by browsing and the search engine sees content with no \
-              context and no internal authority. It is the finding that comes from comparing \
-              what is declared against what is reached, and no single page can reveal it.",
     references: &[],
 };
 
@@ -272,16 +167,6 @@ pub static INDEX_DEEP_PAGE: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Demasiados clics desde la portada",
-    name_en: "Too many clicks from home",
-    desc_es: "Hacen falta más de cuatro clics desde la portada para llegar a esta página. \
-              Cuanta más distancia, menos autoridad interna recibe y menos a menudo la revisita \
-              el buscador; en catálogos y archivos es el síntoma de una paginación sin atajos, \
-              donde la página 40 solo se alcanza pasando por las 39 anteriores.",
-    desc_en: "It takes more than four clicks from the home page to reach this page. The further \
-              away, the less internal authority it gets and the less often the search engine \
-              revisits it; in catalogues and archives it is the symptom of pagination with no \
-              shortcuts, where page 40 is only reachable through the previous 39.",
     references: &[],
 };
 
@@ -291,16 +176,6 @@ pub static INDEX_NO_INTERNAL_LINKS_IN: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Sin enlaces internos entrantes",
-    name_en: "No inbound internal links",
-    desc_es: "Ninguna otra página del sitio enlaza a esta, aunque es indexable y se publica. \
-              Sin enlaces entrantes no recibe autoridad interna, el buscador tarda mucho más en \
-              revisitarla y sus cambios pasan desapercibidos. Es lo primero que se mira cuando \
-              una página nueva no acaba de posicionar.",
-    desc_en: "No other page on the site links to this one, even though it is indexable and \
-              published. With no inbound links it receives no internal authority, the search \
-              engine takes far longer to revisit it and its changes go unnoticed. It is the \
-              first thing to check when a new page never quite ranks.",
     references: &[],
 };
 
@@ -310,19 +185,6 @@ pub static INDEX_SECTION_DISCONNECTED: RuleMeta = RuleMeta {
     category: Category::Indexability,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Sección desconectada del enlazado interno",
-    name_en: "Section disconnected from internal linking",
-    desc_es: "Hay un grupo de páginas que se enlazan entre sí pero al que no se llega desde la \
-              portada siguiendo enlaces normales: el puente que las une al resto del sitio es \
-              JavaScript, un formulario o no existe. El buscador solo las descubre por el \
-              sitemap y les llega poca autoridad interna. La causa es una —falta un enlace \
-              rastreable hacia la sección— y se arregla una vez, no página a página.",
-    desc_en: "A group of pages link to each other but cannot be reached from the home page by \
-              following regular links: the bridge joining them to the rest of the site is \
-              JavaScript, a form, or missing altogether. Search engines only discover them \
-              through the sitemap and little internal authority flows to them. The cause is \
-              one —a crawlable link into the section is missing— and it is fixed once, not \
-              page by page.",
     references: &[],
 };
 

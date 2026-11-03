@@ -61,6 +61,7 @@ interfaz dentro del core, el diseño está mal.
 | Export | `rust_xlsxwriter`, `csv` | |
 | Errores | `thiserror` en el core, `anyhow` en la CLI | |
 | Logs | `tracing` | |
+| Localización | `fluent-bundle`, `fluent-syntax`; `unicode-width` | Textos en `locales/<idioma>/*.ftl`, incrustados. Plurales CLDR; columnas de terminal por ancho visible |
 
 **El stack está cerrado.** Añadir una dependencia para algo que se resuelve en veinte líneas es una
 decisión con coste: cada crate es superficie de auditoría, tiempo de compilación y una versión que
@@ -81,8 +82,9 @@ pendiente.
 
 El castellano sobrevive en dos sitios, y en los dos es texto de producto, no de ingeniería:
 
-- Los campos `name_es` y `desc_es` del catálogo de reglas, y las cadenas de `i18n.rs` que se piden
-  con `--lang es`. Eso lo lee el usuario final.
+- `locales/es/` —el catálogo de reglas (`rules.ftl`) y los mensajes de la CLI (`cli.ftl`) que se
+  piden con `--lang es`—, como cualquier otra carpeta de idioma de `locales/`. Eso lo lee el
+  usuario final.
 - Los **datos** de un test: la cadena contra la que un `assert` compara, un texto que tiene que
   pasar de setenta caracteres, las tildes con las que se mide el ancho de una tipografía. Eso no
   es prosa, es la entrada de la prueba, y traducirlo la rompe o la debilita.

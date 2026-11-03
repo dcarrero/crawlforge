@@ -16,14 +16,6 @@ pub static META_TITLE_MISSING: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Sin título",
-    name_en: "Missing title",
-    desc_es: "La página es indexable y no tiene <title>, o lo tiene vacío. Es el factor on-page \
-              con más peso que se controla directamente, y es el texto en azul del resultado de \
-              búsqueda: sin él, Google inventa uno con lo que encuentra en la página.",
-    desc_en: "The page is indexable and has no <title>, or an empty one. It is the on-page \
-              factor with the most weight that you control directly, and it is the blue text in \
-              the search result: without it, Google makes one up from whatever it finds.",
     references: &[],
 };
 
@@ -33,14 +25,6 @@ pub static META_TITLE_DUPLICATE: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Título duplicado",
-    name_en: "Duplicate title",
-    desc_es: "Dos o más páginas indexables comparten el mismo <title>. Google tiene que elegir \
-              cuál de ellas mostrar para la misma consulta, y compiten entre sí en vez de \
-              sumar. Es el síntoma más común de paginación o de archivos mal configurados.",
-    desc_en: "Two or more indexable pages share the same <title>. Google has to pick which one \
-              to show for the same query, so they compete with each other instead of adding up. \
-              It is the most common symptom of pagination or misconfigured archives.",
     references: &[],
 };
 
@@ -50,16 +34,6 @@ pub static META_TITLE_TOO_LONG: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Título demasiado ancho",
-    name_en: "Title too long",
-    desc_es: "El título no cabe en el resultado de búsqueda y Google lo corta con puntos \
-              suspensivos, así que la parte final —muchas veces la marca, o la palabra clave que \
-              se dejó para el final— no se lee. Se mide en píxeles, no en caracteres: el corte lo \
-              decide el ancho renderizado.",
-    desc_en: "The title does not fit in the search result and Google truncates it with an \
-              ellipsis, so the tail —often the brand, or the keyword left for last— is never \
-              read. It is measured in pixels, not characters: the cut is decided by rendered \
-              width.",
     references: &[],
 };
 
@@ -69,15 +43,6 @@ pub static META_TITLE_TOO_SHORT: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Título demasiado corto",
-    name_en: "Title too short",
-    desc_es: "El título deja sin usar buena parte del espacio que el resultado de búsqueda \
-              ofrece. No es un error, es espacio desaprovechado: cabe una variante de la \
-              consulta o un motivo para hacer clic, y a menudo indica una plantilla que solo \
-              imprime el nombre de la sección.",
-    desc_en: "The title leaves most of the space the search result offers unused. It is not an \
-              error but wasted space: there is room for a query variant or a reason to click, \
-              and it often points to a template that only prints the section name.",
     references: &[],
 };
 
@@ -87,16 +52,6 @@ pub static META_TITLE_MULTIPLE: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Varias etiquetas de título",
-    name_en: "Multiple title tags",
-    desc_es: "La página trae más de un <title>. El navegador y Google se quedan con el primero y \
-              descartan el resto en silencio, de modo que el título que se escribió con cuidado \
-              puede no ser el que se publica. Casi siempre es una plantilla que lo imprime dos \
-              veces, o un plugin de SEO que añade el suyo sin quitar el del tema.",
-    desc_en: "The page carries more than one <title>. Browsers and Google keep the first and \
-              silently discard the rest, so the title that was written with care may not be the \
-              one published. It is nearly always a template printing it twice, or an SEO plugin \
-              adding its own without removing the theme's.",
     references: &[],
 };
 
@@ -106,15 +61,6 @@ pub static META_DESC_MISSING: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Sin meta descripción",
-    name_en: "Missing meta description",
-    desc_es: "La página indexable no declara descripción, así que Google recorta un fragmento \
-              cualquiera del cuerpo para el resultado de búsqueda. No es un factor de \
-              posicionamiento, pero sí el texto que decide el clic, y renunciar a escribirlo es \
-              renunciar a controlarlo.",
-    desc_en: "The indexable page declares no description, so Google clips an arbitrary snippet \
-              of the body for the search result. It is not a ranking factor, but it is the text \
-              that decides the click, and not writing it means not controlling it.",
     references: &[],
 };
 
@@ -124,14 +70,6 @@ pub static META_DESC_DUPLICATE: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Site,
-    name_es: "Meta descripción duplicada",
-    name_en: "Duplicate meta description",
-    desc_es: "Dos o más páginas indexables repiten la misma descripción, con lo que el resultado \
-              de búsqueda no distingue entre ellas y ninguna promete nada concreto. Suele venir \
-              de una descripción por defecto puesta a nivel de sitio que nadie sobrescribió.",
-    desc_en: "Two or more indexable pages repeat the same description, so the search result does \
-              not tell them apart and none of them promises anything specific. It usually comes \
-              from a site-wide default nobody overrode.",
     references: &[],
 };
 
@@ -141,14 +79,6 @@ pub static META_DESC_TOO_LONG: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Meta descripción demasiado ancha",
-    name_en: "Meta description too long",
-    desc_es: "La descripción no cabe en el resultado de búsqueda y se corta, de modo que la \
-              llamada a la acción del final no llega a leerse. Se mide en píxeles, no en \
-              caracteres, porque el corte lo decide el ancho renderizado.",
-    desc_en: "The description does not fit in the search result and gets truncated, so the call \
-              to action at the end is never read. It is measured in pixels, not characters, \
-              because the cut is decided by rendered width.",
     references: &[],
 };
 
@@ -158,14 +88,6 @@ pub static META_DESC_TOO_SHORT: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Meta descripción demasiado corta",
-    name_en: "Meta description too short",
-    desc_es: "La descripción es tan breve que Google tiende a ignorarla y a componer el fragmento \
-              con texto del cuerpo. Con tan poco espacio usado no cabe ni el argumento ni la \
-              variante de la consulta que justificarían el clic.",
-    desc_en: "The description is so brief that Google tends to ignore it and build the snippet \
-              from body text instead. With so little space used there is room for neither the \
-              argument nor the query variant that would justify the click.",
     references: &[],
 };
 
@@ -175,14 +97,6 @@ pub static META_VIEWPORT_MISSING: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Sin meta viewport",
-    name_en: "Missing meta viewport",
-    desc_es: "Sin <meta name=viewport> el móvil dibuja la página a 980 px de ancho y la reduce, \
-              así que el texto queda ilegible y hay que hacer zoom. La indexación es móvil \
-              primero: lo que Google evalúa es esa versión encogida.",
-    desc_en: "Without <meta name=viewport> a phone lays the page out at 980 px wide and scales it \
-              down, leaving text unreadable and forcing pinch-zoom. Indexing is mobile-first: \
-              what Google evaluates is that shrunken version.",
     references: &[],
 };
 
@@ -192,18 +106,6 @@ pub static META_OUTSIDE_HEAD: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Metadatos fuera del head",
-    name_en: "Metadata outside the head",
-    desc_es: "El canonical, el meta robots, el hreflang, el título o la descripción quedan fuera \
-              del <head>. Un elemento que no pertenece al head —un <img> de seguimiento, un \
-              <div>, un texto suelto que deja un plugin— lo cierra en ese punto, y Google ignora \
-              todo lo que venga después aunque siga en el código fuente. El efecto es el de no \
-              tenerlos.",
-    desc_en: "The canonical, meta robots, hreflang, title or description end up outside the \
-              <head>. An element that does not belong in the head —a tracking <img>, a <div>, \
-              stray text left by a plugin— closes it at that point, and Google ignores \
-              everything after it even though it is still in the source. The effect is the same \
-              as not having them.",
     references: &[],
 };
 
@@ -213,15 +115,6 @@ pub static META_REFRESH: RuleMeta = RuleMeta {
     category: Category::Meta,
     min_tier: Tier::Free,
     scope: Scope::Page,
-    name_es: "Redirección por meta refresh",
-    name_en: "Meta refresh redirect",
-    desc_es: "La página redirige con <meta http-equiv=refresh> en lugar de con un 301. Google lo \
-              interpreta con reservas, no traslada la autoridad con la misma fiabilidad y el \
-              usuario ve un salto brusco; con un retardo distinto de cero, además, atrapa el \
-              botón de volver del navegador.",
-    desc_en: "The page redirects with <meta http-equiv=refresh> instead of a 301. Google reads it \
-              with reservations, does not pass authority as reliably, and the user sees an abrupt \
-              jump; with a non-zero delay it also traps the browser's back button.",
     references: &[],
 };
 

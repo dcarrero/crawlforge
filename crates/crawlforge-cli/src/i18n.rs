@@ -1,30 +1,32 @@
-//! El catálogo de cadenas de la CLI, con inglés y español.
+//! Los mensajes de la CLI: qué funciones hay, con qué argumentos, y cómo se resuelve el idioma.
+//! Los textos no están aquí: viven en `locales/<idioma>/cli.ftl`, en Fluent.
 //!
-//! # Por qué así y no de otra forma
+//! # Por qué así
 //!
-//! **El inglés es el idioma de origen y el español una traducción** (`CONVENTIONS.md §4`), y habrá
-//! más idiomas. El diseño que hay que evitar es el de los campos `name_es`/`name_en` de
-//! `RuleMeta`: un par de campos por idioma no escala al tercero. Aquí cada mensaje es **una
-//! entrada con una columna por idioma**, generada por el macro [`messages!`]:
+//! **El inglés es el idioma de origen y los demás, traducciones** (`CONVENTIONS.md §4`). Con dos
+//! idiomas, una tabla en Rust con una columna por idioma bastaba y se descartó Fluent. Con diez
+//! deja de bastar: el polaco tiene cuatro formas de plural (`one`, `few`, `many`, `other`) y el
+//! japonés una, y eso no se escribe con `if n == 1`. Ahora cada mensaje es una **declaración**
+//! —nombre y argumentos— en el macro [`messages!`], y su texto, una entrada de `cli.ftl` con el
+//! mismo nombre. Los motivos de Fluent y del cargador están en `crawlforge_rules::l10n`.
 //!
-//! - **Añadir un idioma es añadir una columna**: una variante en [`Lang`], una rama por entrada.
-//!   Ningún `println!` se toca.
-//! - **Una cadena sin traducir no compila.** El macro expande a un `match` exhaustivo sobre
-//!   `Lang`: si `Lang` gana una variante y una entrada no tiene su texto, el compilador señala
-//!   la entrada exacta. No hay hueco que descubrir en producción.
-//! - **Un placeholder desusado no compila.** Los argumentos se pasan como argumentos con nombre
-//!   de `format!`, y `format!` rechaza un argumento con nombre que el texto no usa. Las dos
-//!   columnas quedan obligadas a usar los mismos datos.
-//! - **Sin dependencias.** `fluent` y compañía resuelven pluralización y géneros de cuarenta
-//!   idiomas; para dos idiomas y unos cientos de cadenas, una tabla en Rust da lo mismo con
-//!   coste cero y errores en compilación en vez de en ejecución.
+//! - **Una llamada no cambia.** `msg::crawl_finished(lang, urls, secs)` sigue siendo una función
+//!   con sus argumentos con nombre, así que un `println!` no sabe de Fluent.
+//! - **Lo que antes no compilaba ahora no pasa los tests.** Que cada declaración tenga su texto
+//!   en inglés con exactamente esos argumentos, que el inglés no tenga textos sin declarar y que
+//!   cada traducción tenga todo lo del inglés con las mismas variables lo comprueban los tests de
+//!   este módulo, que `tools/verificar.sh` ejecuta. Fallan listando todos los problemas a la vez.
+//! - **Los plurales se resuelven en el `.ftl`.** Un argumento que llega como recuento formateado
+//!   por [`count`] o [`group_thousands`] (o un entero pequeño) entra en Fluent como número, y los
+//!   selectores `[one]`/`[few]`/`*[other]` eligen la forma según las reglas CLDR del idioma.
+//! - **Un idioma sin traducir habla inglés**, números incluidos: ver [`effective`].
 //!
 //! # Qué NO pasa por aquí
 //!
 //! IDs de regla, URLs, rutas de fichero, códigos de estado, valores de columna de la base de
 //! datos (`max_urls`, `noindex`, `critical` como token de `--fail-on`) y los nombres de los
 //! comandos: son identificadores, no prosa. Tampoco los textos del catálogo de reglas, que
-//! viven en `crawlforge-rules` para que la CLI y las apps digan lo mismo.
+//! viven en `locales/<idioma>/rules.ftl` y se leen con `RuleMeta::name`/`description`.
 //!
 //! # Resolución del idioma
 //!
@@ -34,8 +36,12 @@
 //! inutilizar todos los comandos de la máquina.
 
 use anyhow::{bail, Result};
+use crawlforge_rules::l10n::{self, Catalog};
 use crawlforge_rules::{Lang, Severity};
+use fluent_bundle::FluentArgs;
+use std::fmt::Display;
 use std::sync::OnceLock;
+use unicode_width::UnicodeWidthStr;
 
 // ─────────────────────────────────────────────────────── Resolución del idioma
 
@@ -74,30 +80,54 @@ fn resolve_pure(flag: Option<&str>, env: Option<&str>) -> Result<Lang> {
         // inglés a propósito: si el idioma pedido no se entiende, no hay idioma en el que
         // responder que no sea el de origen.
         let Some(lang) = Lang::parse(flag) else {
-            bail!("language not recognised: {flag}. Available: en and es");
+            bail!("language not recognised: {flag}. Available: {}", Lang::codes());
         };
         return Ok(lang);
     }
     Ok(env.and_then(Lang::parse).unwrap_or_default())
 }
 
+// ─────────────────────────────────────────────────────────── Los textos
+
+/// `locales/<idioma>/cli.ftl`, incrustado en el binario.
+pub static CLI_TEXTS: Catalog = Catalog::new(crawlforge_rules::locale_sources!("cli.ftl"));
+
+/// El idioma en el que de verdad se habla: el pedido si `cli.ftl` tiene su traducción, inglés si
+/// todavía no. Los números siguen a los textos: un mensaje inglés con millares alemanes
+/// (`3.816 URLs`) sería ambiguo, así que mientras un idioma no esté traducido, tampoco sus
+/// separadores.
+pub fn effective(lang: Lang) -> Lang {
+    if CLI_TEXTS.is_translated(lang) {
+        lang
+    } else {
+        Lang::En
+    }
+}
+
+/// Formatea un mensaje de `cli.ftl`. Lo llaman las funciones que genera [`messages!`].
+///
+/// Cada argumento entra como texto, tal como lo imprime su `Display`, salvo cuando es un
+/// recuento tal como lo escribe [`count`]: entonces entra como número para que los plurales
+/// funcionen, y Fluent lo vuelve a escribir igual (`crawlforge_rules::l10n::arg_value`).
+pub fn format(lang: Lang, key: &str, args: &[(&str, &dyn Display)]) -> String {
+    let lang = effective(lang);
+    let fluent_args = (!args.is_empty()).then(|| {
+        let mut fa = FluentArgs::with_capacity(args.len());
+        for (name, value) in args {
+            fa.set(*name, l10n::arg_value(lang, value.to_string()));
+        }
+        fa
+    });
+    // Sin texto ni en inglés solo se llega con un `cli.ftl` roto, que los tests no dejan pasar;
+    // aun así, la clave dice algo más que una cadena vacía.
+    CLI_TEXTS.format(lang, key, None, fluent_args.as_ref()).unwrap_or_else(|| key.to_string())
+}
+
 // ───────────────────────────────────────────────────────── Formato de números
 
 /// Separador de millares según el idioma: `3,816` en inglés, `3.816` en español.
 pub fn group_thousands(lang: Lang, n: u64) -> String {
-    let separator = match lang {
-        Lang::En => ',',
-        Lang::Es => '.',
-    };
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(separator);
-        }
-        out.push(c);
-    }
-    out
+    effective(lang).format_integer(n)
 }
 
 /// [`group_thousands`] para los recuentos `i64` que devuelve SQLite. Nunca son negativos;
@@ -106,16 +136,43 @@ pub fn count(lang: Lang, n: i64) -> String {
     u64::try_from(n).map_or_else(|_| n.to_string(), |v| group_thousands(lang, v))
 }
 
-/// Un número con un decimal, con la coma decimal del español: `12.3` / `12,3`.
+/// Un número con un decimal, con la coma decimal donde el idioma la usa: `12.3` / `12,3`.
 ///
 /// Va a la vez que [`group_thousands`]: un `3.816` de millares junto a un `1.5` de decimal
 /// sería ambiguo, así que o se localizan los dos o ninguno.
 pub fn decimal1(lang: Lang, v: f64) -> String {
     let text = format!("{v:.1}");
-    match lang {
-        Lang::En => text,
-        Lang::Es => text.replace('.', ","),
+    match effective(lang).decimal_separator() {
+        '.' => text,
+        sep => text.replace('.', &sep.to_string()),
     }
+}
+
+// ──────────────────────────────────────────────────────── Ancho en la terminal
+
+/// Columnas que ocupa un texto en la terminal: un ideograma japonés ocupa dos, una letra
+/// acentuada una. El relleno de `format!` (`{:<9}`) cuenta caracteres, que para el inglés y el
+/// español es lo mismo y para el japonés desalinea la tabla.
+pub fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+/// `{text:<width}` contando columnas de terminal en vez de caracteres.
+pub fn pad(text: &str, width: usize) -> String {
+    let w = display_width(text);
+    let mut out = String::with_capacity(text.len() + width.saturating_sub(w));
+    out.push_str(text);
+    out.extend(std::iter::repeat_n(' ', width.saturating_sub(w)));
+    out
+}
+
+/// `{text:>width}` contando columnas de terminal en vez de caracteres.
+pub fn pad_left(text: &str, width: usize) -> String {
+    let w = display_width(text);
+    let mut out = String::with_capacity(text.len() + width.saturating_sub(w));
+    out.extend(std::iter::repeat_n(' ', width.saturating_sub(w)));
+    out.push_str(text);
+    out
 }
 
 // ──────────────────────────────────────────────────────── Cabeceras y etiquetas
@@ -124,72 +181,85 @@ pub fn decimal1(lang: Lang, v: f64) -> String {
 const SECTION_WIDTH: usize = 45;
 
 /// Una cabecera de sección con el ancho de siempre, rellene lo que rellene el título.
-/// Cuenta caracteres y no bytes: «Comparación» mide 11, no 12.
+/// Cuenta columnas y no bytes: «Comparación» mide 11, no 12, y «比較» mide 4.
 pub fn section(title: &str) -> String {
-    let used = 3 + title.chars().count() + 1;
+    let used = 3 + display_width(title) + 1;
     format!("── {title} {}", "─".repeat(SECTION_WIDTH.saturating_sub(used)))
 }
 
 /// Etiqueta de severidad con inicial mayúscula, para informes.
-pub fn severity_label(lang: Lang, s: Severity) -> &'static str {
-    match (s, lang) {
-        (Severity::Critical, Lang::Es) => "Crítico",
-        (Severity::High, Lang::Es) => "Alto",
-        (Severity::Medium, Lang::Es) => "Medio",
-        (Severity::Low, Lang::Es) => "Bajo",
-        (Severity::Info, Lang::Es) => "Informativo",
-        (Severity::Critical, Lang::En) => "Critical",
-        (Severity::High, Lang::En) => "High",
-        (Severity::Medium, Lang::En) => "Medium",
-        (Severity::Low, Lang::En) => "Low",
-        (Severity::Info, Lang::En) => "Info",
-    }
+pub fn severity_label(lang: Lang, s: Severity) -> String {
+    let key = match s {
+        Severity::Critical => "severity_label_critical",
+        Severity::High => "severity_label_high",
+        Severity::Medium => "severity_label_medium",
+        Severity::Low => "severity_label_low",
+        Severity::Info => "severity_label_info",
+    };
+    format(lang, key, &[])
 }
 
 /// Severidad en minúsculas para columnas de tabla, desde el valor tal como está en la base de
 /// datos. Un valor desconocido se devuelve tal cual: enseñar el dato crudo es mejor que ocultarlo.
 pub fn severity_word(lang: Lang, db_value: &str) -> String {
-    match (db_value, lang) {
-        ("critical", Lang::Es) => "crítico".to_string(),
-        ("high", Lang::Es) => "alto".to_string(),
-        ("medium", Lang::Es) => "medio".to_string(),
-        ("low", Lang::Es) => "bajo".to_string(),
-        ("info", Lang::Es) => "info".to_string(),
-        _ => db_value.to_string(),
-    }
+    let key = match db_value {
+        "critical" => "severity_word_critical",
+        "high" => "severity_word_high",
+        "medium" => "severity_word_medium",
+        "low" => "severity_word_low",
+        "info" => "severity_word_info",
+        _ => return db_value.to_string(),
+    };
+    format(lang, key, &[])
 }
+
+/// Las claves de `cli.ftl` que no declara [`messages!`] sino las funciones de arriba.
+#[cfg(test)]
+const SEVERITY_KEYS: [&str; 10] = [
+    "severity_label_critical",
+    "severity_label_high",
+    "severity_label_medium",
+    "severity_label_low",
+    "severity_label_info",
+    "severity_word_critical",
+    "severity_word_high",
+    "severity_word_medium",
+    "severity_word_low",
+    "severity_word_info",
+];
 
 // ─────────────────────────────────────────────────────────────────── El macro
 
-/// Genera una función por mensaje: `nombre(lang, args…) -> String`.
+/// Declara los mensajes: genera una función por entrada, `nombre(lang, args…) -> String`, que
+/// formatea la entrada `nombre` de `cli.ftl` con esos argumentos como variables `$arg`.
 ///
-/// Cada entrada declara sus argumentos y una columna por idioma. El `match` que expande es
-/// exhaustivo sobre [`Lang`], así que **un idioma nuevo sin traducir no compila**, y los
-/// argumentos se pasan con nombre a `format!`, así que **un texto que no use un argumento
-/// tampoco compila**. Las garantías que en un sistema de ficheros `.po` serían un test aquí
-/// las da el compilador.
+/// Genera también `DECLARED`, la lista de nombres y argumentos, que es lo que los tests cruzan
+/// con `locales/en/cli.ftl`: una entrada sin texto, un texto sin entrada o una variable que no
+/// coincide con los argumentos rompen `cargo test`, no la salida de un usuario.
 macro_rules! messages {
     ($(
         $(#[$meta:meta])*
-        $name:ident ( $($arg:ident),* ) {
-            en: $en:literal,
-            es: $es:literal $(,)?
-        }
+        $name:ident ( $($arg:ident),* );
     )*) => {
         $(
             $(#[$meta])*
-            #[allow(clippy::useless_format)]
             pub fn $name(lang: Lang $(, $arg: impl ::std::fmt::Display)*) -> String {
-                match lang {
-                    Lang::En => format!($en $(, $arg = $arg)*),
-                    Lang::Es => format!($es $(, $arg = $arg)*),
-                }
+                super::format(
+                    lang,
+                    stringify!($name),
+                    &[$((stringify!($arg), &$arg as &dyn ::std::fmt::Display)),*],
+                )
             }
         )*
+
+        /// Cada mensaje declarado y sus argumentos, para los tests.
+        #[cfg(test)]
+        pub(super) const DECLARED: &[(&str, &[&str])] = &[$((stringify!($name), &[$(stringify!($arg)),*])),*];
     };
 }
 
-/// Todos los mensajes de la CLI, agrupados por pantalla.
+/// Todos los mensajes de la CLI, agrupados por pantalla. Sus textos, en `locales/<idioma>/cli.ftl`
+/// con el mismo nombre.
 ///
 /// Convención: los textos no llevan sangría ni relleno de columnas —eso es maquetación y vive
 /// en el `println!` que los usa—, salvo cuando el mensaje es multilínea y la sangría forma
@@ -197,198 +267,72 @@ macro_rules! messages {
 pub mod msg {
     use super::Lang;
 
-    // ── Resumen del rastreo (`report.rs`) ────────────────────────────────────
     messages! {
-        crawl_finished(urls, secs) {
-            en: "Crawl finished: {urls} URLs in {secs} s",
-            es: "Rastreo terminado: {urls} URLs en {secs} s",
-        }
-        crawl_failed_suffix(n) {
-            en: " ({n} failed)",
-            es: " ({n} con error)",
-        }
-        crawl_truncated(reason) {
-            en: "Crawl truncated by {reason}. The findings shown are those found up to that point.",
-            es: "Rastreo truncado por {reason}. Los hallazgos mostrados son los encontrados hasta ese punto.",
-        }
+        // ── Resumen del rastreo (`report.rs`) ────────────────────────────────────
+        crawl_finished(urls, secs);
+        crawl_failed_suffix(n);
+        crawl_truncated(reason);
         // A 429 is not a page's status: the site asked the crawler to slow down. The pages
         // were left pending, and the useful thing to say is how to get them.
-        crawl_rate_limited_note(n, path) {
-            en: "The site rate-limited the crawl: {n} pages still answered 429 Too Many Requests \
-                 after the retries and were left pending, not reported as broken. Rules that \
-                 need the whole site are not evaluated until they are fetched. Later, run:\n    \
-                 crawlforge resume {path}\nor crawl again with a lower --concurrency, or let \
-                 the CrawlForge user-agent through the site's firewall.",
-            es: "El sitio limitó el rastreo: {n} páginas seguían respondiendo 429 Too Many \
-                 Requests tras los reintentos y quedaron pendientes, sin darlas por rotas. Las \
-                 reglas que necesitan el sitio entero no se evalúan hasta que se pidan. Más \
-                 tarde, lanza:\n    crawlforge resume {path}\no rastrea de nuevo con menos \
-                 --concurrency, o deja pasar el user-agent de CrawlForge en el cortafuegos del \
-                 sitio.",
-        }
-        report_rate_limited_note(n) {
-            en: "> **The site rate-limited the crawl.** {n} pages answered 429 Too Many Requests \
-                 and were left pending: they are not counted or reported as broken, and rules \
-                 that need the whole site are not evaluated. `crawlforge resume` fetches them.",
-            es: "> **El sitio limitó el rastreo.** {n} páginas respondieron 429 Too Many \
-                 Requests y quedaron pendientes: no se cuentan ni se dan por rotas, y las reglas \
-                 que necesitan el sitio entero no se evalúan. `crawlforge resume` las pide.",
-        }
+        crawl_rate_limited_note(n, path);
+        report_rate_limited_note(n);
         // `list_mode` no es un corte: el rastreo hizo exactamente lo que se le pidió, así que
         // decirle al usuario «tu rastreo se truncó» sería mentir. Lo que sí hay que decirle es
         // la consecuencia de auditar un conjunto y no un sitio.
-        crawl_list_mode_note() {
-            en: "List crawl: only the URLs you provided were audited. Rules that need the \
-                 site's complete link graph (orphans, incoming links, depth) are not evaluated.",
-            es: "Rastreo en modo lista: solo se auditaron las URLs que diste. Las reglas que \
-                 necesitan el grafo completo del sitio (huérfanas, enlaces entrantes, \
-                 profundidad) no se evalúan.",
-        }
+        crawl_list_mode_note();
         // El tope de externas no trunca el rastreo del sitio —ese es `crawl_truncated`— pero
         // dejar enlaces sin comprobar en silencio haría que el informe pareciera completo sin
         // serlo, así que se dice cuántos quedaron fuera.
-        external_unchecked(n) {
-            en: "{n} external links were not checked: the max_external cap was reached. Raise it with --max-external.",
-            es: "{n} enlaces externos quedaron sin comprobar: se alcanzó el tope max_external. Súbelo con --max-external.",
-        }
+        external_unchecked(n);
         // El otro tope de externas: el del registro. Estas no están en el fichero, así que sin
         // este aviso el informe no tendría ni una fila que delatara que faltan.
-        external_unregistered(n) {
-            en: "{n} external links were not even recorded: the max_external_urls cap was reached. \
-                 A single page linking to hundreds of thousands of hosts is what this cap is for.",
-            es: "{n} enlaces externos no llegaron ni a registrarse: se alcanzó el tope \
-                 max_external_urls. Una sola página que enlace a cientos de miles de hosts es \
-                 justo lo que este tope acota.",
-        }
+        external_unregistered(n);
         // La variante de fichero para un rastreo cortado: aquí no se puede afirmar que el
         // tope fuera el motivo — un truncado deja externas sin sondear igualmente.
-        external_never_checked(n) {
-            en: "{n} external links were recorded but never checked.",
-            es: "{n} enlaces externos quedaron registrados pero sin comprobar.",
-        }
+        external_never_checked(n);
         // Una auditoría de carpeta no tiene red: el motivo no es el tope, y `audit` no acepta
         // --max-external. Lo que sí sirve es rastrear lo publicado.
-        external_offline(n) {
-            en: "{n} external links were not checked: auditing a folder makes no network \
-                 requests. To check them, crawl the published site with `crawlforge crawl <URL>`.",
-            es: "{n} enlaces externos quedaron sin comprobar: auditar una carpeta no hace \
-                 peticiones de red. Para comprobarlos, rastrea el sitio publicado con \
-                 `crawlforge crawl <URL>`.",
-        }
+        external_offline(n);
         // La otra mitad de la honestidad de las externas: cuando la comprobación estaba
         // apagada, «cero enlaces externos rotos» no significa que no los haya.
-        external_check_disabled() {
-            en: "External links were not checked (--no-external-check): the absence of broken \
-                 external links in this report does not mean there are none.",
-            es: "Los enlaces externos no se comprobaron (--no-external-check): que este informe \
-                 no traiga enlaces externos rotos no significa que no los haya.",
-        }
+        external_check_disabled();
         // El resumen del rastreo dice cuántas externas se sondearon aunque todo fuera bien:
         // es el tiempo que el cierre atribuía en silencio al rastreo del sitio.
-        external_checked_note(n) {
-            en: "{n} external links checked.",
-            es: "{n} enlaces externos comprobados.",
-        }
+        external_checked_note(n);
         // Qué reglas calló el truncado, por su ID: sin la lista, «las reglas que necesitan el
         // grafo» obliga a adivinar cuáles son.
-        rules_not_evaluated(rules) {
-            en: "Rules that need the complete link graph were not evaluated: {rules}.",
-            es: "Las reglas que necesitan el grafo de enlaces completo no se evaluaron: {rules}.",
-        }
-        results_title() {
-            en: "Results",
-            es: "Resultados",
-        }
-        label_urls() {
-            en: "URLs",
-            es: "URLs",
-        }
-        label_html_pages() {
-            en: "HTML pages",
-            es: "Páginas HTML",
-        }
-        label_links() {
-            en: "Links",
-            es: "Enlaces",
-        }
-        note_internal(n) {
-            en: "{n} internal",
-            es: "{n} internas",
-        }
-        note_indexable(n) {
-            en: "{n} indexable",
-            es: "{n} indexables",
-        }
-        heading_status_codes() {
-            en: "Status codes",
-            es: "Códigos de estado",
-        }
-        label_no_response() {
-            en: "no response",
-            es: "sin respuesta",
-        }
-        note_request_failed() {
-            en: "the request failed",
-            es: "la petición falló",
-        }
-        label_never_requested() {
-            en: "Never requested",
-            es: "No solicitadas",
-        }
-        note_never_requested() {
-            en: "(discovered, but the crawl stopped before fetching them)",
-            es: "(descubiertas, pero el rastreo se detuvo antes de pedirlas)",
-        }
+        rules_not_evaluated(rules);
+        results_title();
+        label_urls();
+        label_html_pages();
+        label_links();
+        note_internal(n);
+        note_indexable(n);
+        heading_status_codes();
+        label_no_response();
+        note_request_failed();
+        label_never_requested();
+        note_never_requested();
         // Filas internas `skipped` sin motivo: en modo lista, los enlaces que apuntan fuera
         // de la lista. Explican por qué «URLs 21» cuando se dieron 5.
-        label_out_of_scope() {
-            en: "Out of scope",
-            es: "Fuera del alcance",
-        }
-        note_out_of_scope() {
-            en: "(linked from audited pages, but outside this crawl's scope)",
-            es: "(enlazadas desde páginas auditadas, pero fuera del alcance de este rastreo)",
-        }
-        heading_non_indexable() {
-            en: "Non-indexable, why",
-            es: "No indexables, por qué",
-        }
-        heading_findings() {
-            en: "Findings",
-            es: "Hallazgos",
-        }
-        no_findings() {
-            en: "No findings.",
-            es: "Sin hallazgos.",
-        }
-        heading_excluded() {
-            en: "Excluded",
-            es: "Excluidas",
-        }
+        label_out_of_scope();
+        note_out_of_scope();
+        heading_non_indexable();
+        heading_findings();
+        no_findings();
+        heading_excluded();
         // ── Colapso de plantilla ─────────────────────────────────────────────
         //
         // Un defecto de la plantilla aparece en el 90% de las páginas y se arregla una vez:
         // el informe dice «1 problema de plantilla (18.089 páginas)» en vez de un recuento
         // que tapa todo lo demás. Las filas de `issues` no se tocan: esto es presentación.
-        one_template_issue(pages) {
-            en: "1 template issue ({pages} pages)",
-            es: "1 problema de plantilla ({pages} páginas)",
-        }
-        n_template_issues(k, pages) {
-            en: "{k} template issues ({pages} pages)",
-            es: "{k} problemas de plantilla ({pages} páginas)",
-        }
+        // `k` problemas distintos de plantilla, que cubren `pages` páginas.
+        template_issues(k, pages);
         // «Hallazgos» y no «páginas»: la misma página puede estar dentro del grupo de
         // plantilla (el logo) y traer además un hallazgo propio (su imagen destacada), así
         // que el resto no son páginas nuevas, son hallazgos fuera del grupo.
-        plus_more_findings(n) {
-            en: " + {n} more findings",
-            es: " + {n} hallazgos más",
-        }
-        example_urls(urls) {
-            en: "e.g. {urls}",
-            es: "p. ej. {urls}",
-        }
+        plus_more_findings(n);
+        example_urls(urls);
         // ── Reformulación de reglas dominantes ───────────────────────────────
         //
         // El caso que el colapso de plantilla no cubre: hallazgos masivos **ciertos y sin causa
@@ -396,923 +340,393 @@ pub mod msg {
         // largos de la misma plantilla). El recuento se conserva —nada se oculta— y se le añade
         // la cuota del sitio, que es lo que lo convierte en un problema de arquitectura y no en
         // una lista de tareas. El criterio es `crawlforge_rules::is_pervasive`.
-        pervasive_note(pct) {
-            en: "{pct}% of the site",
-            es: "{pct}% del sitio",
-        }
+        pervasive_note(pct);
         // La forma del problema de profundidad, dicha una vez: es la línea que sustituye a
         // «202,392» a secas. Los números llegan ya formateados con el millar del idioma.
-        deep_pages_summary(pages, max, pct, low, high, deepest) {
-            en: "{pages} pages deeper than {max} clicks — {pct}% of the site \
-                 (typical depth {low}–{high}, deepest {deepest})",
-            es: "{pages} páginas a más de {max} clics — {pct}% del sitio \
-                 (profundidad típica {low}–{high}, máxima {deepest})",
-        }
-        rule_deep_sorted() {
-            en: "Sorted by click depth, deepest first; the first column is clicks from home.",
-            es: "Ordenadas por profundidad de clic, la más hundida primero; la primera columna \
-                 son los clics desde la portada.",
-        }
-        hint_full_lists(cmd) {
-            en: "Full URL list for a rule: {cmd}",
-            es: "Lista completa de URLs de una regla: {cmd}",
-        }
+        deep_pages_summary(pages, max, pct, low, high, deepest);
+        rule_deep_sorted();
+        hint_full_lists(cmd);
         // ── Listado de una regla (`report --rule`) ───────────────────────────
-        rule_affected_urls(n) {
-            en: "{n} affected URLs",
-            es: "{n} URLs afectadas",
-        }
-        rule_template_group(n) {
-            en: "Template group — {n} pages",
-            es: "Grupo de plantilla — {n} páginas",
-        }
-        rule_group_cause(detail) {
-            en: "cause: {detail}",
-            es: "causa: {detail}",
-        }
-        rule_other_pages(n) {
-            en: "Other affected pages — {n}",
-            es: "Otras páginas afectadas — {n}",
-        }
-        rule_no_findings(rule) {
-            en: "No findings for {rule} in this crawl.",
-            es: "Sin hallazgos de {rule} en este rastreo.",
-        }
+        rule_affected_urls(n);
+        rule_template_group(n);
+        rule_group_cause(detail);
+        rule_other_pages(n);
+        rule_no_findings(rule);
         // El paso siguiente de un enlace roto: se arregla en la página que lo enlaza, y ese
         // dato lo da `inspect`. El comando lo imprime el llamador, listo para copiar.
-        hint_who_links() {
-            en: "A broken link is fixed on the page that links to it. Who links to a URL, \
-                 with its anchor text:",
-            es: "Un enlace roto se arregla en la página que lo enlaza. Quién enlaza a una \
-                 URL, con su texto de ancla:",
-        }
-        error_unknown_rule(rule) {
-            en: "{rule} is not a rule ID. The catalog is listed by `crawlforge rules`.",
-            es: "«{rule}» no es un ID de regla. El catálogo lo lista `crawlforge rules`.",
-        }
-        error_all_blocked_by_robots() {
-            en: "robots.txt blocks every URL: there is nothing to audit. \
-                 If the site is yours, you can retry with --ignore-robots.",
-            es: "robots.txt bloquea todas las URLs: no hay nada que auditar. \
-                 Si el sitio es tuyo, puedes reintentarlo con --ignore-robots.",
-        }
-        error_all_excluded_by_pattern() {
-            en: "every URL was skipped by your --exclude/--include patterns: there is \
-                 nothing to audit. Check the patterns.",
-            es: "los patrones de --exclude/--include han descartado todas las URLs: no hay \
-                 nada que auditar. Revisa los patrones.",
-        }
-        error_no_urls_fetched() {
-            en: "the crawl fetched no URLs. Check the target.",
-            es: "el rastreo no obtuvo ninguna URL. Revisa el objetivo.",
-        }
-        error_dead_seed(url, cause) {
-            en: "could not connect to {url} ({cause}). Check the URL.",
-            es: "no se pudo conectar con {url} ({cause}). Revisa la URL.",
-        }
-        cause_dns() {
-            en: "the domain does not exist or does not resolve",
-            es: "el dominio no existe o no resuelve",
-        }
-        cause_tls() {
-            en: "the TLS certificate is not valid",
-            es: "el certificado TLS no es válido",
-        }
-        cause_timeout() {
-            en: "the server did not answer in time",
-            es: "el servidor no respondió a tiempo",
-        }
-        cause_connection() {
-            en: "connection refused",
-            es: "conexión rechazada",
-        }
-        cause_no_response() {
-            en: "no response",
-            es: "sin respuesta",
-        }
-        warn_base_mismatch(n, total, origin, base) {
-            en: "Warning: {n} of {total} canonicals point at {origin}, not at the given base ({base}).\n\
-                 Indexability results depend on that flag: if the site is published at\n\
-                 {origin}, repeat the audit with --base {origin}",
-            es: "Aviso: {n} de {total} canonicals apuntan a {origin}, no a la base indicada ({base}).\n\
-                 Los resultados de indexabilidad dependen de ese flag: si el sitio se publica en\n\
-                 {origin}, repite la auditoría con --base {origin}",
-        }
-    }
+        hint_who_links();
+        error_unknown_rule(rule);
+        error_all_blocked_by_robots();
+        error_all_excluded_by_pattern();
+        error_no_urls_fetched();
+        error_dead_seed(url, cause);
+        cause_dns();
+        cause_tls();
+        cause_timeout();
+        cause_connection();
+        cause_no_response();
+        warn_base_mismatch(n, total, origin, base);
 
-    // ── Ficha de una URL (`inspect.rs`) ──────────────────────────────────────
-    //
-    // La pregunta que responde es «¿quién enlaza aquí?» (revisión 2026-08-01 §5.2), así que
-    // los enlaces entrantes son la estrella; el resto de secciones evitan tener que abrir
-    // el XLSX para ver una sola URL. Los valores de la base de datos (códigos, regiones,
-    // `nofollow`, motivos de exclusión) no se traducen: son identificadores.
-    messages! {
-        inspect_error_not_found(url) {
-            en: "{url} is not in this crawl.",
-            es: "{url} no está en este rastreo.",
-        }
-        inspect_closest() {
-            en: "The closest URLs in the file are:",
-            es: "Las URLs más parecidas del fichero son:",
-        }
-        inspect_status_title() {
-            en: "Status",
-            es: "Estado",
-        }
-        label_http_status() {
-            en: "HTTP status",
-            es: "Código HTTP",
-        }
-        label_content_type() {
-            en: "Content type",
-            es: "Tipo de contenido",
-        }
-        label_response_time() {
-            en: "Response time",
-            es: "Tiempo de respuesta",
-        }
-        label_depth() {
-            en: "Depth",
-            es: "Profundidad",
-        }
-        note_depth_clicks() {
-            en: "clicks from the seed",
-            es: "clics desde la semilla",
-        }
-        label_in_sitemap() {
-            en: "In sitemap",
-            es: "En el sitemap",
-        }
-        word_yes() {
-            en: "yes",
-            es: "sí",
-        }
-        word_no() {
-            en: "no",
-            es: "no",
-        }
-        label_crawl_state() {
-            en: "Crawl state",
-            es: "Estado de rastreo",
-        }
-        state_note_pending() {
-            en: "discovered, but the crawl never fetched it",
-            es: "descubierta, pero el rastreo no llegó a pedirla",
-        }
-        state_note_excluded(reason) {
-            en: "excluded from the crawl ({reason})",
-            es: "excluida del rastreo ({reason})",
-        }
+        // ── Ficha de una URL (`inspect.rs`) ──────────────────────────────────────
+        //
+        // La pregunta que responde es «¿quién enlaza aquí?» (revisión 2026-08-01 §5.2), así que
+        // los enlaces entrantes son la estrella; el resto de secciones evitan tener que abrir
+        // el XLSX para ver una sola URL. Los valores de la base de datos (códigos, regiones,
+        // `nofollow`, motivos de exclusión) no se traducen: son identificadores.
+        inspect_error_not_found(url);
+        inspect_closest();
+        inspect_status_title();
+        label_http_status();
+        label_content_type();
+        label_response_time();
+        label_depth();
+        note_depth_clicks();
+        label_in_sitemap();
+        word_yes();
+        word_no();
+        label_crawl_state();
+        state_note_pending();
+        state_note_excluded(reason);
         // Una externa con código o con error de sonda **sí se pidió**: decir de ella
         // «excluida del rastreo» era falso. Se comprobó su estado y no se auditó su contenido.
-        state_note_external_checked() {
-            en: "external URL — status checked, content not audited",
-            es: "URL externa — estado comprobado, contenido no auditado",
-        }
-        state_note_external_not_checked(reason) {
-            en: "external URL — status not checked ({reason})",
-            es: "URL externa — estado sin comprobar ({reason})",
-        }
-        state_note_external_unchecked() {
-            en: "external URL — never requested",
-            es: "URL externa — nunca solicitada",
-        }
+        state_note_external_checked();
+        state_note_external_not_checked(reason);
+        state_note_external_unchecked();
         // Interna `skipped` sin motivo: fuera del alcance del rastreo (el caso del modo lista).
-        state_note_out_of_scope() {
-            en: "discovered, but outside this crawl's scope",
-            es: "descubierta, pero fuera del alcance de este rastreo",
-        }
-        state_note_error(detail) {
-            en: "the request failed ({detail})",
-            es: "la petición falló ({detail})",
-        }
+        state_note_out_of_scope();
+        state_note_error(detail);
         // `unknown` no es una región del HTML, es el relleno de «no se supo»: se traduce,
         // a diferencia de `main`/`nav`/`footer`, que son identificadores del documento.
-        region_unknown() {
-            en: "unknown",
-            es: "desconocida",
-        }
-        inspect_page_title() {
-            en: "Page",
-            es: "Página",
-        }
-        label_page_title() {
-            en: "Title",
-            es: "Título",
-        }
-        label_meta_description() {
-            en: "Meta description",
-            es: "Meta description",
-        }
-        label_h1() {
-            en: "H1",
-            es: "H1",
-        }
-        label_word_count() {
-            en: "Word count",
-            es: "Palabras",
-        }
-        label_canonical() {
-            en: "Canonical",
-            es: "Canonical",
-        }
-        canonical_self() {
-            en: "self",
-            es: "la propia página",
-        }
-        label_indexable() {
-            en: "Indexable",
-            es: "Indexable",
-        }
-        indexable_no(reason) {
-            en: "no — {reason}",
-            es: "no — {reason}",
-        }
-        chars_suffix(n) {
-            en: "{n} chars",
-            es: "{n} caracteres",
-        }
-        inspect_redirects_title() {
-            en: "Redirect chain",
-            es: "Cadena de redirecciones",
-        }
-        inlinks_title(n) {
-            en: "Inlinks ({n})",
-            es: "Enlaces entrantes ({n})",
-        }
-        inlinks_by_region(breakdown, nofollow) {
-            en: "By region: {breakdown} · {nofollow} nofollow",
-            es: "Por región: {breakdown} · {nofollow} nofollow",
-        }
-        inlinks_none() {
-            en: "No crawled page links to this URL.",
-            es: "Ninguna página rastreada enlaza a esta URL.",
-        }
-        inlinks_sample_heading() {
-            en: "Linking pages, content links first:",
-            es: "Páginas que enlazan, primero los enlaces de contenido:",
-        }
-        no_anchor() {
-            en: "(no anchor text)",
-            es: "(sin texto de ancla)",
-        }
+        region_unknown();
+        inspect_page_title();
+        label_page_title();
+        label_meta_description();
+        label_h1();
+        label_word_count();
+        label_canonical();
+        canonical_self();
+        label_indexable();
+        indexable_no(reason);
+        chars_suffix(n);
+        inspect_redirects_title();
+        inlinks_title(n);
+        inlinks_by_region(breakdown, nofollow);
+        inlinks_none();
+        inlinks_sample_heading();
+        no_anchor();
         // El corte dice cuántas se enseñan y el comando exacto de la lista completa: cortar
         // sin decir cómo ver el resto es el error del que nació `report --rule` (§5.1).
-        inspect_truncated(n, cmd) {
-            en: "… showing {n} — full list: {cmd}",
-            es: "… se muestran {n} — lista completa: {cmd}",
-        }
-        images_title(n) {
-            en: "Images ({n})",
-            es: "Imágenes ({n})",
-        }
-        image_no_alt() {
-            en: "(no alt)",
-            es: "(sin alt)",
-        }
-        image_usage_title() {
-            en: "Used as an image",
-            es: "Usada como imagen",
-        }
+        inspect_truncated(n, cmd);
+        images_title(n);
+        image_no_alt();
+        image_usage_title();
+
+        // ── Comparación de rastreos (`diff.rs`) ──────────────────────────────────
+        diff_title();
+        label_before();
+        label_after();
+        label_site();
+        label_common();
+        diff_crawl_counts(urls, findings);
+        diff_common_note(n);
+        warnings_title();
+        tag_inconclusive();
+        tag_warning();
+        side_before();
+        side_after();
+        warn_truncated(side, reason_suffix);
+        warn_truncated_by(reason);
+        // La variante de `warn_truncated` para `list_mode`: el rastreo no se cortó — es que
+        // un rastreo en modo lista nunca ve más que su lista. La consecuencia para el diff es
+        // la misma (las ausencias no se pueden afirmar) y el motivo, distinto.
+        warn_list_mode(side);
+        warn_unfinished(side, status);
+        warn_rules_changed(before, after);
+        warn_config_changed(fields);
+        warn_scope_changed(before, after);
+        warn_mode_changed(before, after);
+        warn_missing_table(side, table);
+        warn_order_inverted(before_started, after_started);
+        worse_title();
+        label_new_findings();
+        more_examples(n);
+        label_pages_lost_index();
+        label_status_worse();
+        robots_content_changed(host);
+        robots_blocks_all();
+        nothing_worse();
+        better_title();
+        label_findings_resolved();
+        label_pages_indexable_again();
+        label_status_better();
+        other_title();
+        label_new_urls();
+        label_urls_gone();
+        label_titles_changed();
+        label_meta_changed();
+        label_canonicals_changed();
+        label_findings_persisted();
+        suppressed_title();
+        // Multilínea: el punto de llamada imprime cada línea con su sangría.
+        suppressed_intro();
+        label_candidate_new_urls();
+        label_candidate_urls_gone();
+        label_candidate_new_findings();
+        label_candidate_resolved();
+        suppressed_advice();
+        gate_title();
+        // Multilínea: el punto de llamada imprime cada línea con su sangría.
+        gate_inconclusive();
+        gate_fail_detail(n, severity, token);
+        gate_pass();
+        // ── Reabrir un diff guardado y listar sus filas (`diff_file.rs`) ──────
+        label_saved();
+        diff_saved_note(generated_at, version, path);
+        // Multilínea: el punto de llamada imprime cada línea con su sangría.
+        hint_diff_full_lists();
+        warn_unknown_change_types(n, types);
+        label_status_changed();
+        diff_no_matching_changes();
+        error_diff_missing(path);
+        error_diff_needs_two(path);
+        hint_diff_prev(prev, path);
+        error_diff_unknown_file(path);
+        error_diff_too_new(path, version, supported);
+        error_diff_reopen_flag(flag);
+        error_unknown_change_type(value, available);
+        error_rule_with_change(change);
+        site_wide_finding();
+        site_placeholder();
+        error_missing_file(path);
+        // El contrato del manual §5: todo error de fichero dice qué comando lo genera.
+        error_store_missing(path);
+        error_not_a_crawl(path);
+        error_different_sites(a, b);
+        error_fail_on_unknown(token);
+
+        // ── Panel de cartera (`portfolio.rs`) ────────────────────────────────────
+        //
+        // Los IDs de regla, las severidades usadas como token (`crit`, `high`…), las rutas, las
+        // fechas y las versiones no se traducen: son datos e identificadores, como en el resto
+        // de la CLI.
+        portfolio_title();
+        portfolio_range(oldest, newest);
+        // Trap 3.3: crawls weeks apart are not a snapshot of the portfolio, and "what
+        // changed" would silently mean a different period on every site.
+        warn_portfolio_date_spread(days, oldest, newest);
+        // Trap 3.2: two files crawled with different catalogs are not comparable without
+        // saying so — a rule can be "missing" on a site because it did not exist yet.
+        warn_portfolio_rules_versions(versions);
+        warn_portfolio_core_versions(versions);
+        portfolio_skipped_title();
+        // A .prev.sqlite is never an input: it is the "before" of the crawl next to it.
+        portfolio_prev_not_input();
+        error_portfolio_newer_schema(version, supported);
+        error_portfolio_no_sites();
+        error_portfolio_tier();
+        error_portfolio_too_many(n, max);
+        portfolio_changes_title();
+        portfolio_no_pairs();
+        portfolio_new_critical_high();
+        portfolio_none_critical_high();
+        portfolio_rest_title();
+        portfolio_no_changes();
+        // The diff of that pair cannot assert absences: one side is incomplete.
+        portfolio_pair_inconclusive();
+        portfolio_pair_failed(reason);
+        portfolio_spread_title();
+        portfolio_spread_intro();
+        portfolio_spread_none();
+        portfolio_glance_title();
+        th_site();
+        th_crawled();
+        th_indexable();
+        flag_truncated();
+        flag_list_mode();
+        flag_unfinished(status);
+        hint_site_diff();
+        portfolio_html_title();
+
+        // ── Per-site rule configuration (`rule_config.rs`) ───────────────────────
+        rules_config_source_stored();
+        rules_config_source_after();
+        rules_config_source_file(path);
+        warn_rules_config_differs(source);
+        warn_portfolio_rules_config(sites);
+
+        // ── Identificación de ficheros (`store_check.rs`) ────────────────────────
+        error_store_is_diff(path);
+        error_store_foreign(path);
+        error_store_not_sqlite(path);
+
+        // ── Informe Markdown/HTML (`audit_report.rs`) ────────────────────────────
+        report_audit_of();
+        // Un rastreo `list` que mezcla sitios: titularlo con el primero decía que los demás
+        // no se habían auditado.
+        report_audit_of_sites(n, sites);
+        sites_and_more(sites, n);
+        report_mode_line(mode, started);
+        report_truncated_note(reason);
+        // Para `truncated_reason = 'list_mode'`: el rastreo no se cortó, auditó su lista
+        // entera. El informe tiene que decir eso, no «truncado».
+        report_list_mode_note();
+        th_metric();
+        th_value();
+        row_pages();
+        row_indexable();
+        row_errors_4xx_5xx();
+        report_more(n);
+        // El corte del informe dice dónde están las que no enseña: sin el comando, la única
+        // vía para verlas era abrir el XLSX o hacer SQL a mano (revisión de UX §5.1).
+        report_more_run(n, cmd);
+        // La variante para una regla colapsada: el titular ya dio los números («13 problemas
+        // de plantilla (567 páginas)») y repetir aquí un recuento crudo de filas los
+        // contradiría.
+        report_full_list_run(cmd);
+        html_title();
+
+        // ── Catálogo de reglas (`rules.rs`) ──────────────────────────────────────
+        th_severity();
+        th_category();
+        th_scope();
+        th_tier();
+        th_name();
+        lbl_category();
+        lbl_scope();
+        lbl_tier();
+        lbl_reference();
+        scope_page();
+        scope_site();
+        rules_summary(total, free, page, site);
+        error_unknown_category(category, list);
+
+        // ── Cadenas de `main.rs`, listas para cablear ────────────────────────────
+        //
+        // `main.rs` es de otro propietario; estas entradas existen para que el cableado sea
+        // sustituir cada literal por su llamada. Los números se pre-formatean con
+        // `i18n::group_thousands` / `i18n::decimal1` antes de pasarlos.
+        crawling(target);
+        // Se valida **antes de tocar el disco**: una semilla imposible no debe costar una
+        // rotación de ficheros ni dejar un `.sqlite` de aspecto válido con un `.lock` al lado.
+        error_invalid_seed(url);
+        file_line(path);
+        previous_kept(path);
+        report_written(path);
+        /// Con `--out` y el formato de terminal, lo que se escribe es Markdown: un volcado del
+        /// terminal en un fichero conserva sus cajas y se lee peor. Se dice **qué** se escribió
+        /// para que nadie abra el fichero esperando lo que acaba de ver en pantalla.
+        markdown_report_written(path);
+        exported_csv(n, dir);
+        exported_sheets(n, path);
+        bench_appended(path);
+        next_steps_title();
+        next_explain();
+        next_spreadsheet();
+        next_compare_previous();
+        next_compare_later();
+        next_reread();
+        // ── Autenticación básica HTTP (staging protegido) ────────────────────
+        //
+        // Los tres avisos van por stderr: hablan de secretos y no deben ensuciar un pipe.
+        // Ninguno repite la credencial, como corresponde a un aviso sobre secretos.
+        auth_url_note(host);
+        auth_env_note(host);
+        auth_base_ignored();
+        auth_list_ignored();
+        progress_sitemaps();
+        progress_finalize();
+        progress_crawl(fetched, queued, rate, findings);
+        progress_failed_suffix(n);
+
+        // ── Reanudación de un rastreo interrumpido (`main.rs`, `report.rs`) ──────
+        resuming(target);
+        resume_counts(done, pending);
+        resume_config_note();
+        error_resume_schema_blocking(file, version, blocking);
+        resume_robots_not_inherited();
+        resume_finished(urls, secs);
+        interrupt_flushing();
+        // Un Ctrl+C cuando el motor ya terminó —durante un export largo, por ejemplo— no
+        // tiene nada que guardar: se sale ya, diciendo que el rastreo no corre peligro.
+        interrupt_after_done();
+        // La degradación del cierre (§3.1/§3.2 de la revisión): con otro programa leyendo el
+        // fichero no se puede salir del modo WAL, y copiar el `.sqlite` suelto perdería lo
+        // que quede en el `-wal`. El aviso da el dato y las dos salidas.
+        warn_wal_kept(path);
+        // El cerrojo del fichero (§3.3): el que llega segundo no espera ni rota nada, se le
+        // dice que hay otro rastreo escribiendo y qué hacer.
+        error_store_locked(path);
+        interrupted_saved(path);
+        hint_previous_unfinished();
+        error_resume_done(path);
+        error_resume_status(path, status);
+        error_resume_schema(path, found, expected);
+        error_resume_config(path);
     }
 
-    // Los dos mensajes con plural real se escriben a mano: el macro no distingue «1 interno»
-    // de «2 internos», y resolverlo con «interno(s)» es el atajo que la revisión cazó.
-    // Siguen viviendo aquí, con sus dos columnas, como el resto del catálogo.
+    // Los mensajes con recuentos que llegan como enteros: formatean el número con [`count`]
+    // (o lo pasan tal cual, si la salida nunca lo agrupó) y dejan el plural al `.ftl`, que es
+    // donde cada idioma decide sus formas. Antes eran `if n == 1` escritos a mano por idioma.
 
-    /// La cabecera de enlaces salientes, con el plural bien resuelto en cada idioma.
+    /// Los mensajes que declaran estas funciones y no el macro, para los tests.
+    #[cfg(test)]
+    pub(super) const HAND_WRITTEN: &[(&str, &[&str])] = &[
+        ("outlinks_title", &["total", "internal", "external"]),
+        ("note_external_status", &["n"]),
+        ("image_usage_line", &["times", "pages"]),
+        ("portfolio_sites_count", &["n"]),
+        ("rules_config_note", &["source", "disabled", "changed"]),
+        ("portfolio_sites_of", &["fired", "total"]),
+        ("portfolio_inconclusive_suffix", &["n"]),
+        ("portfolio_pairs_line", &["pairs", "total"]),
+    ];
+
+    /// La cabecera de enlaces salientes: «Outlinks (8: 7 internal, 1 external)».
     pub fn outlinks_title(lang: Lang, total: i64, internal: i64, external: i64) -> String {
         let n = |v: i64| super::count(lang, v);
-        match lang {
-            Lang::En => format!(
-                "Outlinks ({}: {} internal, {} external)",
-                n(total),
-                n(internal),
-                n(external)
-            ),
-            Lang::Es => format!(
-                "Enlaces salientes ({}: {} {}, {} {})",
-                n(total),
-                n(internal),
-                if internal == 1 { "interno" } else { "internos" },
-                n(external),
-                if external == 1 { "externo" } else { "externos" },
-            ),
-        }
+        let (total, internal, external) = (n(total), n(internal), n(external));
+        super::format(
+            lang,
+            "outlinks_title",
+            &[("total", &total), ("internal", &internal), ("external", &external)],
+        )
     }
 
     /// El sufijo que separa las externas del recuento de códigos de estado: un 404 ajeno no
-    /// es un error del sitio auditado y no debe sumarse como si lo fuera. A mano por el
-    /// plural español («+1 externa», «+2 externas»); el inglés no flexiona.
+    /// es un error del sitio auditado y no debe sumarse como si lo fuera.
     pub fn note_external_status(lang: Lang, n: i64) -> String {
-        let count = super::count(lang, n);
-        match lang {
-            Lang::En => format!("+{count} external"),
-            Lang::Es => format!("+{count} {}", if n == 1 { "externa" } else { "externas" }),
-        }
+        let n = super::count(lang, n);
+        super::format(lang, "note_external_status", &[("n", &n)])
     }
 
     /// «Incrustada N veces en M páginas», sin decir «1 veces» ni «1 pages».
     pub fn image_usage_line(lang: Lang, times: i64, pages: i64) -> String {
-        let n = |v: i64| super::count(lang, v);
-        match lang {
-            Lang::En => format!(
-                "embedded {} {} on {} {}",
-                n(times),
-                if times == 1 { "time" } else { "times" },
-                n(pages),
-                if pages == 1 { "page" } else { "pages" },
-            ),
-            Lang::Es => format!(
-                "incrustada {} {} en {} {}",
-                n(times),
-                if times == 1 { "vez" } else { "veces" },
-                n(pages),
-                if pages == 1 { "página" } else { "páginas" },
-            ),
-        }
+        let (times, pages) = (super::count(lang, times), super::count(lang, pages));
+        super::format(lang, "image_usage_line", &[("times", &times), ("pages", &pages)])
     }
 
-    // ── Comparación de rastreos (`diff.rs`) ──────────────────────────────────
-    messages! {
-        diff_title() {
-            en: "Crawl comparison",
-            es: "Comparación de rastreos",
-        }
-        label_before() {
-            en: "Before",
-            es: "Antes",
-        }
-        label_after() {
-            en: "After",
-            es: "Después",
-        }
-        label_site() {
-            en: "Site",
-            es: "Sitio",
-        }
-        label_common() {
-            en: "Common",
-            es: "En común",
-        }
-        diff_crawl_counts(urls, findings) {
-            en: "{urls} URLs, {findings} findings",
-            es: "{urls} URLs, {findings} hallazgos",
-        }
-        diff_common_note(n) {
-            en: "{n} URLs present in both crawls",
-            es: "{n} URLs presentes en los dos rastreos",
-        }
-        warnings_title() {
-            en: "Warnings",
-            es: "Avisos",
-        }
-        tag_inconclusive() {
-            en: "INCONCLUSIVE",
-            es: "NO CONCLUYENTE",
-        }
-        tag_warning() {
-            en: "WARNING",
-            es: "AVISO",
-        }
-        side_before() {
-            en: "before",
-            es: "antes",
-        }
-        side_after() {
-            en: "after",
-            es: "después",
-        }
-        warn_truncated(side, reason_suffix) {
-            en: "The '{side}' crawl is truncated{reason_suffix}. What disappeared or got resolved \
-                 cannot be asserted: the crawl may simply not have reached it.",
-            es: "El rastreo «{side}» está truncado{reason_suffix}. Lo que desapareció o se resolvió \
-                 no se puede afirmar: puede que el rastreo simplemente no llegara hasta ahí.",
-        }
-        warn_truncated_by(reason) {
-            en: " by {reason}",
-            es: " por {reason}",
-        }
-        // La variante de `warn_truncated` para `list_mode`: el rastreo no se cortó — es que
-        // un rastreo en modo lista nunca ve más que su lista. La consecuencia para el diff es
-        // la misma (las ausencias no se pueden afirmar) y el motivo, distinto.
-        warn_list_mode(side) {
-            en: "The '{side}' crawl is a list crawl: it only saw the URLs it was given. What \
-                 disappeared or got resolved cannot be asserted.",
-            es: "El rastreo «{side}» es de modo lista: solo vio las URLs que se le dieron. Lo \
-                 que desapareció o se resolvió no se puede afirmar.",
-        }
-        warn_unfinished(side, status) {
-            en: "The '{side}' crawl did not finish (status '{status}'). Its absences mean nothing.",
-            es: "El rastreo «{side}» no terminó (estado «{status}»). Sus ausencias no significan nada.",
-        }
-        warn_rules_changed(before, after) {
-            en: "The rule catalog changed ({before} → {after}). Some of the new or resolved \
-                 findings may come from the rules, not from the site.",
-            es: "El catálogo de reglas cambió ({before} → {after}). Parte de los hallazgos nuevos \
-                 o resueltos puede venir de las reglas, no del sitio.",
-        }
-        warn_config_changed(fields) {
-            en: "The crawl configuration changed in: {fields}. Without keeping that in mind, \
-                 scope changes get attributed to the site.",
-            es: "La configuración del rastreo cambió en: {fields}. Sin tenerlo en cuenta, los \
-                 cambios de alcance se atribuyen al sitio.",
-        }
-        warn_scope_changed(before, after) {
-            en: "The base URLs differ: {before} → {after}. Same site, different starting point.",
-            es: "Las URLs base difieren: {before} → {after}. El mismo sitio, distinto punto de partida.",
-        }
-        warn_mode_changed(before, after) {
-            en: "The crawl modes differ: {before} → {after}.",
-            es: "Los modos de rastreo difieren: {before} → {after}.",
-        }
-        warn_missing_table(side, table) {
-            en: "The '{side}' crawl predates the `{table}` table: that comparison is skipped.",
-            es: "El rastreo «{side}» es anterior a la tabla `{table}`: esa comparación se omite.",
-        }
-        warn_order_inverted(before_started, after_started) {
-            en: "The crawl given as 'after' ({after_started}) started earlier than the one \
-                 given as 'before' ({before_started}). If that is not deliberate, swap the two \
-                 arguments: 'Got worse' and 'Got better' come out reversed.",
-            es: "El rastreo pasado como «después» ({after_started}) empezó antes que el pasado \
-                 como «antes» ({before_started}). Si no es deliberado, intercambia los dos \
-                 argumentos: «Ha empeorado» y «Ha mejorado» salen del revés.",
-        }
-        worse_title() {
-            en: "Got worse",
-            es: "Ha empeorado",
-        }
-        label_new_findings() {
-            en: "New findings",
-            es: "Hallazgos nuevos",
-        }
-        more_examples(n) {
-            en: "… and {n} more",
-            es: "… y {n} más",
-        }
-        label_pages_lost_index() {
-            en: "Pages no longer indexable",
-            es: "Páginas que dejan de ser indexables",
-        }
-        label_status_worse() {
-            en: "Status codes that got worse",
-            es: "Códigos de estado que empeoran",
-        }
-        robots_content_changed(host) {
-            en: "{host}: the content changed",
-            es: "{host}: el contenido cambió",
-        }
-        robots_blocks_all() {
-            en: "ATTENTION: it now blocks crawling of the entire site.",
-            es: "ATENCIÓN: ahora bloquea el rastreo del sitio entero.",
-        }
-        nothing_worse() {
-            en: "Nothing. No new findings, no pages dropped from the index.",
-            es: "Nada: ni hallazgos nuevos ni páginas fuera del índice.",
-        }
-        better_title() {
-            en: "Got better",
-            es: "Ha mejorado",
-        }
-        label_findings_resolved() {
-            en: "Findings resolved",
-            es: "Hallazgos resueltos",
-        }
-        label_pages_indexable_again() {
-            en: "Pages indexable again",
-            es: "Páginas indexables de nuevo",
-        }
-        label_status_better() {
-            en: "Status codes that improved",
-            es: "Códigos de estado que mejoran",
-        }
-        other_title() {
-            en: "Other changes",
-            es: "Otros cambios",
-        }
-        label_new_urls() {
-            en: "New URLs",
-            es: "URLs nuevas",
-        }
-        label_urls_gone() {
-            en: "URLs gone",
-            es: "URLs desaparecidas",
-        }
-        label_titles_changed() {
-            en: "Titles changed",
-            es: "Títulos cambiados",
-        }
-        label_meta_changed() {
-            en: "Meta descriptions changed",
-            es: "Meta descriptions cambiadas",
-        }
-        label_canonicals_changed() {
-            en: "Canonicals changed",
-            es: "Canonicals cambiados",
-        }
-        label_findings_persisted() {
-            en: "Findings still present",
-            es: "Hallazgos que persisten",
-        }
-        suppressed_title() {
-            en: "Cannot be asserted",
-            es: "No se puede afirmar",
-        }
-        // Multilínea: el punto de llamada imprime cada línea con su sangría.
-        suppressed_intro() {
-            en: "One of the two crawls is incomplete, so these differences could come from\n\
-                 what was never crawled rather than from the site. They are not counted as changes:",
-            es: "Uno de los dos rastreos está incompleto, así que estas diferencias podrían\n\
-                 venir de lo que no se llegó a rastrear y no del sitio. No se cuentan como cambios:",
-        }
-        label_candidate_new_urls() {
-            en: "Candidate new URLs",
-            es: "URLs nuevas candidatas",
-        }
-        label_candidate_urls_gone() {
-            en: "Candidate URLs gone",
-            es: "URLs desaparecidas candidatas",
-        }
-        label_candidate_new_findings() {
-            en: "Candidate new findings",
-            es: "Hallazgos nuevos candidatos",
-        }
-        label_candidate_resolved() {
-            en: "Candidate resolved findings",
-            es: "Hallazgos resueltos candidatos",
-        }
-        suppressed_advice() {
-            en: "Re-crawl both sides with the same limit to get a firm diff.",
-            es: "Vuelve a rastrear los dos lados con el mismo límite para obtener un diff firme.",
-        }
-        gate_title() {
-            en: "CI gate",
-            es: "Puerta de CI",
-        }
-        // Multilínea: el punto de llamada imprime cada línea con su sangría.
-        gate_inconclusive() {
-            en: "The 'before' crawl is incomplete: new findings cannot be asserted and\n\
-                 --fail-on takes no stance. This is not a pass.",
-            es: "El rastreo «antes» está incompleto: los hallazgos nuevos no se pueden afirmar\n\
-                 y --fail-on no se pronuncia. Esto no es un aprobado.",
-        }
-        gate_fail_detail(n, severity, token) {
-            en: "{n} new finding(s) [{severity}] — matches --fail-on {token}",
-            es: "{n} hallazgo(s) nuevo(s) [{severity}] — coincide con --fail-on {token}",
-        }
-        gate_pass() {
-            en: "PASS   nothing watched shows up as a new finding.",
-            es: "PASS   nada de lo vigilado aparece como hallazgo nuevo.",
-        }
-        // ── Reabrir un diff guardado y listar sus filas (`diff_file.rs`) ──────
-        label_saved() {
-            en: "Saved",
-            es: "Guardado",
-        }
-        diff_saved_note(generated_at, version, path) {
-            en: "diff generated {generated_at} by crawlforge {version} · {path}",
-            es: "diff generado el {generated_at} con crawlforge {version} · {path}",
-        }
-        // Multilínea: el punto de llamada imprime cada línea con su sangría.
-        hint_diff_full_lists() {
-            en: "The lists above show only a few examples. For every row, add --rule <ID> or\n\
-                 --change <type> to the same command (e.g. --change url_removed).",
-            es: "Las listas de arriba solo enseñan unos ejemplos. Para ver todas las filas, añade\n\
-                 --rule <ID> o --change <tipo> al mismo comando (p. ej. --change url_removed).",
-        }
-        warn_unknown_change_types(n, types) {
-            en: "{n} change(s) of a type this crawlforge does not know ({types}) were left out. \
-                 The file was written by a newer version.",
-            es: "Se han dejado fuera {n} cambio(s) de un tipo que este crawlforge no conoce \
-                 ({types}). El fichero lo escribió una versión más nueva.",
-        }
-        label_status_changed() {
-            en: "Status codes changed",
-            es: "Códigos de estado cambiados",
-        }
-        diff_no_matching_changes() {
-            en: "No change in this diff matches.",
-            es: "Ningún cambio de este diff coincide.",
-        }
-        error_diff_missing(path) {
-            en: "{path} does not exist. Diff files are saved by \
-                 `crawlforge diff <before> <after> --out <file>`.",
-            es: "{path} no existe. Los ficheros de diff los guarda \
-                 `crawlforge diff <antes> <después> --out <fichero>`.",
-        }
-        error_diff_needs_two(path) {
-            en: "{path} is a crawl file, and comparing needs two: the earlier crawl and the \
-                 later one. A single file is only accepted if it is a diff saved with --out.",
-            es: "{path} es un fichero de rastreo, y para comparar hacen falta dos: el rastreo \
-                 anterior y el posterior. Un fichero solo se acepta si es un diff guardado con --out.",
-        }
-        hint_diff_prev(prev, path) {
-            en: "Its previous crawl is next to it:  crawlforge diff {prev} {path}",
-            es: "Su rastreo anterior está al lado:  crawlforge diff {prev} {path}",
-        }
-        error_diff_unknown_file(path) {
-            en: "{path} is neither a crawl file nor a diff file. Diff files are saved by \
-                 `crawlforge diff <before> <after> --out <file>`.",
-            es: "{path} no es ni un fichero de rastreo ni un fichero de diff. Los ficheros de \
-                 diff los guarda `crawlforge diff <antes> <después> --out <fichero>`.",
-        }
-        error_diff_too_new(path, version, supported) {
-            en: "{path} is a diff file of format {version}, newer than this crawlforge \
-                 understands ({supported}). Update crawlforge to open it.",
-            es: "{path} es un fichero de diff de formato {version}, más nuevo de lo que entiende \
-                 este crawlforge ({supported}). Actualiza crawlforge para abrirlo.",
-        }
-        error_diff_reopen_flag(flag) {
-            en: "{flag} applies when comparing two crawls; a saved diff is only read. \
-                 Run it on the crawls: crawlforge diff <before> <after> {flag} …",
-            es: "{flag} se aplica al comparar dos rastreos; un diff guardado solo se lee. \
-                 Lánzalo sobre los rastreos: crawlforge diff <antes> <después> {flag} …",
-        }
-        error_unknown_change_type(value, available) {
-            en: "{value} is not a change type. Available: {available}.",
-            es: "«{value}» no es un tipo de cambio. Disponibles: {available}.",
-        }
-        error_rule_with_change(change) {
-            en: "--rule matches findings, so it only combines with --change issue_appeared \
-                 or issue_resolved, not with {change}.",
-            es: "--rule busca hallazgos, así que solo se combina con --change issue_appeared \
-                 o issue_resolved, no con {change}.",
-        }
-        site_wide_finding() {
-            en: "(site-wide finding)",
-            es: "(hallazgo de sitio)",
-        }
-        site_placeholder() {
-            en: "(site)",
-            es: "(sitio)",
-        }
-        error_missing_file(path) {
-            en: "{path} does not exist",
-            es: "{path} no existe",
-        }
-        // El contrato del manual §5: todo error de fichero dice qué comando lo genera.
-        error_store_missing(path) {
-            en: "{path} does not exist. Crawl files are produced by `crawlforge crawl`, \
-                 `crawlforge audit` and `crawlforge list`.",
-            es: "{path} no existe. Los ficheros de rastreo los generan `crawlforge crawl`, \
-                 `crawlforge audit` y `crawlforge list`.",
-        }
-        error_not_a_crawl(path) {
-            en: "{path} does not look like a CrawlForge crawl file",
-            es: "{path} no parece un fichero de rastreo de CrawlForge",
-        }
-        error_different_sites(a, b) {
-            en: "the two crawls are of different sites: {a} and {b}.\n\
-                 URLs are matched by their text, so the diff would say the whole site disappeared \
-                 and another one appeared. Compare each site against itself.",
-            es: "los dos rastreos son de sitios distintos: {a} y {b}.\n\
-                 Las URLs se emparejan por su texto, así que el diff diría que el sitio entero \
-                 desapareció y que apareció otro. Compara cada sitio consigo mismo.",
-        }
-        error_fail_on_unknown(token) {
-            en: "--fail-on: '{token}' is not a rule or a severity.\n\
-                 The severities are critical, high, medium, low and info; rule IDs are listed \
-                 by `crawlforge rules`.",
-            es: "--fail-on: «{token}» no es una regla ni una severidad.\n\
-                 Las severidades son critical, high, medium, low e info; los IDs de regla los \
-                 lista `crawlforge rules`.",
-        }
-    }
-
-    // ── Panel de cartera (`portfolio.rs`) ────────────────────────────────────
-    //
-    // Los IDs de regla, las severidades usadas como token (`crit`, `high`…), las rutas, las
-    // fechas y las versiones no se traducen: son datos e identificadores, como en el resto
-    // de la CLI.
-    messages! {
-        portfolio_title() {
-            en: "Portfolio panel",
-            es: "Panel de cartera",
-        }
-        portfolio_range(oldest, newest) {
-            en: "crawls from {oldest} to {newest}",
-            es: "rastreos del {oldest} al {newest}",
-        }
-        // Trap 3.3: crawls weeks apart are not a snapshot of the portfolio, and "what
-        // changed" would silently mean a different period on every site.
-        warn_portfolio_date_spread(days, oldest, newest) {
-            en: "The oldest crawl ({oldest}) and the newest ({newest}) are {days} days apart: \
-                 this panel is not a snapshot of the portfolio, and 'what changed' covers a \
-                 different period on each site.",
-            es: "Entre el rastreo más viejo ({oldest}) y el más nuevo ({newest}) hay {days} \
-                 días: este panel no es una foto de la cartera, y «qué cambió» cubre un \
-                 periodo distinto en cada sitio.",
-        }
-        // Trap 3.2: two files crawled with different catalogs are not comparable without
-        // saying so — a rule can be "missing" on a site because it did not exist yet.
-        warn_portfolio_rules_versions(versions) {
-            en: "Not every site was crawled with the same rule catalog ({versions}). A rule \
-                 can be missing on a site because it did not exist when that site was crawled.",
-            es: "No todos los sitios se rastrearon con el mismo catálogo de reglas \
-                 ({versions}). Una regla puede faltar en un sitio porque no existía cuando se \
-                 rastreó.",
-        }
-        warn_portfolio_core_versions(versions) {
-            en: "The crawls come from different engine versions ({versions}).",
-            es: "Los rastreos vienen de versiones distintas del motor ({versions}).",
-        }
-        portfolio_skipped_title() {
-            en: "Files set aside",
-            es: "Ficheros apartados",
-        }
-        // A .prev.sqlite is never an input: it is the "before" of the crawl next to it.
-        portfolio_prev_not_input() {
-            en: "it is a .prev.sqlite: the 'before' of the crawl next to it, already used by \
-                 the comparison. It does not count as a site.",
-            es: "es un .prev.sqlite: el «antes» del rastreo de al lado, que la comparación ya \
-                 usa. No cuenta como sitio.",
-        }
-        error_portfolio_newer_schema(version, supported) {
-            en: "its schema (v{version}) is newer than this build understands (v{supported}). \
-                 Update crawlforge to open it.",
-            es: "su esquema (v{version}) es más nuevo de lo que esta versión entiende \
-                 (v{supported}). Actualiza crawlforge para abrirlo.",
-        }
-        error_portfolio_no_sites() {
-            en: "no crawl files usable as a portfolio were found in the given paths. Crawl \
-                 files are produced by `crawlforge crawl`, `crawlforge audit` and `crawlforge \
-                 list`; a directory is scanned for *.sqlite files.",
-            es: "en las rutas indicadas no se encontró ningún fichero de rastreo utilizable \
-                 como cartera. Los ficheros de rastreo los generan `crawlforge crawl`, \
-                 `crawlforge audit` y `crawlforge list`; un directorio se recorre buscando \
-                 ficheros *.sqlite.",
-        }
-        error_portfolio_tier() {
-            en: "the portfolio panel is not part of the free tier: it needs Pro. Single-site \
-                 commands (`report`, `diff`, `export`) remain available.",
-            es: "el panel de cartera no es del nivel gratuito: necesita Pro. Los comandos de \
-                 un solo sitio (`report`, `diff`, `export`) siguen disponibles.",
-        }
-        error_portfolio_too_many(n, max) {
-            en: "the portfolio has {n} sites and this tier caps it at {max}.",
-            es: "la cartera tiene {n} sitios y este nivel admite {max}.",
-        }
-        portfolio_changes_title() {
-            en: "What changed",
-            es: "Qué cambió",
-        }
-        portfolio_no_pairs() {
-            en: "No site has a previous crawl next to it. Re-crawl into the same output file \
-                 and the previous crawl is kept as .prev.sqlite — that is the 'before' this \
-                 section compares against.",
-            es: "Ningún sitio tiene un rastreo anterior al lado. Repite el rastreo sobre el \
-                 mismo fichero de salida y el anterior se conserva como .prev.sqlite: ese es \
-                 el «antes» con el que compara esta sección.",
-        }
-        portfolio_new_critical_high() {
-            en: "New critical and high findings",
-            es: "Hallazgos nuevos críticos y altos",
-        }
-        portfolio_none_critical_high() {
-            en: "No new critical or high findings on any compared site.",
-            es: "Ningún hallazgo nuevo crítico o alto en los sitios comparados.",
-        }
-        portfolio_rest_title() {
-            en: "The rest, site by site",
-            es: "El resto, sitio a sitio",
-        }
-        portfolio_no_changes() {
-            en: "no changes",
-            es: "sin cambios",
-        }
-        // The diff of that pair cannot assert absences: one side is incomplete.
-        portfolio_pair_inconclusive() {
-            en: "one side is incomplete: what disappeared or got resolved cannot be asserted",
-            es: "un lado está incompleto: lo que desapareció o se resolvió no se puede afirmar",
-        }
-        portfolio_pair_failed(reason) {
-            en: "its comparison against the previous crawl failed: {reason}",
-            es: "su comparación con el rastreo anterior falló: {reason}",
-        }
-        portfolio_spread_title() {
-            en: "Failing across the portfolio",
-            es: "Qué falla en toda la cartera",
-        }
-        portfolio_spread_intro() {
-            en: "A rule firing on most sites is rarely content: it is usually a shared \
-                 template or plugin — one fix that serves them all.",
-            es: "Una regla que salta en la mayoría de los sitios rara vez es contenido: suele \
-                 ser una plantilla o un plugin compartido — un arreglo que sirve para todos.",
-        }
-        portfolio_spread_none() {
-            en: "No rule fires on any site of the portfolio.",
-            es: "Ninguna regla dispara en ningún sitio de la cartera.",
-        }
-        portfolio_glance_title() {
-            en: "The portfolio at a glance",
-            es: "La cartera de un vistazo",
-        }
-        th_site() {
-            en: "site",
-            es: "sitio",
-        }
-        th_crawled() {
-            en: "crawled",
-            es: "rastreado",
-        }
-        th_indexable() {
-            en: "index.",
-            es: "index.",
-        }
-        flag_truncated() {
-            en: "(truncated)",
-            es: "(truncado)",
-        }
-        flag_list_mode() {
-            en: "(list crawl)",
-            es: "(modo lista)",
-        }
-        flag_unfinished(status) {
-            en: "(did not finish: {status})",
-            es: "(sin terminar: {status})",
-        }
-        hint_site_diff() {
-            en: "Full diff of one site:",
-            es: "Diff completo de un sitio:",
-        }
-        portfolio_html_title() {
-            en: "Portfolio panel",
-            es: "Panel de cartera",
-        }
-    }
-
-    /// "{n} sites" with the plural resolved per language, like [`outlinks_title`].
+    /// "{n} sites" with the plural resolved per language.
     pub fn portfolio_sites_count(lang: Lang, n: usize) -> String {
-        match lang {
-            Lang::En => format!("{n} {}", if n == 1 { "site" } else { "sites" }),
-            Lang::Es => format!("{n} {}", if n == 1 { "sitio" } else { "sitios" }),
-        }
-    }
-
-    // ── Per-site rule configuration (`rule_config.rs`) ───────────────────────
-    messages! {
-        rules_config_source_stored() {
-            en: "stored in the crawl file",
-            es: "guardada en el fichero de rastreo",
-        }
-        rules_config_source_after() {
-            en: "stored in the later crawl",
-            es: "guardada en el rastreo posterior",
-        }
-        rules_config_source_file(path) {
-            en: "from {path}",
-            es: "de {path}",
-        }
-        warn_rules_config_differs(source) {
-            en: "The two crawls store different rule configurations. Both sides were evaluated \
-                 with the same one ({source}), so a configuration change does not show up as \
-                 new or resolved findings.",
-            es: "Los dos rastreos guardan configuraciones de reglas distintas. Los dos lados se \
-                 evaluaron con la misma ({source}), así que un cambio de configuración no \
-                 aparece como hallazgos nuevos ni resueltos.",
-        }
-        warn_portfolio_rules_config(sites) {
-            en: "Some sites are read with their own rule configuration (rules disabled / \
-                 severities changed): {sites}. Their counts are not comparable rule by rule \
-                 with the rest.",
-            es: "Algunos sitios se leen con su propia configuración de reglas (reglas \
-                 desactivadas / severidades cambiadas): {sites}. Sus recuentos no son \
-                 comparables regla a regla con los del resto.",
-        }
+        super::format(lang, "portfolio_sites_count", &[("n", &n)])
     }
 
     /// "Rule configuration (stored in the crawl file): 2 rules disabled, 1 severity changed."
-    /// The plurals are written by hand, like [`outlinks_title`].
     pub fn rules_config_note(
         lang: Lang,
         source: impl std::fmt::Display,
         disabled: usize,
         changed: usize,
     ) -> String {
-        match lang {
-            Lang::En => format!(
-                "Rule configuration ({source}): {disabled} {} disabled, {changed} {} changed. \
-                 The crawl file keeps every finding.",
-                if disabled == 1 { "rule" } else { "rules" },
-                if changed == 1 { "severity" } else { "severities" },
-            ),
-            Lang::Es => format!(
-                "Configuración de reglas ({source}): {disabled} {}, {changed} {}. \
-                 El fichero de rastreo conserva todos los hallazgos.",
-                if disabled == 1 { "regla desactivada" } else { "reglas desactivadas" },
-                if changed == 1 { "severidad cambiada" } else { "severidades cambiadas" },
-            ),
-        }
+        super::format(
+            lang,
+            "rules_config_note",
+            &[("source", &source), ("disabled", &disabled), ("changed", &changed)],
+        )
     }
 
     /// "9 of 12 sites" — the numerator of the spread table.
     pub fn portfolio_sites_of(lang: Lang, fired: usize, total: usize) -> String {
-        match lang {
-            Lang::En => format!("{fired} of {total} {}", if total == 1 { "site" } else { "sites" }),
-            Lang::Es => {
-                format!("{fired} de {total} {}", if total == 1 { "sitio" } else { "sitios" })
-            }
-        }
+        super::format(lang, "portfolio_sites_of", &[("fired", &fired), ("total", &total)])
     }
 
     /// " (2 inconclusive)" — sites where the rule **could not be evaluated**: a truncated or
@@ -1322,409 +736,13 @@ pub mod msg {
         if n == 0 {
             return String::new();
         }
-        match lang {
-            Lang::En => format!(" ({n} inconclusive)"),
-            Lang::Es => {
-                format!(" ({n} no {})", if n == 1 { "concluyente" } else { "concluyentes" })
-            }
-        }
+        super::format(lang, "portfolio_inconclusive_suffix", &[("n", &n)])
     }
 
     /// "3 of 5 sites have a previous crawl (.prev.sqlite) to compare against." The noun
     /// follows the total and the verb follows the pair count: "1 of 5 sites has".
     pub fn portfolio_pairs_line(lang: Lang, pairs: usize, total: usize) -> String {
-        match lang {
-            Lang::En => format!(
-                "{pairs} of {total} {} {} a previous crawl (.prev.sqlite) to compare against.",
-                if total == 1 { "site" } else { "sites" },
-                if pairs == 1 { "has" } else { "have" }
-            ),
-            Lang::Es => format!(
-                "{pairs} de {total} {} {} un rastreo anterior (.prev.sqlite) con el que comparar.",
-                if total == 1 { "sitio" } else { "sitios" },
-                if pairs == 1 { "tiene" } else { "tienen" }
-            ),
-        }
-    }
-
-    // ── Identificación de ficheros (`store_check.rs`) ────────────────────────
-    messages! {
-        error_store_is_diff(path) {
-            en: "{path} is not a crawl file: it is a diff file, the kind `crawlforge diff --out` \
-                 saves. Open it with `crawlforge diff {path}`.\nCrawl files are produced by \
-                 `crawlforge crawl` and `crawlforge audit`.",
-            es: "{path} no es un fichero de rastreo: es un fichero de diff, de los que guarda \
-                 `crawlforge diff --out`. Se abre con `crawlforge diff {path}`.\nLos ficheros de \
-                 rastreo los generan `crawlforge crawl` y `crawlforge audit`.",
-        }
-        error_store_foreign(path) {
-            en: "{path} is not a CrawlForge crawl file: it does not have its tables. \
-                 Is it from another program?\nCrawl files are produced by `crawlforge crawl` \
-                 and `crawlforge audit`.",
-            es: "{path} no es un fichero de rastreo de CrawlForge: no tiene sus tablas. \
-                 ¿Es de otro programa?\nLos ficheros de rastreo los generan `crawlforge crawl` \
-                 y `crawlforge audit`.",
-        }
-        error_store_not_sqlite(path) {
-            en: "{path} is not a CrawlForge file: it is not even a SQLite database.\n\
-                 Crawl files are produced by `crawlforge crawl` and `crawlforge audit`.",
-            es: "{path} no es un fichero de CrawlForge: ni siquiera es una base de datos SQLite.\n\
-                 Los ficheros de rastreo los generan `crawlforge crawl` y `crawlforge audit`.",
-        }
-    }
-
-    // ── Informe Markdown/HTML (`audit_report.rs`) ────────────────────────────
-    messages! {
-        report_audit_of() {
-            en: "Audit of",
-            es: "Auditoría de",
-        }
-        // Un rastreo `list` que mezcla sitios: titularlo con el primero decía que los demás
-        // no se habían auditado.
-        report_audit_of_sites(n, sites) {
-            en: "Audit of {n} sites: {sites}",
-            es: "Auditoría de {n} sitios: {sites}",
-        }
-        sites_and_more(sites, n) {
-            en: "{sites} and {n} more",
-            es: "{sites} y {n} más",
-        }
-        report_mode_line(mode, started) {
-            en: "Mode `{mode}` · started {started}",
-            es: "Modo `{mode}` · iniciada {started}",
-        }
-        report_truncated_note(reason) {
-            en: "> **Truncated crawl** (`{reason}`). The counts cover what was crawled up to \
-                 that point, not the whole site.",
-            es: "> **Rastreo truncado** (`{reason}`). Los recuentos son de lo rastreado hasta \
-                 ese punto, no del sitio entero.",
-        }
-        // Para `truncated_reason = 'list_mode'`: el rastreo no se cortó, auditó su lista
-        // entera. El informe tiene que decir eso, no «truncado».
-        report_list_mode_note() {
-            en: "> **List crawl.** Only the listed URLs were audited: the counts describe \
-                 that set, not the whole site, and rules that need the site's complete link \
-                 graph are not evaluated.",
-            es: "> **Rastreo en modo lista.** Solo se auditaron las URLs de la lista: los \
-                 recuentos describen ese conjunto, no el sitio entero, y las reglas que \
-                 necesitan el grafo completo del sitio no se evalúan.",
-        }
-        th_metric() {
-            en: "Metric",
-            es: "Métrica",
-        }
-        th_value() {
-            en: "Value",
-            es: "Valor",
-        }
-        row_pages() {
-            en: "Pages",
-            es: "Páginas",
-        }
-        row_indexable() {
-            en: "Indexable",
-            es: "Indexables",
-        }
-        row_errors_4xx_5xx() {
-            en: "4xx/5xx",
-            es: "Errores 4xx/5xx",
-        }
-        report_more(n) {
-            en: "… {n} more",
-            es: "… {n} más",
-        }
-        // El corte del informe dice dónde están las que no enseña: sin el comando, la única
-        // vía para verlas era abrir el XLSX o hacer SQL a mano (revisión de UX §5.1).
-        report_more_run(n, cmd) {
-            en: "… {n} more — run: {cmd}",
-            es: "… {n} más — ejecuta: {cmd}",
-        }
-        // La variante para una regla colapsada: el titular ya dio los números («13 problemas
-        // de plantilla (567 páginas)») y repetir aquí un recuento crudo de filas los
-        // contradiría.
-        report_full_list_run(cmd) {
-            en: "… full list: {cmd}",
-            es: "… lista completa: {cmd}",
-        }
-        html_title() {
-            en: "SEO audit",
-            es: "Auditoría SEO",
-        }
-    }
-
-    // ── Catálogo de reglas (`rules.rs`) ──────────────────────────────────────
-    messages! {
-        th_severity() {
-            en: "SEVERITY",
-            es: "SEVERIDAD",
-        }
-        th_category() {
-            en: "CATEGORY",
-            es: "CATEGORÍA",
-        }
-        th_scope() {
-            en: "SCOPE",
-            es: "ALCANCE",
-        }
-        th_tier() {
-            en: "TIER",
-            es: "NIVEL",
-        }
-        th_name() {
-            en: "NAME",
-            es: "NOMBRE",
-        }
-        lbl_category() {
-            en: "category",
-            es: "categoría",
-        }
-        lbl_scope() {
-            en: "scope",
-            es: "alcance",
-        }
-        lbl_tier() {
-            en: "tier",
-            es: "nivel",
-        }
-        lbl_reference() {
-            en: "reference",
-            es: "referencia",
-        }
-        scope_page() {
-            en: "page",
-            es: "página",
-        }
-        scope_site() {
-            en: "site",
-            es: "sitio",
-        }
-        rules_summary(total, free, page, site) {
-            en: "{total} rules: {free} in the free tier, {page} page-level and {site} site-wide.",
-            es: "{total} reglas: {free} en el nivel gratuito, {page} de página y {site} de conjunto.",
-        }
-        error_unknown_category(category, list) {
-            en: "no rules in category '{category}'. The categories are: {list}.",
-            es: "no hay reglas en la categoría «{category}». Las categorías son: {list}.",
-        }
-    }
-
-    // ── Cadenas de `main.rs`, listas para cablear ────────────────────────────
-    //
-    // `main.rs` es de otro propietario; estas entradas existen para que el cableado sea
-    // sustituir cada literal por su llamada. Los números se pre-formatean con
-    // `i18n::group_thousands` / `i18n::decimal1` antes de pasarlos.
-    messages! {
-        crawling(target) {
-            en: "Crawling {target}",
-            es: "Rastreando {target}",
-        }
-        // Se valida **antes de tocar el disco**: una semilla imposible no debe costar una
-        // rotación de ficheros ni dejar un `.sqlite` de aspecto válido con un `.lock` al lado.
-        error_invalid_seed(url) {
-            en: "{url} is not a crawlable URL: expected something like https://example.com/. \
-                 Nothing was created.",
-            es: "{url} no es una URL rastreable: se esperaba algo como https://example.com/. \
-                 No se ha creado nada.",
-        }
-        file_line(path) {
-            en: "File:     {path}",
-            es: "Fichero:  {path}",
-        }
-        previous_kept(path) {
-            en: "Previous: {path} (kept, from the last run)",
-            es: "Anterior: {path} (conservado, de la ejecución anterior)",
-        }
-        report_written(path) {
-            en: "Report written to {path}",
-            es: "Informe escrito en {path}",
-        }
-        /// Con `--out` y el formato de terminal, lo que se escribe es Markdown: un volcado del
-        /// terminal en un fichero conserva sus cajas y se lee peor. Se dice **qué** se escribió
-        /// para que nadie abra el fichero esperando lo que acaba de ver en pantalla.
-        markdown_report_written(path) {
-            en: "Markdown report written to {path}",
-            es: "Informe Markdown escrito en {path}",
-        }
-        exported_csv(n, dir) {
-            en: "Exported {n} CSV files to {dir}",
-            es: "Exportados {n} ficheros CSV a {dir}",
-        }
-        exported_sheets(n, path) {
-            en: "Exported {n} sheets to {path}",
-            es: "Exportadas {n} hojas a {path}",
-        }
-        bench_appended(path) {
-            en: "Benchmark record appended to {path}",
-            es: "Registro de benchmark añadido a {path}",
-        }
-        next_steps_title() {
-            en: "Next steps",
-            es: "Pasos siguientes",
-        }
-        next_explain() {
-            en: "Explain every finding, with affected URLs:",
-            es: "Explicar cada hallazgo, con sus URLs afectadas:",
-        }
-        next_spreadsheet() {
-            en: "Open the full data as a spreadsheet:",
-            es: "Abrir todos los datos como hoja de cálculo:",
-        }
-        next_compare_previous() {
-            en: "Compare against the previous run of this crawl:",
-            es: "Comparar con la ejecución anterior de este rastreo:",
-        }
-        next_compare_later() {
-            en: "Re-run this same crawl after your next deploy, then compare the two:",
-            es: "Repite este mismo rastreo tras tu próximo despliegue y compara los dos:",
-        }
-        next_reread() {
-            en: "Re-read this summary any time:",
-            es: "Releer este resumen en cualquier momento:",
-        }
-        // ── Autenticación básica HTTP (staging protegido) ────────────────────
-        //
-        // Los tres avisos van por stderr: hablan de secretos y no deben ensuciar un pipe.
-        // Ninguno repite la credencial, como corresponde a un aviso sobre secretos.
-        auth_url_note(host) {
-            en: "Using HTTP Basic auth from the URL: it will be sent only to {host} and will \
-                 not be stored in the crawl file.",
-            es: "Se usa la autenticación básica HTTP de la URL: se enviará solo a {host} y no \
-                 se guardará en el fichero de rastreo.",
-        }
-        auth_env_note(host) {
-            en: "Using HTTP Basic auth from CRAWLFORGE_AUTH: it will be sent only to {host} \
-                 and will not be stored in the crawl file.",
-            es: "Se usa la autenticación básica HTTP de CRAWLFORGE_AUTH: se enviará solo a \
-                 {host} y no se guardará en el fichero de rastreo.",
-        }
-        auth_base_ignored() {
-            en: "Warning: credentials in --base were removed: a directory audit reads from \
-                 disk and makes no HTTP requests.",
-            es: "Aviso: las credenciales de --base se han retirado: una auditoría de \
-                 directorio lee del disco y no hace peticiones HTTP.",
-        }
-        auth_list_ignored() {
-            en: "Warning: credentials inside URL list entries are ignored and removed. To \
-                 authenticate the crawl, set CRAWLFORGE_AUTH=user:password; it applies only \
-                 to the host of the first URL.",
-            es: "Aviso: las credenciales dentro de las URLs de la lista se ignoran y se \
-                 retiran. Para autenticar el rastreo, define \
-                 CRAWLFORGE_AUTH=usuario:contraseña; se aplica solo al host de la primera URL.",
-        }
-        progress_sitemaps() {
-            en: "discovering sitemaps…",
-            es: "descubriendo sitemaps…",
-        }
-        progress_finalize() {
-            en: "final pass: incoming links and site-wide rules…",
-            es: "pasada final: enlaces entrantes y reglas de conjunto…",
-        }
-        progress_crawl(fetched, queued, rate, findings) {
-            en: "{fetched} crawled · {queued} queued · {rate} URL/s · {findings} findings",
-            es: "{fetched} rastreadas · {queued} en cola · {rate} URL/s · {findings} hallazgos",
-        }
-        progress_failed_suffix(n) {
-            en: " · {n} failed",
-            es: " · {n} con error",
-        }
-    }
-
-    // ── Reanudación de un rastreo interrumpido (`main.rs`, `report.rs`) ──────
-    messages! {
-        resuming(target) {
-            en: "Resuming crawl of {target}",
-            es: "Reanudando el rastreo de {target}",
-        }
-        resume_counts(done, pending) {
-            en: "Picking up where it stopped: {done} URLs already crawled, {pending} still pending.",
-            es: "Se retoma donde se quedó: {done} URLs ya rastreadas, {pending} pendientes.",
-        }
-        resume_config_note() {
-            en: "Using the configuration saved in the file: the original run's settings apply.",
-            es: "Se usa la configuración guardada en el fichero: mandan los ajustes de la ejecución original.",
-        }
-        error_resume_schema_blocking(file, version, blocking) {
-            en: "{file} is a schema v{version} crawl, and migration {blocking} changes what the \
-                 engine writes: half of it would say one thing and half another. Run the crawl \
-                 again. You can still open this file with `report`, `export` and `diff`.",
-            es: "{file} es un rastreo de esquema v{version}, y la migración {blocking} cambia lo \
-                 que el motor escribe: la mitad diría una cosa y la otra mitad otra. Vuelve a \
-                 lanzar el rastreo. El fichero se sigue abriendo con `report`, `export` y `diff`.",
-        }
-        resume_robots_not_inherited() {
-            en: "Note: the original crawl ignored robots.txt. This one does not — that permission \
-                 is granted by you, not by a file. Re-run the original crawl command if you need it.",
-            es: "Aviso: el rastreo original ignoraba robots.txt. Este no lo hace: ese permiso lo \
-                 concedes tú, no un fichero. Vuelve a lanzar el rastreo original si lo necesitas.",
-        }
-        resume_finished(urls, secs) {
-            en: "Crawl resumed and completed: {urls} more URLs in {secs} s",
-            es: "Rastreo reanudado y completado: {urls} URLs más en {secs} s",
-        }
-        interrupt_flushing() {
-            en: "Interrupted: saving what is already crawled… (Ctrl+C again to quit without waiting)",
-            es: "Interrumpido: guardando lo ya rastreado… (Ctrl+C otra vez para salir sin esperar)",
-        }
-        // Un Ctrl+C cuando el motor ya terminó —durante un export largo, por ejemplo— no
-        // tiene nada que guardar: se sale ya, diciendo que el rastreo no corre peligro.
-        interrupt_after_done() {
-            en: "Interrupted. The crawl file is complete; a half-written export may be left behind.",
-            es: "Interrumpido. El fichero de rastreo está completo; puede quedar un export a medio escribir.",
-        }
-        // La degradación del cierre (§3.1/§3.2 de la revisión): con otro programa leyendo el
-        // fichero no se puede salir del modo WAL, y copiar el `.sqlite` suelto perdería lo
-        // que quede en el `-wal`. El aviso da el dato y las dos salidas.
-        warn_wal_kept(path) {
-            en: "Note: another program has {path} open, so it stays in WAL mode. The -wal and \
-                 -shm files next to it are part of this crawl: copy the three together, or close \
-                 the other program and run `crawlforge report` on it to fold them back in.",
-            es: "Aviso: otro programa tiene abierto {path}, así que se queda en modo WAL. Los \
-                 ficheros -wal y -shm de al lado forman parte de este rastreo: cópialos los tres \
-                 juntos, o cierra el otro programa y ejecuta `crawlforge report` sobre él para \
-                 reintegrarlos.",
-        }
-        // El cerrojo del fichero (§3.3): el que llega segundo no espera ni rota nada, se le
-        // dice que hay otro rastreo escribiendo y qué hacer.
-        error_store_locked(path) {
-            en: "another crawlforge process is writing {path} right now. Wait for it to finish, \
-                 or stop it, before crawling or resuming this file.",
-            es: "otro proceso de crawlforge está escribiendo {path} ahora mismo. Espera a que \
-                 termine, o deténlo, antes de rastrear o reanudar este fichero.",
-        }
-        interrupted_saved(path) {
-            en: "Crawl interrupted. Everything crawled so far is saved in {path}. Continue it with:",
-            es: "Rastreo interrumpido. Todo lo rastreado queda guardado en {path}. Continúalo con:",
-        }
-        hint_previous_unfinished() {
-            en: "The previous crawl had not finished. To continue it instead of starting over:",
-            es: "El rastreo anterior no había terminado. Para continuarlo en vez de empezar de cero:",
-        }
-        error_resume_done(path) {
-            en: "{path} is a finished crawl: there is nothing to resume.\n\
-                 To audit the site again, run the original crawl command; the finished file \
-                 will be kept next to it as .prev.sqlite.",
-            es: "{path} es un rastreo terminado: no hay nada que reanudar.\n\
-                 Para auditar el sitio otra vez, repite el comando de rastreo original; el \
-                 fichero terminado se conservará al lado como .prev.sqlite.",
-        }
-        error_resume_status(path, status) {
-            en: "{path} cannot be resumed: its status is '{status}'. Only interrupted crawls \
-                 (status 'running' or 'paused') can be resumed.",
-            es: "{path} no se puede reanudar: su estado es «{status}». Solo se reanudan los \
-                 rastreos interrumpidos (estado «running» o «paused»).",
-        }
-        error_resume_schema(path, found, expected) {
-            en: "{path} uses schema v{found} and this build writes v{expected}: an interrupted \
-                 crawl can only be resumed by the version that started it. Run the crawl again.",
-            es: "{path} es del esquema v{found} y esta versión escribe v{expected}: un rastreo \
-                 interrumpido solo lo reanuda la versión que lo empezó. Repite el rastreo.",
-        }
-        error_resume_config(path) {
-            en: "the crawl configuration stored in {path} cannot be read. Was the file written \
-                 by another version? Run the crawl again.",
-            es: "la configuración de rastreo guardada en {path} no se puede leer. ¿El fichero \
-                 es de otra versión? Repite el rastreo.",
-        }
+        super::format(lang, "portfolio_pairs_line", &[("pairs", &pairs), ("total", &total)])
     }
 }
 
@@ -1754,8 +772,17 @@ mod tests {
 
     #[test]
     fn un_flag_desconocido_es_un_error_y_no_un_silencio() {
-        let err = resolve_pure(Some("fr"), None).expect_err("fr does not exist");
-        assert!(err.to_string().contains("fr"), "{err}");
+        let err = resolve_pure(Some("xx"), None).expect_err("xx does not exist");
+        assert!(err.to_string().contains("xx"), "{err}");
+        // El error dice qué valores existen, los diez.
+        assert!(err.to_string().contains("en, es, de, fr, it, nl, tr, pt, ja, pl"), "{err}");
+    }
+
+    #[test]
+    fn los_diez_idiomas_se_aceptan_en_el_flag() {
+        for (flag, lang) in [("de", Lang::De), ("pt-BR", Lang::Pt), ("ja", Lang::Ja), ("pl", Lang::Pl)] {
+            assert_eq!(resolve_pure(Some(flag), None).expect("resolve"), lang);
+        }
     }
 
     #[test]
@@ -1801,7 +828,7 @@ mod tests {
 
     #[test]
     fn las_dos_columnas_dicen_cosas_distintas_donde_deben() {
-        // Caza el copia-y-pega de dejar el inglés en la columna española. Solo mensajes con
+        // Caza el copia-y-pega de dejar el inglés en `locales/es/cli.ftl`. Solo mensajes con
         // traducción real: los que son idénticos a propósito («robots.txt») no entran.
         for (en, es) in [
             (msg::results_title(Lang::En), msg::results_title(Lang::Es)),
@@ -1819,7 +846,7 @@ mod tests {
             (msg::error_store_locked(Lang::En, "x"), msg::error_store_locked(Lang::Es, "x")),
             (msg::interrupt_after_done(Lang::En), msg::interrupt_after_done(Lang::Es)),
         ] {
-            assert_ne!(en, es, "the Spanish column must not be the English copied over");
+            assert_ne!(en, es, "the Spanish text must not be the English copied over");
         }
 
         for (aviso, pista) in [
@@ -1843,7 +870,7 @@ mod tests {
     #[test]
     fn los_plurales_de_la_ficha_se_resuelven_en_los_dos_idiomas() {
         // «1 externos» y «embedded 1 times on 1 pages» eran los plurales sin resolver que
-        // cazó la revisión: las dos cadenas con plural real se escriben a mano.
+        // cazó la revisión. Hoy los resuelven los selectores de `cli.ftl`.
         assert_eq!(
             msg::outlinks_title(Lang::Es, 8, 7, 1),
             "Enlaces salientes (8: 7 internos, 1 externo)"
@@ -1867,7 +894,7 @@ mod tests {
 
     #[test]
     fn the_portfolio_plurals_resolve_in_both_languages() {
-        // The portfolio counters are hand-written for the same reason as the URL card's:
+        // The portfolio counters carry plural selectors for the same reason as the URL card's:
         // "1 sitios" and "1 sites" are the shortcut the review caught.
         assert_eq!(msg::portfolio_sites_count(Lang::En, 1), "1 site");
         assert_eq!(msg::portfolio_sites_count(Lang::En, 5), "5 sites");
@@ -1897,11 +924,149 @@ mod tests {
             (msg::error_invalid_seed(Lang::En, "x"), msg::error_invalid_seed(Lang::Es, "x")),
             (msg::hint_who_links(Lang::En), msg::hint_who_links(Lang::Es)),
         ] {
-            assert_ne!(en, es, "the Spanish column must not be the English copied over");
+            assert_ne!(en, es, "the Spanish text must not be the English copied over");
         }
         // El error de fichero dice qué comando lo genera, como promete el manual §5.
         assert!(msg::error_store_missing(Lang::En, "x").contains("crawlforge crawl"));
         assert!(msg::error_store_missing(Lang::Es, "x").contains("crawlforge crawl"));
+    }
+
+    // ── Los ficheros `.ftl` frente al código ─────────────────────────────────
+    //
+    // Estos tests son lo que antes daba el compilador: una entrada sin texto, un texto sin
+    // entrada, una variable que no coincide o una traducción a medias. Listan todos los
+    // problemas de una vez, con fichero y clave, para que quien traduce tenga la lista entera.
+
+    /// Todo lo que el código pide a `cli.ftl`: el macro, las funciones con plural y la severidad.
+    fn declared() -> Vec<(&'static str, Vec<&'static str>)> {
+        msg::DECLARED
+            .iter()
+            .chain(msg::HAND_WRITTEN)
+            .map(|(k, a)| (*k, a.to_vec()))
+            .chain(SEVERITY_KEYS.iter().map(|k| (*k, Vec::new())))
+            .collect()
+    }
+
+    #[test]
+    fn every_declared_message_has_its_english_text_with_the_same_variables() {
+        let en = CLI_TEXTS.source(Lang::En);
+        let mut problems = Vec::new();
+        for (key, args) in declared() {
+            let mut args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            args.sort();
+            match l10n::message_variables(en, key) {
+                None => problems.push(format!("locales/en/cli.ftl: {key}: missing")),
+                Some(vars) if vars != args => problems.push(format!(
+                    "locales/en/cli.ftl: {key}: variables {vars:?}, the code passes {args:?}"
+                )),
+                Some(_) => {}
+            }
+        }
+        assert!(problems.is_empty(), "{} problem(s):\n{}", problems.len(), problems.join("\n"));
+    }
+
+    #[test]
+    fn english_has_no_message_the_code_does_not_declare() {
+        // A text nobody calls is one a translator translates for nothing.
+        let declared: Vec<&str> = declared().into_iter().map(|(k, _)| k).collect();
+        let sobran: Vec<String> = l10n::message_ids(CLI_TEXTS.source(Lang::En))
+            .into_iter()
+            .filter(|id| !declared.contains(&id.as_str()))
+            .collect();
+        assert!(sobran.is_empty(), "locales/en/cli.ftl has messages no code uses: {sobran:?}");
+        let problems = l10n::check_translation("locales/en/cli.ftl", CLI_TEXTS.source(Lang::En), CLI_TEXTS.source(Lang::En));
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    #[test]
+    fn every_translated_cli_file_is_complete() {
+        // A folder whose `cli.ftl` has no messages is a language not translated yet; one with
+        // messages must have all of English's, with the same variables. And a language is
+        // translated in both files or in neither: half the output in German and half in English
+        // is worse than either.
+        let en = CLI_TEXTS.source(Lang::En);
+        let mut problems = Vec::new();
+        for lang in Lang::ALL.into_iter().filter(|l| *l != Lang::En) {
+            let src = CLI_TEXTS.source(lang);
+            if l10n::has_messages(src) {
+                problems.extend(l10n::check_translation(&format!("locales/{}/cli.ftl", lang.code()), en, src));
+            }
+            let cli = CLI_TEXTS.is_translated(lang);
+            let rules = crawlforge_rules::RULE_TEXTS.is_translated(lang);
+            if cli != rules {
+                problems.push(format!(
+                    "locales/{}/: cli.ftl is {}translated but rules.ftl is {}: translate both",
+                    lang.code(),
+                    if cli { "" } else { "not " },
+                    if rules { "" } else { "not" },
+                ));
+            }
+        }
+        assert!(problems.is_empty(), "{} problem(s):\n{}", problems.len(), problems.join("\n"));
+    }
+
+    #[test]
+    fn spanish_stays_translated() {
+        assert!(CLI_TEXTS.is_translated(Lang::Es));
+        assert!(crawlforge_rules::RULE_TEXTS.is_translated(Lang::Es));
+    }
+
+    #[test]
+    fn an_untranslated_language_speaks_english_numbers_included() {
+        // Until its folder is filled, a language selected with --lang shows English, and English
+        // numbers: German thousands (`3.816`) inside an English sentence would read as decimals.
+        for lang in Lang::ALL.into_iter().filter(|l| !CLI_TEXTS.is_translated(*l)) {
+            assert_eq!(effective(lang), Lang::En);
+            assert_eq!(group_thousands(lang, 3816), "3,816", "{lang:?}");
+            assert_eq!(decimal1(lang, 1.5), "1.5", "{lang:?}");
+            assert_eq!(msg::results_title(lang), "Results", "{lang:?}");
+            assert_eq!(msg::outlinks_title(lang, 3, 2, 1), "Outlinks (3: 2 internal, 1 external)");
+        }
+    }
+
+    #[test]
+    fn a_message_never_comes_out_empty_or_as_its_key() {
+        for lang in Lang::ALL {
+            for (key, args) in declared() {
+                let values: Vec<String> = args.iter().map(|a| format!("<{a}>")).collect();
+                let refs: Vec<(&str, &dyn Display)> =
+                    args.iter().zip(&values).map(|(a, v)| (*a, v as &dyn Display)).collect();
+                let text = format(lang, key, &refs);
+                assert!(!text.trim().is_empty(), "{lang:?} {key}");
+                assert_ne!(text, key, "{lang:?} {key}");
+                for v in &values {
+                    assert!(text.contains(v.as_str()), "{lang:?} {key} lost {v}: {text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_template_line_picks_singular_or_plural() {
+        assert_eq!(msg::template_issues(Lang::En, 1, "18,089"), "1 template issue (18,089 pages)");
+        assert_eq!(msg::template_issues(Lang::En, 3, "18,089"), "3 template issues (18,089 pages)");
+        assert_eq!(msg::template_issues(Lang::Es, 1, "18.089"), "1 problema de plantilla (18.089 páginas)");
+        assert_eq!(msg::template_issues(Lang::Es, 2, "5"), "2 problemas de plantilla (5 páginas)");
+    }
+
+    #[test]
+    fn grouped_counts_still_select_the_plural() {
+        // The count reaches Fluent formatted ("1.234") and must come out identical and still
+        // pick the plural form.
+        assert_eq!(msg::image_usage_line(Lang::Es, 1234, 1), "incrustada 1.234 veces en 1 página");
+        assert_eq!(msg::note_external_status(Lang::En, 12_345), "+12,345 external");
+    }
+
+    #[test]
+    fn la_cabecera_y_el_relleno_cuentan_columnas_de_terminal() {
+        // Un ideograma ocupa dos columnas: «比較» mide 4 y la cabecera debe acabar donde las demás.
+        assert_eq!(display_width("比較"), 4);
+        assert_eq!(display_width(&section("比較")), display_width(&section("abcd")));
+        assert_eq!(pad("比較", 6), "比較  ");
+        assert_eq!(pad("Crítico", 9), "Crítico  ");
+        assert_eq!(pad("demasiado largo", 3), "demasiado largo");
+        assert_eq!(pad_left("比較", 6), "  比較");
+        assert_eq!(pad_left("URLs", 6), format!("{:>6}", "URLs"));
     }
 
     #[test]
@@ -1909,5 +1074,7 @@ mod tests {
         assert_eq!(severity_word(Lang::Es, "critical"), "crítico");
         assert_eq!(severity_word(Lang::En, "critical"), "critical");
         assert_eq!(severity_word(Lang::Es, "rarisimo"), "rarisimo");
+        assert_eq!(severity_label(Lang::Es, Severity::Info), "Informativo");
+        assert_eq!(severity_label(Lang::En, Severity::Critical), "Critical");
     }
 }

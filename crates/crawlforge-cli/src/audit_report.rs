@@ -100,11 +100,8 @@ impl Group {
             }
             return i18n::count(lang, self.total);
         }
-        let mut texto = if self.template_count == 1 {
-            msg::one_template_issue(lang, i18n::count(lang, self.template_pages))
-        } else {
-            msg::n_template_issues(lang, self.template_count, i18n::count(lang, self.template_pages))
-        };
+        let mut texto =
+            msg::template_issues(lang, self.template_count, i18n::count(lang, self.template_pages));
         if self.template_rest > 0 {
             texto.push_str(&msg::plus_more_findings(lang, i18n::count(lang, self.template_rest)));
         }
@@ -751,7 +748,7 @@ pub(crate) fn html_document(lang: Lang, titulo: &str, body: &str) -> String {
     format!(
         "<!DOCTYPE html>\n<html lang=\"{}\">\n<head>\n<meta charset=\"utf-8\">\n\
          <title>{titulo}</title>\n<style>{ESTILO}</style>\n</head>\n<body>\n{body}</body>\n</html>\n",
-        if lang == Lang::Es { "es" } else { "en" }
+        i18n::effective(lang).code()
     )
 }
 

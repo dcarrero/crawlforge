@@ -887,7 +887,7 @@ pub fn print_report(outcome: &PortfolioOutcome) {
         println!();
         println!("{}", i18n::section(&msg::warnings_title(lang)));
         for warning in &outcome.warnings {
-            println!("  {:<9} {}", msg::tag_warning(lang), warning.message(lang));
+            println!("  {} {}", i18n::pad(&msg::tag_warning(lang), 9), warning.message(lang));
         }
     }
 
@@ -925,8 +925,8 @@ pub fn print_report(outcome: &PortfolioOutcome) {
             println!("    {}", change.label);
             for group in &change.new_critical_high {
                 println!(
-                    "      {:<9} {:<30} {:>6}",
-                    i18n::severity_word(lang, &group.severity),
+                    "      {} {:<30} {:>6}",
+                    i18n::pad(&i18n::severity_word(lang, &group.severity), 9),
                     group.rule_id,
                     n(group.count)
                 );
@@ -964,8 +964,8 @@ pub fn print_report(outcome: &PortfolioOutcome) {
             }
             if !change.conclusive {
                 println!(
-                    "      {:<15} {}",
-                    msg::tag_inconclusive(lang),
+                    "      {} {}",
+                    i18n::pad(&msg::tag_inconclusive(lang), 15),
                     msg::portfolio_pair_inconclusive(lang)
                 );
             }
@@ -993,8 +993,8 @@ pub fn print_report(outcome: &PortfolioOutcome) {
         println!();
         for row in &outcome.spread {
             println!(
-                "  {:<9} {:<30} {}{}",
-                i18n::severity_word(lang, &row.severity),
+                "  {} {:<30} {}{}",
+                i18n::pad(&i18n::severity_word(lang, &row.severity), 9),
                 row.rule_id,
                 msg::portfolio_sites_of(lang, row.fired, outcome.site_total()),
                 msg::portfolio_inconclusive_suffix(lang, row.inconclusive),
@@ -1005,18 +1005,18 @@ pub fn print_report(outcome: &PortfolioOutcome) {
     // 3. One line per site, worst first.
     println!();
     println!("{}", i18n::section(&msg::portfolio_glance_title(lang)));
-    // The severity columns keep their identifier abbreviations in both languages, like the
+    // The severity columns keep their identifier abbreviations in every language, like the
     // `--fail-on` tokens: they are column keys, not prose.
     println!(
-        "  {:>9} {:>7} {:>5} {:>5} {:>5} {:>5} {:>5}  {:<10}  {}",
-        msg::label_urls(lang),
-        msg::th_indexable(lang),
+        "  {} {} {:>5} {:>5} {:>5} {:>5} {:>5}  {}  {}",
+        i18n::pad_left(&msg::label_urls(lang), 9),
+        i18n::pad_left(&msg::th_indexable(lang), 7),
         "crit",
         "high",
         "med",
         "low",
         "info",
-        msg::th_crawled(lang),
+        i18n::pad(&msg::th_crawled(lang), 10),
         msg::th_site(lang),
     );
     for site in &outcome.sites {
